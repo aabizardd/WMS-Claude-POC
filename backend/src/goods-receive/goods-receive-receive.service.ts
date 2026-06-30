@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
+import { DiscrepancyService } from '../discrepancy/discrepancy.service';
 
 interface WarehouseScope {
   role: string;
@@ -54,6 +55,7 @@ export class GoodsReceiveReceiveService {
     private prisma: PrismaService,
     private config: ConfigService,
     private inventory: InventoryService,
+    private discrepancy: DiscrepancyService,
   ) {}
 
   private baseUrl() {
@@ -244,6 +246,14 @@ export class GoodsReceiveReceiveService {
           } catch (e) {
             this.logger.error(
               `Inventory generation failed for GR ${id}: ${(e as Error).message}`,
+            );
+          }
+          // Record quantity discrepancy for items received short.
+          try {
+            await this.discrepancy.recordFromGoodsReceive(id);
+          } catch (e) {
+            this.logger.error(
+              `Discrepancy recording failed for GR ${id}: ${(e as Error).message}`,
             );
           }
           return;

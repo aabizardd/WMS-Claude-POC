@@ -58,6 +58,16 @@ export class UsersService {
     });
   }
 
+  findPickers(warehouseId?: string) {
+    const where: any = { isActive: true, role: { name: 'picker' } };
+    if (warehouseId) where.warehouseId = warehouseId;
+    return this.prisma.user.findMany({
+      where,
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+  }
+
   async findOne(id: number, scope?: WarehouseScope) {
     const user = await this.prisma.user.findUnique({
       where: { id },

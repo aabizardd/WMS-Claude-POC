@@ -14,7 +14,7 @@ const TABS: Tab[] = [
     label: 'Goods Receive',
     permission: 'goods-receive:read',
   },
-  { to: '/admin/inbound/putaway', label: 'Putaway' },
+  { to: '/admin/inbound/putaway', label: 'Putaway', permission: 'putaway:read' },
   { to: '/admin/inbound/history', label: 'History' },
 ];
 

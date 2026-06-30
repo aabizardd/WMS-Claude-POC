@@ -61,6 +61,7 @@ model User {
   updatedAt   DateTime   @updatedAt
 
   discrepancies Discrepancy[]
+  pickAssignments PutawayItem[]
 
   @@map("users")
 }
@@ -184,6 +185,7 @@ model Warehouse {
   users         User[]
   mrns          Mrn[]
   goodsReceives GoodsReceive[]
+  putaways      Putaway[]
   inventories   InventoryManagement[]
   discrepancies Discrepancy[]
 
@@ -256,7 +258,8 @@ model Bin {
   createdAt  DateTime  @default(now()) @map("created_at")
   modifiedAt DateTime? @map("modified_at")
 
-  mrnItems        MrnItem[]        // bins chosen as receive destination
+  mrnItems MrnItem[] // bins chosen as receive destination
+  putawayItems PutawayItem[]
   inventoryBatches InventoryBatch[]
 
   @@map("bins")
@@ -370,6 +373,7 @@ model MrnItem {
   receivingLocationName String? @map("receiving_location_name")
 
   inventoryBatch InventoryBatch?
+  putawayItems   PutawayItem[]
 
   @@unique([mrnId, lineId])
   @@map("mrn_items")
@@ -389,6 +393,7 @@ model GoodsReceive {
 
   inventoryBatches InventoryBatch[]
   discrepancies    Discrepancy[]
+  putaways         Putaway[]
 
   @@map("goods_receives")
 }
@@ -505,4 +510,58 @@ model DiscrepancyDetail {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@map("r_discrepancy_detail")
+}
+
+// ===================== Putaway =====================
+
+enum PutawayStatus {
+  Open
+  OnProgress
+  Closed
+}
+
+model Putaway {
+  id           String        @id @default(uuid())
+  putawayCode  String        @unique @map("putaway_code")
+  grId         String?       @map("gr_id")
+  goodsReceive GoodsReceive? @relation(fields: [grId], references: [id])
+  warehouseId  String?       @map("warehouse_id")
+  warehouse    Warehouse?    @relation(fields: [warehouseId], references: [id])
+  status       PutawayStatus @default(Open)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  items PutawayItem[]
+
+  @@map("putaways")
+}
+
+model PutawayItem {
+  id           String  @id @default(uuid())
+  putawayId    String  @map("putaway_id")
+  putaway      Putaway @relation(fields: [putawayId], references: [id], onDelete: Cascade)
+
+  mrnItemId    String  @map("mrn_item_id")
+  mrnItem      MrnItem @relation(fields: [mrnItemId], references: [id])
+
+  itemName     String? @map("item_name")
+  poNumber     String? @map("po_number")
+  materialCode String? @map("material_code")
+  vendorName   String? @map("vendor_name")
+  plannedQty   Float   @default(0) @map("planned_qty")
+
+  pickerId  Int?  @map("picker_id")
+  picker    User? @relation(fields: [pickerId], references: [id])
+
+  actualQty    Float   @default(0) @map("actual_qty")
+  qualityIssue Float   @default(0) @map("quality_issue")
+  qtyIssue     Float   @default(0) @map("qty_issue") // inbound qty shortfall
+  remainingQty Float   @default(0) @map("remaining_qty")
+  binId        String? @map("bin_id")
+  bin          Bin?    @relation(fields: [binId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("putaway_items")
 }

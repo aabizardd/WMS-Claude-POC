@@ -45,6 +45,8 @@ const RESOURCES: { resource: string; label: string; actions: string[] }[] = [
   { resource: 'inventory', label: 'Inventory', actions: ['read'] },
   // Discrepancy is recorded automatically (quantity gap on receive) — read only.
   { resource: 'discrepancy', label: 'Discrepancy', actions: ['read'] },
+  // Putaway generated from Goods Receive — read, create, update.
+  { resource: 'putaway', label: 'Putaway', actions: ['read', 'create', 'update'] },
 ];
 
 export const PERMISSIONS: PermissionDef[] = RESOURCES.flatMap((r) =>
@@ -75,4 +77,12 @@ export const STAFF_PERMISSION_KEYS = [
   'goods-receive:read',
   'inventory:read',
   'discrepancy:read',
+  'putaway:read',
+];
+
+// Putaway-specific permissions for the picker role.
+export const PICKER_PERMISSION_KEYS = [
+  'putaway:read',
+  'putaway:create',
+  'putaway:update',
 ];

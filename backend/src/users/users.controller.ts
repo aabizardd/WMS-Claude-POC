@@ -7,6 +7,7 @@ import {
   ParseIntPipe,
   Post,
   Put,
+  Query,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -25,6 +26,11 @@ export class UsersController {
   @RequirePermissions('users:read')
   findAll(@CurrentUser() user: AuthUser) {
     return this.usersService.findAll(user);
+  }
+
+  @Get('pickers')
+  findPickers(@Query('warehouseId') warehouseId?: string) {
+    return this.usersService.findPickers(warehouseId);
   }
 
   @Get(':id')

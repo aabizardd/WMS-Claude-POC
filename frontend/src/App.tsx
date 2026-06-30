@@ -27,8 +27,12 @@ import MrnTab from './pages/inbound/MrnTab';
 import MrnDetailPage from './pages/inbound/MrnDetailPage';
 import GoodsReceiveTab from './pages/inbound/GoodsReceiveTab';
 import GoodsReceiveDetailPage from './pages/inbound/GoodsReceiveDetailPage';
+import PutawayTab from './pages/inbound/PutawayTab';
+import PutawayDetailPage from './pages/inbound/PutawayDetailPage';
 import InventoryPage from './pages/inventory/InventoryPage';
 import InventoryDetailPage from './pages/inventory/InventoryDetailPage';
+import DiscrepancyPage from './pages/discrepancy/DiscrepancyPage';
+import DiscrepancyDetailPage from './pages/discrepancy/DiscrepancyDetailPage';
 
 export default function App() {
   return (
@@ -231,7 +235,11 @@ export default function App() {
             />
             <Route
               path="putaway"
-              element={<InboundPlaceholder title="Putaway" />}
+              element={
+                <RequirePermission permission="putaway:read">
+                  <PutawayTab />
+                </RequirePermission>
+              }
             />
             <Route
               path="history"
@@ -246,14 +254,22 @@ export default function App() {
               </RequirePermission>
             }
           />
-          <Route
-            path="inbound/goods-receive/:id"
-            element={
-              <RequirePermission permission="goods-receive:read">
-                <GoodsReceiveDetailPage />
-              </RequirePermission>
-            }
-          />
+            <Route
+              path="inbound/goods-receive/:id"
+              element={
+                <RequirePermission permission="goods-receive:read">
+                  <GoodsReceiveDetailPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="inbound/putaway/:id"
+              element={
+                <RequirePermission permission="putaway:read">
+                  <PutawayDetailPage />
+                </RequirePermission>
+              }
+            />
 
           {/* Inventory Management */}
           <Route
@@ -269,6 +285,24 @@ export default function App() {
             element={
               <RequirePermission permission="inventory:read">
                 <InventoryDetailPage />
+              </RequirePermission>
+            }
+          />
+
+          {/* Discrepancy */}
+          <Route
+            path="discrepancy"
+            element={
+              <RequirePermission permission="discrepancy:read">
+                <DiscrepancyPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="discrepancy/:id"
+            element={
+              <RequirePermission permission="discrepancy:read">
+                <DiscrepancyDetailPage />
               </RequirePermission>
             }
           />

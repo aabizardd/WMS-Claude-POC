@@ -52,6 +52,15 @@ export default function GoodsReceiveDetailPage() {
   const [triggerError, setTriggerError] = useState('');
   const [pollTimeout, setPollTimeout] = useState(false);
 
+  const [putawayOpen, setPutawayOpen] = useState(false);
+  const [putawayLoading, setPutawayLoading] = useState(false);
+  const [putawayError, setPutawayError] = useState('');
+  const [putawaySuccess, setPutawaySuccess] = useState('');
+  const [putawaySuccessModal, setPutawaySuccessModal] = useState(false);
+  const [pickers, setPickers] = useState<{ id: number; name: string }[]>([]);
+  const [putawayPlanned, setPutawayPlanned] = useState<Record<string, number>>({});
+  const [putawayPicker, setPutawayPicker] = useState<Record<string, string>>({});
+
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollStartRef = useRef<number>(0);
   const grIdRef = useRef(id);
@@ -229,6 +238,64 @@ export default function GoodsReceiveDetailPage() {
         const msg = err.response?.data?.message;
         setError(Array.isArray(msg) ? msg.join(', ') : msg ?? 'Retry failed');
       } else setError('Retry failed');
+    }
+  }
+
+  async function openPutaway() {
+    if (!gr) return;
+    setPutawayError('');
+    setPutawayOpen(true);
+    const itemsWithRemaining = gr.items.filter((it) => it.qty_remaining > 0);
+    setPutawayPlanned(
+      Object.fromEntries(
+        itemsWithRemaining.map((it) => [it.id, it.qty_remaining]),
+      ),
+    );
+    setPutawayPicker(
+      Object.fromEntries(itemsWithRemaining.map((it) => [it.id, ''])),
+    );
+    try {
+      const r = await api.get<{ id: number; name: string }[]>('/users/pickers', {
+        params: { warehouseId: gr.warehouse?.id ?? undefined },
+      });
+      setPickers(r.data);
+    } catch {
+      setPickers([]);
+    }
+  }
+
+  async function handleGeneratePutaway() {
+    if (!gr) return;
+    setPutawayError('');
+    setPutawayLoading(true);
+    const itemsWithRemaining = gr.items.filter((it) => it.qty_remaining > 0);
+    const payload = {
+      items: itemsWithRemaining.map((it) => ({
+        mrnItemId: it.id,
+        plannedQty: putawayPlanned[it.id] ?? it.qty_remaining,
+        pickerId: putawayPicker[it.id]
+          ? Number(putawayPicker[it.id])
+          : undefined,
+      })),
+    };
+    try {
+      const r = await api.post('/putaway/generate', payload);
+      setPutawayOpen(false);
+      setPutawaySuccess(`Putaway generated successfully: ${r.data.putaway_code}`);
+      setPutawaySuccessModal(true);
+      const updated = await api.get<GoodsReceiveDetail>(
+        `/goods-receive/${id}`,
+      );
+      hydrate(updated.data);
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg = err.response?.data?.message;
+        setPutawayError(
+          Array.isArray(msg) ? msg.join(', ') : msg ?? 'Failed to generate putaway',
+        );
+      } else setPutawayError('Failed to generate putaway');
+    } finally {
+      setPutawayLoading(false);
     }
   }
 
@@ -450,8 +517,34 @@ export default function GoodsReceiveDetailPage() {
               Retry
             </button>
           )}
+          {has('putaway:create') && gr.status === 'On Progress' && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={openPutaway}
+            >
+              Generate Putaway
+            </button>
+          )}
         </div>
       </form>
+
+      {putawaySuccess && (
+        <Modal
+          open={putawaySuccessModal}
+          title="Putaway Generated"
+          onClose={() => setPutawaySuccessModal(false)}
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-emerald-700">{putawaySuccess}</p>
+            <div className="flex justify-end">
+              <button className="btn-primary" onClick={() => setPutawaySuccessModal(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       <Modal
         open={confirmOpen}
@@ -495,6 +588,114 @@ export default function GoodsReceiveDetailPage() {
               disabled={triggering}
             >
               {triggering ? 'Submitting…' : 'Confirm Receive'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={putawayOpen}
+        title="Generate Putaway"
+        onClose={() => setPutawayOpen(false)}
+      >
+        <div className="space-y-4">
+          {putawayError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
+              {putawayError}
+            </div>
+          )}
+
+          <p className="text-sm text-slate-500">
+            Select items and planned quantities for putaway. Picker assignment
+            is optional.
+          </p>
+
+          <div className="max-h-80 overflow-y-auto space-y-2">
+            {gr.items
+              .filter((it) => it.qty_remaining > 0)
+              .map((it) => (
+                <div
+                  key={it.id}
+                  className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-slate-800">
+                      {it.item_name ?? '—'}
+                    </div>
+                    <div className="mt-0.5 text-xs text-slate-500">
+                      PO: {it.po_number ?? '—'} · Remaining: {it.qty_remaining}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400">
+                      Planned Qty
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      min={1}
+                      max={it.qty_remaining}
+                      className="input mt-0.5 w-20 text-right text-sm"
+                      value={putawayPlanned[it.id] ?? it.qty_remaining}
+                      onChange={(e) =>
+                        setPutawayPlanned((p) => ({
+                          ...p,
+                          [it.id]: Number(e.target.value),
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400">
+                      Picker
+                    </label>
+                    <select
+                      className="input mt-0.5 w-32 text-sm"
+                      value={putawayPicker[it.id] ?? ''}
+                      onChange={(e) =>
+                        setPutawayPicker((p) => ({
+                          ...p,
+                          [it.id]: e.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">— Auto —</option>
+                      {pickers.map((pu) => (
+                        <option key={pu.id} value={String(pu.id)}>
+                          {pu.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              ))}
+          </div>
+
+          {gr.items.filter((it) => it.qty_remaining > 0).length === 0 && (
+            <p className="text-sm text-slate-400 text-center">
+              No items with remaining quantity to putaway.
+            </p>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setPutawayOpen(false)}
+              disabled={putawayLoading}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleGeneratePutaway}
+              disabled={
+                putawayLoading ||
+                gr.items.filter((it) => it.qty_remaining > 0).length === 0
+              }
+            >
+              {putawayLoading ? 'Generating…' : 'Generate Putaway'}
             </button>
           </div>
         </div>

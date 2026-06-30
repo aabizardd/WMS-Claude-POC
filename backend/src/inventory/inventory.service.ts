@@ -174,7 +174,7 @@ export class InventoryService {
         if (vendor?.companyName) vendorCompanyName = vendor.companyName;
       }
 
-      await this.prisma.inventoryBatch.create({
+      const batch = await this.prisma.inventoryBatch.create({
         data: {
           inventoryId: inv.id,
           availQty: item.qtyActual, // received qty becomes available
@@ -184,6 +184,14 @@ export class InventoryService {
           vendorCompanyName,
         },
       });
+
+      if (item.qtyActual < item.qtyExpected) {
+        const gap = item.qtyExpected - item.qtyActual;
+        await this.prisma.inventoryBatch.update({
+          where: { id: batch.id },
+          data: { qtyIssue: gap },
+        });
+      }
       created++;
     }
     this.logger.log(

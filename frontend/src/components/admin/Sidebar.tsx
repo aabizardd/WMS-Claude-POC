@@ -69,6 +69,14 @@ const nav: NavEntry[] = [
     ),
   },
   {
+    to: '/admin/discrepancy',
+    label: 'Discrepancy',
+    permission: 'discrepancy:read',
+    icon: (
+      <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+    ),
+  },
+  {
     label: 'User Management',
     icon: (
       <path d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 100-8 4 4 0 000 8z" />

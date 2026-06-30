@@ -113,9 +113,16 @@ export class DiscrepancyService {
     });
     if (existing) return;
 
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const count = await this.prisma.discrepancy.count({
+      where: { discrepancyId: { startsWith: `DISC-${today}` } },
+    });
+    const seq = String(count + 1).padStart(3, '0');
+    const discId = `DISC-${today}-${seq}`;
+
     await this.prisma.discrepancy.create({
       data: {
-        discrepancyId: `DSC-${gr.grNumber}-QTY`,
+        discrepancyId: discId,
         grId: gr.id,
         reportedById: reportedById ?? null,
         discrepancyType: 'quantity',

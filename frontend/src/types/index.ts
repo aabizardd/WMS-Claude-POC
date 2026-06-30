@@ -389,3 +389,78 @@ export interface Bin {
   modified_by: string | null;
   modified_at: string | null;
 }
+
+export interface DiscrepancyRow {
+  id: string;
+  discrepancy_id: string;
+  gr_number: string | null;
+  discrepancy_type: string;
+  discrepancy_from: string;
+  reported_by: string | null;
+  warehouse_name: string | null;
+  detail_count: number;
+  created_at: string;
+}
+
+export interface DiscrepancyDetailItem {
+  id: string;
+  po_number: string;
+  item_name: string | null;
+  source_from: string;
+  qty_discrepancy: number;
+  qty_passed: number;
+  qty_scrapped: number;
+  qty_remaining: number;
+  qty_discrepancy_type: string;
+}
+
+export interface DiscrepancyDetail {
+  id: string;
+  discrepancy_id: string;
+  gr_number: string | null;
+  discrepancy_type: string;
+  discrepancy_from: string;
+  reported_by: string | null;
+  warehouse_name: string | null;
+  created_at: string;
+  details: DiscrepancyDetailItem[];
+}
+
+export interface PutawayRow {
+  id: string;
+  putaway_code: string;
+  gr_number: string | null;
+  warehouse_name: string | null;
+  status: string;
+  item_count: number;
+  created_at: string;
+}
+
+export interface PutawayItemDetail {
+  id: string;
+  mrn_item_id: string;
+  item_name: string | null;
+  po_number: string | null;
+  material_code: string | null;
+  vendor_name: string | null;
+  planned_qty: number;
+  actual_qty: number;
+  quality_issue: number;
+  qty_issue: number;
+  remaining_qty: number;
+  bin_id: string | null;
+  bin_label: string | null;
+  qty_remaining: number;
+  picker: { id: number; name: string } | null;
+}
+
+export interface PutawayDetail {
+  id: string;
+  putaway_code: string;
+  gr_number: string | null;
+  warehouse_name: string | null;
+  warehouse_id: string | null;
+  status: string;
+  created_at: string;
+  items: PutawayItemDetail[];
+}
