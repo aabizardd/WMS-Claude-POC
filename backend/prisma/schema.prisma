@@ -1,0 +1,382 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Role {
+  id          Int              @id @default(autoincrement())
+  name        String           @unique
+  description String?
+  users       User[]
+  permissions RolePermission[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  key         String   @unique // e.g. "users:create"
+  resource    String // e.g. "users"
+  action      String // read | create | update | delete | sync
+  description String?
+  createdAt   DateTime @default(now())
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+// Join table: which permissions a role has.
+model RolePermission {
+  roleId       Int
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId String     @map("permission_id")
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model User {
+  id          Int        @id @default(autoincrement())
+  name        String // display name, derived from firstName + lastName
+  firstName   String?    @map("first_name")
+  lastName    String?    @map("last_name")
+  email       String     @unique
+  username    String     @unique
+  password    String
+  isActive    Boolean    @default(true)
+  roleId      Int
+  role        Role       @relation(fields: [roleId], references: [id])
+  warehouseId String?    @map("warehouse_id")
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@map("users")
+}
+
+// ===================== Material Management =====================
+
+model Uom {
+  id      String @id @default(uuid())
+  uomName String @map("uom_name")
+  uomCode String @unique @map("uom_code")
+
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // back-relations from Material (one UOM may be used by many materials in several slots)
+  primaryForMaterials   Material[] @relation("PrimaryUom")
+  secondaryForMaterials Material[] @relation("SecondaryUom")
+  weightForMaterials    Material[] @relation("WeightUom")
+  dimensionForMaterials Material[] @relation("DimensionUom")
+  binDimensions         Bin[]      @relation("BinDimensionUom")
+
+  @@map("uoms")
+}
+
+model MaterialCategory {
+  id                   String @id @default(uuid())
+  materialCategoryName String @map("material_category_name")
+  materialCategoryCode String @unique @map("material_category_code")
+  description          String?
+
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  materials Material[]
+
+  @@map("material_categories")
+}
+
+model MaterialType {
+  id               String @id @default(uuid())
+  materialTypeName String @map("material_type_name")
+  materialTypeCode String @unique @map("material_type_code")
+  description      String?
+
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  materials Material[]
+
+  @@map("material_types")
+}
+
+model Material {
+  id                     String  @id @default(uuid())
+  erpDocId               String? @unique @map("erp_doc_id") // Oracle/NetSuite internalId
+  materialName           String  @map("material_name")
+  materialCode           String  @unique @map("material_code")
+  conversionRateQuantity Float   @default(0) @map("conversion_rate_quantity")
+  currency               String?
+
+  materialLength Float @default(0) @map("material_length")
+  materialWidth  Float @default(0) @map("material_width")
+  materialHeight Float @default(0) @map("material_height")
+  materialWeight Float @default(0) @map("material_weight")
+  materialQty    Float @default(0) @map("material_qty")
+
+  photos String[] @default([])
+
+  // Masters (optional: items imported from ERP may not have them yet)
+  materialCategoryId String?           @map("material_category_id")
+  materialCategory   MaterialCategory? @relation(fields: [materialCategoryId], references: [id])
+  materialTypeId     String?           @map("material_type_id")
+  materialType       MaterialType?     @relation(fields: [materialTypeId], references: [id])
+
+  // UOM slots (optional, matching the API where some are empty {})
+  primaryUomId   String? @map("primary_uom_id")
+  primaryUom     Uom?    @relation("PrimaryUom", fields: [primaryUomId], references: [id])
+  secondaryUomId String? @map("secondary_uom_id")
+  secondaryUom   Uom?    @relation("SecondaryUom", fields: [secondaryUomId], references: [id])
+  weightUomId    String? @map("weight_uom_id")
+  weightUom      Uom?    @relation("WeightUom", fields: [weightUomId], references: [id])
+  dimensionUomId String? @map("dimension_uom_id")
+  dimensionUom   Uom?    @relation("DimensionUom", fields: [dimensionUomId], references: [id])
+
+  isActive   Boolean  @default(true) @map("is_active")
+  createdBy  String?  @map("created_by")
+  modifiedBy String?  @map("modified_by")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("modified_at")
+
+  @@map("materials")
+}
+
+// ===================== Warehouse Management =====================
+
+// Synced from the Oracle "locations" endpoint. Read-only mirror in WMS.
+model Warehouse {
+  id                     String    @id @default(uuid())
+  oracleId               String    @unique @map("oracle_id") // Oracle location id
+  name                   String
+  isInactive             Boolean   @default(false) @map("is_inactive")
+  parentId               String?   @map("parent_id")
+  parentName             String?   @map("parent_name")
+  subsidiaryId           String?   @map("subsidiary_id")
+  subsidiaryName         String?   @map("subsidiary_name")
+  locationType           String?   @map("location_type")
+  locationTypeName       String?   @map("location_type_name")
+  timezone               String?
+  makeInventoryAvailable Boolean   @default(false) @map("make_inventory_available")
+  lastModified           DateTime? @map("last_modified")
+  createdBy              String?   @map("created_by")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+
+  bins          Bin[]
+  users         User[]
+  mrns          Mrn[]
+  goodsReceives GoodsReceive[]
+
+  @@map("warehouses")
+}
+
+model AreaType {
+  id           String   @id @default(uuid())
+  areaTypeName String   @map("area_type_name")
+  areaTypeCode String   @unique @map("area_type_code")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  bins Bin[]
+
+  @@map("area_types")
+}
+
+model Aisle {
+  id        String   @id @default(uuid())
+  aisleName String   @map("aisle_name")
+  aisleCode String   @unique @map("aisle_code")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  bins Bin[]
+
+  @@map("aisles")
+}
+
+model Shelf {
+  id         String   @id @default(uuid())
+  shelfLabel String   @map("shelf_label")
+  shelfCode  String   @unique @map("shelf_code")
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  bins Bin[]
+
+  @@map("shelves")
+}
+
+model Bin {
+  id          String @id @default(uuid())
+  binLabel    String @map("bin_label")
+  binCode     String @unique @map("bin_code")
+  binLength   Float  @default(0) @map("bin_length")
+  binWidth    Float  @default(0) @map("bin_width")
+  binHeight   Float  @default(0) @map("bin_height")
+  maxCapacity Float  @default(0) @map("max_capacity")
+
+  warehouseId String    @map("warehouse_id")
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  aisleId     String    @map("aisle_id")
+  aisle       Aisle     @relation(fields: [aisleId], references: [id])
+  shelfId     String    @map("shelf_id")
+  shelf       Shelf     @relation(fields: [shelfId], references: [id])
+  areaTypeId  String    @map("area_type_id")
+  areaType    AreaType  @relation(fields: [areaTypeId], references: [id])
+
+  dimensionUomId String? @map("dimension_uom_id")
+  dimensionUom   Uom?    @relation("BinDimensionUom", fields: [dimensionUomId], references: [id])
+
+  isActive   Boolean   @default(true) @map("is_active")
+  createdBy  String?   @map("created_by")
+  modifiedBy String?   @map("modified_by")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  modifiedAt DateTime? @map("modified_at")
+
+  mrnItems MrnItem[] // bins chosen as receive destination
+
+  @@map("bins")
+}
+
+// ===================== Vendor Management =====================
+
+// Synced from the Oracle "vendors" endpoint. Read-only mirror in WMS.
+model Vendor {
+  id                String    @id @default(uuid())
+  oracleId          String    @unique @map("oracle_id") // Oracle internalId
+  entityId          String?   @map("entity_id")
+  companyName       String?   @map("company_name")
+  email             String?
+  phone             String?
+  terms             String?
+  termsDisplay      String?   @map("terms_display")
+  subsidiaryId      String?   @map("subsidiary_id")
+  subsidiaryDisplay String?   @map("subsidiary_display")
+  lastModified      DateTime? @map("last_modified")
+  createdBy         String?   @map("created_by")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@map("vendors")
+}
+
+// ===================== Customer Management =====================
+
+// Synced from the Oracle "customers" endpoint. Read-only mirror in WMS.
+model Customer {
+  id           String    @id @default(uuid())
+  oracleId     String    @unique @map("oracle_id") // Oracle internalId
+  entityId     String?   @map("entity_id")
+  companyName  String?   @map("company_name")
+  email        String?
+  phone        String?
+  lastModified DateTime? @map("last_modified")
+  createdBy    String?   @map("created_by")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("customers")
+}
+
+// ===================== Inbound: MRN & Goods Receive =====================
+
+// MRN = Oracle "PIB" (inbound shipment) header. Synced (read-only) with WMS
+// status "Closed"; entering WMS auto-creates a Goods Receive doc (status "Open").
+model Mrn {
+  id                   String    @id @default(uuid())
+  oracleId             String    @unique @map("oracle_id") // PIB id
+  shipmentNumber       String?   @map("shipment_number")
+  externalDocNumber    String?   @map("external_doc_number")
+  externalId           String?   @map("external_id")
+  oracleStatus         String?   @map("oracle_status") // e.g. inTransit
+  status               String    @default("Closed") // WMS status
+  expectedShippingDate String?   @map("expected_shipping_date")
+  actualShippingDate   String?   @map("actual_shipping_date")
+  expectedDeliveryDate String?   @map("expected_delivery_date")
+  actualDeliveryDate   String?   @map("actual_delivery_date")
+  memo                 String?
+  vesselNumber         String?   @map("vessel_number")
+  billOfLading         String?   @map("bill_of_lading")
+  port                 String?
+  dateCreated          String?   @map("date_created")
+  lastModified         DateTime? @map("last_modified")
+
+  receivingLocationId   String? @map("receiving_location_id")
+  receivingLocationName String? @map("receiving_location_name")
+  warehouseId           String? @map("warehouse_id")
+  warehouse             Warehouse? @relation(fields: [warehouseId], references: [id])
+
+  createdBy String?  @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  items        MrnItem[]
+  goodsReceive GoodsReceive?
+
+  @@map("mrns")
+}
+
+model MrnItem {
+  id    String @id @default(uuid())
+  mrnId String @map("mrn_id")
+  mrn   Mrn    @relation(fields: [mrnId], references: [id], onDelete: Cascade)
+
+  poId   Int?   @map("po_id")
+  itemId Int?   @map("item_id")
+  lineId Int?   @map("line_id")
+  poRate Float? @map("po_rate")
+
+  itemName        String? @map("item_name")
+  poNumber        String? @map("po_number")
+  vendorId        Int?    @map("vendor_id")
+  vendorName      String? @map("vendor_name")
+  itemDescription String? @map("item_description")
+
+  qtyExpected        Float @default(0) @map("qty_expected")
+  qtyReceived        Float @default(0) @map("qty_received") // value from Oracle
+  qtyRemaining       Float @default(0) @map("qty_remaining") // WMS-managed: 0, then = qty_actual on GR
+  qtyActual          Float @default(0) @map("qty_actual") // WMS-entered actual (Goods Receive)
+  shipmentItemAmount Float @default(0) @map("shipment_item_amount")
+
+  // Destination bin chosen during Goods Receive.
+  binId String? @map("bin_id")
+  bin   Bin?    @relation(fields: [binId], references: [id])
+
+  receivingLocationId   String? @map("receiving_location_id")
+  receivingLocationName String? @map("receiving_location_name")
+
+  @@unique([mrnId, lineId])
+  @@map("mrn_items")
+}
+
+model GoodsReceive {
+  id          String  @id @default(uuid())
+  mrnId       String  @unique @map("mrn_id")
+  mrn         Mrn     @relation(fields: [mrnId], references: [id], onDelete: Cascade)
+  grNumber    String  @unique @map("gr_number")
+  status      String  @default("Open")
+  warehouseId String? @map("warehouse_id")
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("goods_receives")
+}

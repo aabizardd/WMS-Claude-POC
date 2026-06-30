@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(npx prisma *)",
+      "Bash(echo \"EXIT:$?\")",
+      "Read(//tmp/**)",
+      "Bash(cp /tmp/vendor_mig.sql prisma/migrations/20260630090000_add_vendors/migration.sql)",
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(cd /c/WMS/backend *)",
+      "Bash(node -e 'let s=\"\";process.stdin.on\\(\"data\",d=>s+=d\\).on\\(\"end\",\\(\\)=>console.log\\(JSON.parse\\(s\\).map\\(u=>\\({u:u.username,active:u.isActive,wh:\\(u.warehouse&&u.warehouse.name\\)||null}\\)\\)\\)\\)')"
+    ]
+  }
+}

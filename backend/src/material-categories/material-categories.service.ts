@@ -1,0 +1,83 @@
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateMaterialCategoryDto } from './dto/create-material-category.dto';
+import { UpdateMaterialCategoryDto } from './dto/update-material-category.dto';
+
+@Injectable()
+export class MaterialCategoriesService {
+  constructor(private prisma: PrismaService) {}
+
+  findAll() {
+    return this.prisma.materialCategory.findMany({
+      orderBy: { materialCategoryCode: 'asc' },
+      include: { _count: { select: { materials: true } } },
+    });
+  }
+
+  // Lightweight lookup for dropdowns.
+  options() {
+    return this.prisma.materialCategory.findMany({
+      orderBy: { materialCategoryCode: 'asc' },
+      select: {
+        id: true,
+        materialCategoryName: true,
+        materialCategoryCode: true,
+        isActive: true,
+      },
+    });
+  }
+
+  async findOne(id: string) {
+    const item = await this.prisma.materialCategory.findUnique({
+      where: { id },
+    });
+    if (!item) throw new NotFoundException(`Category ${id} not found`);
+    return item;
+  }
+
+  async create(dto: CreateMaterialCategoryDto) {
+    try {
+      return await this.prisma.materialCategory.create({ data: dto });
+    } catch (e) {
+      throw this.handle(e);
+    }
+  }
+
+  async update(id: string, dto: UpdateMaterialCategoryDto) {
+    await this.findOne(id);
+    try {
+      return await this.prisma.materialCategory.update({
+        where: { id },
+        data: dto,
+      });
+    } catch (e) {
+      throw this.handle(e);
+    }
+  }
+
+  async remove(id: string) {
+    await this.findOne(id);
+    const inUse = await this.prisma.material.count({
+      where: { materialCategoryId: id },
+    });
+    if (inUse > 0) {
+      throw new BadRequestException(
+        `Cannot delete category: used by ${inUse} material(s)`,
+      );
+    }
+    await this.prisma.materialCategory.delete({ where: { id } });
+    return { id, deleted: true };
+  }
+
+  private handle(e: unknown) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+      return new BadRequestException('Category code already exists');
+    }
+    return e;
+  }
+}

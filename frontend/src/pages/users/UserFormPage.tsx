@@ -1,0 +1,322 @@
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import axios from 'axios';
+import api from '../../lib/api';
+import type { Role, User, WarehouseOption } from '../../types';
+import { useAuth } from '../../context/AuthContext';
+
+interface FormState {
+  firstName: string;
+  lastName: string;
+  username: string;
+  email: string;
+  password: string;
+  roleId: number | '';
+  warehouseId: string;
+  isActive: boolean;
+}
+
+const emptyForm: FormState = {
+  firstName: '',
+  lastName: '',
+  username: '',
+  email: '',
+  password: '',
+  roleId: '',
+  warehouseId: '',
+  isActive: true,
+};
+
+export default function UserFormPage() {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const isNew = !id;
+
+  const { has } = useAuth();
+  const canManage = isNew ? has('users:create') : has('users:update');
+  const viewOnly = !canManage;
+
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
+  const [form, setForm] = useState<FormState>(emptyForm);
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [loadError, setLoadError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    const reqs: Promise<unknown>[] = [
+      api.get<Role[]>('/roles/options'),
+      api.get<WarehouseOption[]>('/warehouses/options'),
+    ];
+    if (!isNew) reqs.push(api.get<User>(`/users/${id}`));
+
+    Promise.all(reqs)
+      .then((res) => {
+        if (!active) return;
+        const roleList = (res[0] as { data: Role[] }).data;
+        setRoles(roleList);
+        setWarehouses((res[1] as { data: WarehouseOption[] }).data);
+        if (!isNew) {
+          const u = (res[2] as { data: User }).data;
+          setForm({
+            firstName: u.firstName ?? '',
+            lastName: u.lastName ?? '',
+            username: u.username,
+            email: u.email,
+            password: '',
+            roleId: u.roleId,
+            warehouseId: u.warehouseId ?? '',
+            isActive: u.isActive,
+          });
+        } else {
+          setForm((f) => ({ ...f, roleId: roleList[0]?.id ?? '' }));
+        }
+      })
+      .catch(() => active && setLoadError('Failed to load.'))
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
+    };
+  }, [id, isNew]);
+
+  const set = (patch: Partial<FormState>) => setForm({ ...form, ...patch });
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError('');
+    setSaving(true);
+
+    const base = {
+      firstName: form.firstName,
+      lastName: form.lastName || undefined,
+      username: form.username,
+      email: form.email,
+      roleId: Number(form.roleId),
+      warehouseId: form.warehouseId, // required
+      isActive: form.isActive,
+    };
+
+    try {
+      if (isNew) {
+        await api.post('/users', { ...base, password: form.password });
+      } else {
+        await api.put(`/users/${id}`, {
+          ...base,
+          ...(form.password ? { password: form.password } : {}),
+        });
+      }
+      navigate('/admin/users');
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg = err.response?.data?.message;
+        setError(Array.isArray(msg) ? msg.join(', ') : msg ?? 'Save failed');
+      } else setError('Save failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex h-64 items-center justify-center text-slate-400">
+        Loading…
+      </div>
+    );
+  }
+  if (loadError) {
+    return (
+      <div className="mx-auto max-w-3xl space-y-4">
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {loadError}
+        </div>
+        <Link to="/admin/users" className="btn-secondary">
+          ← Back to users
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-4xl space-y-6">
+      <div className="flex items-start gap-3">
+        <Link
+          to="/admin/users"
+          className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+          aria-label="Back"
+        >
+          <svg
+            className="h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+          </svg>
+        </Link>
+        <div>
+          <h1 className="text-2xl font-semibold text-slate-800">
+            {isNew ? 'Add User' : viewOnly ? 'User Detail' : 'Edit User'}
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Profile, access role, and assigned warehouse.
+          </p>
+        </div>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        {error && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        <Section title="Profile">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="First Name">
+              <input
+                className="input"
+                value={form.firstName}
+                onChange={(e) => set({ firstName: e.target.value })}
+                disabled={viewOnly}
+                required
+              />
+            </Field>
+            <Field label="Last Name">
+              <input
+                className="input"
+                value={form.lastName}
+                onChange={(e) => set({ lastName: e.target.value })}
+                disabled={viewOnly}
+              />
+            </Field>
+            <Field label="Username">
+              <input
+                className="input"
+                value={form.username}
+                onChange={(e) => set({ username: e.target.value })}
+                disabled={viewOnly}
+                required
+              />
+            </Field>
+            <Field label="Email">
+              <input
+                type="email"
+                className="input"
+                value={form.email}
+                onChange={(e) => set({ email: e.target.value })}
+                disabled={viewOnly}
+                required
+              />
+            </Field>
+          </div>
+        </Section>
+
+        <Section title="Access">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Role">
+              <select
+                className="input"
+                value={form.roleId}
+                onChange={(e) => set({ roleId: Number(e.target.value) })}
+                disabled={viewOnly}
+                required
+              >
+                <option value="" disabled>
+                  Select role
+                </option>
+                {roles.map((r) => (
+                  <option key={r.id} value={r.id} className="capitalize">
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Warehouse">
+              <select
+                className="input"
+                value={form.warehouseId}
+                onChange={(e) => set({ warehouseId: e.target.value })}
+                disabled={viewOnly}
+                required
+              >
+                <option value="" disabled>
+                  Select warehouse
+                </option>
+                {warehouses.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                checked={form.isActive}
+                onChange={(e) => set({ isActive: e.target.checked })}
+                disabled={viewOnly}
+              />
+              Active
+            </label>
+          </div>
+        </Section>
+
+        <Section title="Password">
+          <Field
+            label={
+              isNew ? 'Password' : 'New password (leave blank to keep current)'
+            }
+          >
+            <input
+              type="password"
+              className="input sm:max-w-sm"
+              value={form.password}
+              onChange={(e) => set({ password: e.target.value })}
+              disabled={viewOnly}
+              required={isNew}
+              minLength={6}
+              placeholder={isNew ? '' : '••••••'}
+            />
+          </Field>
+        </Section>
+
+        <div className="flex justify-end gap-2">
+          <Link to="/admin/users" className="btn-secondary">
+            {viewOnly ? 'Back' : 'Cancel'}
+          </Link>
+          {canManage && (
+            <button type="submit" className="btn-primary" disabled={saving}>
+              {saving ? 'Saving…' : 'Save user'}
+            </button>
+          )}
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="card p-5">
+      <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
+        {title}
+      </h3>
+      {children}
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <label className="label">{label}</label>
+      {children}
+    </div>
+  );
+}
