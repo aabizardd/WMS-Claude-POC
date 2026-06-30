@@ -9,7 +9,11 @@
       "Bash(cp /tmp/vendor_mig.sql prisma/migrations/20260630090000_add_vendors/migration.sql)",
       "Bash(taskkill //F //IM node.exe)",
       "Bash(cd /c/WMS/backend *)",
-      "Bash(node -e 'let s=\"\";process.stdin.on\\(\"data\",d=>s+=d\\).on\\(\"end\",\\(\\)=>console.log\\(JSON.parse\\(s\\).map\\(u=>\\({u:u.username,active:u.isActive,wh:\\(u.warehouse&&u.warehouse.name\\)||null}\\)\\)\\)\\)')"
+      "Bash(node -e 'let s=\"\";process.stdin.on\\(\"data\",d=>s+=d\\).on\\(\"end\",\\(\\)=>console.log\\(JSON.parse\\(s\\).map\\(u=>\\({u:u.username,active:u.isActive,wh:\\(u.warehouse&&u.warehouse.name\\)||null}\\)\\)\\)\\)')",
+      "Bash(cp /tmp/dbcheck.js /c/WMS/backend/dbcheck.js)",
+      "Bash(node dbcheck.js)",
+      "Bash(npx ts-node *)",
+      "Bash(node -e 'let s=\"\";process.stdin.on\\(\"data\",d=>s+=d\\).on\\(\"end\",\\(\\)=>{const d=JSON.parse\\(s\\);console.log\\(\"on_hand:\",d.on_hand,\"avail:\",d.avail_qty,\"batches:\",d.batches.length\\);console.log\\(\"batch0:\",JSON.stringify\\(d.batches[0]\\)\\)}\\)')"
     ]
   }
 }

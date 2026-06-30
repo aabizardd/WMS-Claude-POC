@@ -43,6 +43,22 @@ export default function GoodsReceiveTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, search]);
 
+  useEffect(() => {
+    const onStatusChanged = () => load();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') load();
+    };
+
+    window.addEventListener('gr-status-changed', onStatusChanged);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      window.removeEventListener('gr-status-changed', onStatusChanged);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function onSearch(e: FormEvent) {
     e.preventDefault();
     setPage(1);

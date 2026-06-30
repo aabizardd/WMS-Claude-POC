@@ -81,10 +81,18 @@ export class GoodsReceiveService {
   async updateActuals(id: string, dto: UpdateActualsDto, scope: WarehouseScope) {
     const gr = await this.getScoped(id, scope);
 
-    const validIds = new Set(gr.mrn.items.map((it) => it.id));
+    const itemById = new Map(gr.mrn.items.map((it) => [it.id, it]));
     for (const row of dto.items) {
-      if (!validIds.has(row.id)) {
+      const item = itemById.get(row.id);
+      if (!item) {
         throw new BadRequestException(`Item ${row.id} is not part of this GR`);
+      }
+      // Actual cannot exceed expected. (Shortage — actual < expected — is allowed
+      // and recorded as a discrepancy when the GR is received.)
+      if (row.qtyActual > item.qtyExpected) {
+        throw new BadRequestException(
+          `Actual (${row.qtyActual}) cannot exceed expected (${item.qtyExpected}) for "${item.itemName ?? row.id}"`,
+        );
       }
     }
 

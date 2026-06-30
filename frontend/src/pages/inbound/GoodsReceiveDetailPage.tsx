@@ -112,6 +112,9 @@ export default function GoodsReceiveDetailPage() {
           console.log('[Polling] Stopping — status changed to:', status);
           if (pollRef.current) clearInterval(pollRef.current);
           pollRef.current = null;
+          window.dispatchEvent(
+            new CustomEvent('gr-status-changed', { detail: { id: grIdRef.current } }),
+          );
         }
       } catch (e) {
         console.error('[Polling] Error:', e);
