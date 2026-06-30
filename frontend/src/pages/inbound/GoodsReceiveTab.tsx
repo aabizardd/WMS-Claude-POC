@@ -9,6 +9,9 @@ const LIMIT = 10;
 function statusBadge(status: string) {
   const map: Record<string, string> = {
     Open: 'bg-amber-50 text-amber-700',
+    Syncing: 'bg-indigo-50 text-indigo-700 animate-pulse',
+    'Sync Failed': 'bg-rose-50 text-rose-700',
+    'On Progress': 'bg-blue-50 text-blue-700',
     'Partially Received': 'bg-blue-50 text-blue-700',
     Received: 'bg-emerald-50 text-emerald-700',
     Completed: 'bg-emerald-50 text-emerald-700',
@@ -34,6 +37,7 @@ export default function GoodsReceiveTab() {
     setData(r.data);
     setLoading(false);
   }
+
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -118,7 +122,8 @@ export default function GoodsReceiveTab() {
                           g.status,
                         )}`}
                       >
-                        {g.status}
+                          {g.status}
+                          {g.status === 'Syncing' && '…'}
                       </span>
                     </td>
                     <td className="px-6 py-3">

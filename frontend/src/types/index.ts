@@ -179,6 +179,25 @@ export interface GoodsReceiveItem {
   item_description: string | null;
   qty_expected: number;
   qty_actual: number;
+  qty_remaining: number;
+  bin_id: string | null;
+  bin_label: string | null;
+  receiving_location_name: string | null;
+}
+
+export interface GoodsReceiveDetailMrn {
+  id: string;
+  oracle_id: string | null;
+  shipment_number: string | null;
+  oracle_status: string | null;
+  status: string;
+  expected_delivery_date: string | null;
+  actual_delivery_date: string | null;
+  vessel_number: string | null;
+  bill_of_lading: string | null;
+  port: string | null;
+  memo: string | null;
+  date_created: string | null;
   receiving_location_name: string | null;
 }
 
@@ -189,8 +208,31 @@ export interface GoodsReceiveDetail {
   shipment_number: string | null;
   receiving_location_name: string | null;
   warehouse: { id: string; name: string } | null;
+  mrn: GoodsReceiveDetailMrn;
   items: GoodsReceiveItem[];
   created_at: string;
+}
+
+export interface GoodsReceiptResultItem {
+  item_id: string;
+  item_name: string;
+}
+
+export interface GoodsReceiptResult {
+  id: string;
+  tranid: string;
+  trandate: string;
+  po_id: string;
+  po_number: string;
+  items: GoodsReceiptResultItem[];
+}
+
+export interface ReceiveResult {
+  inboundShipmentId: number;
+  inboundShipmentStatus: string;
+  goodsReceipts: GoodsReceiptResult[];
+  pollingAttempts: number;
+  durationMs: number;
 }
 
 export interface Paginated<T> {

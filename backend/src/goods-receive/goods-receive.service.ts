@@ -58,7 +58,7 @@ export class GoodsReceiveService {
       this.prisma.goodsReceive.findMany({
         where,
         include: grInclude,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { mrn: { shipmentNumber: 'desc' } },
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -67,7 +67,7 @@ export class GoodsReceiveService {
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
-      attributes: { page, limit, order_by: 'created_at desc' },
+      attributes: { page, limit, order_by: 'shipment_number desc' },
       rows: rows.map((r) => this.serializeList(r)),
     };
   }
@@ -151,6 +151,7 @@ export class GoodsReceiveService {
       // MRN information shown on the Goods Receive screen.
       mrn: {
         id: m.id,
+        oracle_id: m.oracleId,
         shipment_number: m.shipmentNumber,
         oracle_status: m.oracleStatus,
         status: m.status,

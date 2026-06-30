@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, Put, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { GoodsReceiveService } from './goods-receive.service';
+import { GoodsReceiveReceiveService } from './goods-receive-receive.service';
 import { QueryGoodsReceiveDto } from './dto/query-goods-receive.dto';
 import { UpdateActualsDto } from './dto/update-actuals.dto';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
@@ -10,7 +11,10 @@ import {
 
 @Controller('goods-receive')
 export class GoodsReceiveController {
-  constructor(private readonly service: GoodsReceiveService) {}
+  constructor(
+    private readonly service: GoodsReceiveService,
+    private readonly receive: GoodsReceiveReceiveService,
+  ) {}
 
   @Get()
   @RequirePermissions('goods-receive:read')
@@ -33,5 +37,14 @@ export class GoodsReceiveController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.service.updateActuals(id, dto, user);
+  }
+
+  // Trigger ERP receive for the Goods Receive document (background process).
+  @Post(':id/receive')
+  @RequirePermissions('goods-receive:update')
+  async triggerReceive(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    const result = await this.receive.startReceive(id, user);
+    void this.receive.processInBackground(id);
+    return result;
   }
 }

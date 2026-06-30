@@ -44,7 +44,7 @@ export class MrnService {
       this.prisma.mrn.findMany({
         where,
         include: mrnInclude,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { shipmentNumber: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -53,7 +53,7 @@ export class MrnService {
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
-      attributes: { page, limit, order_by: 'created_at desc' },
+      attributes: { page, limit, order_by: 'shipment_number desc' },
       rows: rows.map((r) => this.serialize(r)),
     };
   }
