@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import { InventoryService } from '../inventory/inventory.service';
 
 interface WarehouseScope {
   role: string;
@@ -52,6 +53,7 @@ export class GoodsReceiveReceiveService {
   constructor(
     private prisma: PrismaService,
     private config: ConfigService,
+    private inventory: InventoryService,
   ) {}
 
   private baseUrl() {
@@ -236,6 +238,14 @@ export class GoodsReceiveReceiveService {
             where: { id },
             data: { status: 'On Progress' },
           });
+          // Record received goods into inventory (idempotent).
+          try {
+            await this.inventory.generateFromGoodsReceive(id);
+          } catch (e) {
+            this.logger.error(
+              `Inventory generation failed for GR ${id}: ${(e as Error).message}`,
+            );
+          }
           return;
         }
 

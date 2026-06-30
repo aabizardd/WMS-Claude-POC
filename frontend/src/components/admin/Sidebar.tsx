@@ -61,6 +61,14 @@ const nav: NavEntry[] = [
     ),
   },
   {
+    to: '/admin/inventory',
+    label: 'Inventory',
+    permission: 'inventory:read',
+    icon: (
+      <path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m-8-14l8 4m-8-4v10l8 4m0-10v10" />
+    ),
+  },
+  {
     label: 'User Management',
     icon: (
       <path d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 100-8 4 4 0 000 8z" />

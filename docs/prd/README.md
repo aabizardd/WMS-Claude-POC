@@ -14,6 +14,7 @@ API surface, business rules, and acceptance criteria.
 | 05  | [Vendor Management](05-vendor-management.md) | Vendors (Oracle sync, read-only) |
 | 06  | [Customer Management](06-customer-management.md) | Customers (Oracle sync, read-only) |
 | 07  | [Inbound](07-inbound.md) | MRN (Oracle PIB sync) & Goods Receive; Putaway/History planned |
+| 08  | [Inventory Management](08-inventory-management.md) | Inventory rows + batches, generated on receive |
 
 ## Conventions
 
@@ -29,3 +30,4 @@ API surface, business rules, and acceptance criteria.
 | 2026-06-30 | Added Vendor Management (Oracle vendor sync, read-only). |
 | 2026-06-30 | Added Customer Management (Oracle customer sync, read-only). |
 | 2026-06-30 | Added Inbound — MRN (PIB sync) & Goods Receive (Putaway/History planned). |
+| 2026-06-30 | Added Inventory Management — auto-generated rows + batches on Goods Receive. |

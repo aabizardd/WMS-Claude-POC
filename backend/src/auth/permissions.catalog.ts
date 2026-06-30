@@ -41,6 +41,10 @@ const RESOURCES: { resource: string; label: string; actions: string[] }[] = [
   // Inbound — MRN mirrors Oracle PIB (read/sync); Goods Receive is editable.
   { resource: 'mrn', label: 'MRN', actions: ['read', 'sync'] },
   { resource: 'goods-receive', label: 'Goods Receive', actions: ['read', 'update'] },
+  // Inventory is generated automatically on receive — read only.
+  { resource: 'inventory', label: 'Inventory', actions: ['read'] },
+  // Discrepancy is recorded automatically (quantity gap on receive) — read only.
+  { resource: 'discrepancy', label: 'Discrepancy', actions: ['read'] },
 ];
 
 export const PERMISSIONS: PermissionDef[] = RESOURCES.flatMap((r) =>
@@ -69,4 +73,6 @@ export const STAFF_PERMISSION_KEYS = [
   'customers:read',
   'mrn:read',
   'goods-receive:read',
+  'inventory:read',
+  'discrepancy:read',
 ];

@@ -18,6 +18,7 @@ import { VendorsModule } from './vendors/vendors.module';
 import { CustomersModule } from './customers/customers.module';
 import { MrnModule } from './mrn/mrn.module';
 import { GoodsReceiveModule } from './goods-receive/goods-receive.module';
+import { InventoryModule } from './inventory/inventory.module';
 import { PermissionsModule } from './permissions/permissions.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from './auth/guards/permissions.guard';
@@ -42,6 +43,7 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
     CustomersModule,
     MrnModule,
     GoodsReceiveModule,
+    InventoryModule,
     PermissionsModule,
   ],
   providers: [

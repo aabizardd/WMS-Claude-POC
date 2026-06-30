@@ -27,6 +27,8 @@ import MrnTab from './pages/inbound/MrnTab';
 import MrnDetailPage from './pages/inbound/MrnDetailPage';
 import GoodsReceiveTab from './pages/inbound/GoodsReceiveTab';
 import GoodsReceiveDetailPage from './pages/inbound/GoodsReceiveDetailPage';
+import InventoryPage from './pages/inventory/InventoryPage';
+import InventoryDetailPage from './pages/inventory/InventoryDetailPage';
 
 export default function App() {
   return (
@@ -249,6 +251,24 @@ export default function App() {
             element={
               <RequirePermission permission="goods-receive:read">
                 <GoodsReceiveDetailPage />
+              </RequirePermission>
+            }
+          />
+
+          {/* Inventory Management */}
+          <Route
+            path="inventory"
+            element={
+              <RequirePermission permission="inventory:read">
+                <InventoryPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="inventory/:id"
+            element={
+              <RequirePermission permission="inventory:read">
+                <InventoryDetailPage />
               </RequirePermission>
             }
           />

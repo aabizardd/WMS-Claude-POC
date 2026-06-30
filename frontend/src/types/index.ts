@@ -235,6 +235,43 @@ export interface ReceiveResult {
   durationMs: number;
 }
 
+// ===== Inventory Management =====
+
+export interface InventoryRow {
+  id: string;
+  material_name: string | null;
+  material_code: string;
+  material_type: string | null;
+  material_category: string | null;
+  primary_uom: string | null;
+  warehouse_name: string | null;
+  reserved_qty: number;
+  avail_qty: number;
+  in_transit_qty: number;
+  quality_issue: number;
+  qty_issue: number;
+  on_hand: number;
+}
+
+export interface InventoryBatch {
+  id: string;
+  reserved_qty: number;
+  avail_qty: number;
+  in_transit_qty: number;
+  quality_issue: number;
+  qty_issue: number;
+  on_hand: number;
+  warehouse_name: string | null;
+  bin_location: string | null;
+  gr_number: string | null;
+  company_name: string | null;
+  created_at: string;
+}
+
+export interface InventoryDetail extends InventoryRow {
+  batches: InventoryBatch[];
+}
+
 export interface Paginated<T> {
   total_page: number;
   total_data: number;
