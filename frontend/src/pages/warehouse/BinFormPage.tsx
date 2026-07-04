@@ -11,6 +11,8 @@ import type {
   WarehouseOption,
 } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import SearchableSelect from '../../components/SearchableSelect';
+import FormField, { requiredErrors } from '../../components/form/FormField';
 
 interface FormState {
   binLabel: string;
@@ -62,6 +64,7 @@ export default function BinFormPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [loadError, setLoadError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let active = true;
@@ -108,11 +111,28 @@ export default function BinFormPage() {
     };
   }, [id, isNew]);
 
-  const set = (patch: Partial<FormState>) => setForm({ ...form, ...patch });
+  const set = (patch: Partial<FormState>) => {
+    setForm({ ...form, ...patch });
+    setFieldErrors((p) => {
+      const next = { ...p };
+      for (const k of Object.keys(patch)) delete next[k];
+      return next;
+    });
+  };
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
+    const errs = requiredErrors([
+      ['binLabel', form.binLabel, 'Bin label is required'],
+      ['binCode', form.binCode, 'Bin code is required'],
+      ['warehouseId', form.warehouseId, 'Warehouse is required'],
+      ['areaTypeId', form.areaTypeId, 'Area type is required'],
+      ['aisleId', form.aisleId, 'Aisle is required'],
+      ['shelfId', form.shelfId, 'Shelf is required'],
+    ]);
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) return;
     setSaving(true);
     const payload = {
       binLabel: form.binLabel,
@@ -151,7 +171,7 @@ export default function BinFormPage() {
   }
   if (loadError) {
     return (
-      <div className="mx-auto max-w-3xl space-y-4">
+      <div className="space-y-4">
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {loadError}
         </div>
@@ -163,7 +183,7 @@ export default function BinFormPage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="space-y-6">
       <div className="flex items-start gap-3">
         <Link
           to="/admin/bins"
@@ -199,22 +219,20 @@ export default function BinFormPage() {
 
         <Section title="General">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Bin Label">
+            <Field label="Bin Label" required error={fieldErrors.binLabel}>
               <input
                 className="input"
                 value={form.binLabel}
                 onChange={(e) => set({ binLabel: e.target.value })}
                 disabled={viewOnly}
-                required
               />
             </Field>
-            <Field label="Bin Code">
+            <Field label="Bin Code" required error={fieldErrors.binCode}>
               <input
                 className="input"
                 value={form.binCode}
                 onChange={(e) => set({ binCode: e.target.value })}
                 disabled={viewOnly}
-                required
               />
             </Field>
           </div>
@@ -222,77 +240,51 @@ export default function BinFormPage() {
 
         <Section title="Location">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Warehouse">
-              <select
-                className="input"
+            <Field label="Warehouse" required error={fieldErrors.warehouseId}>
+              <SearchableSelect
                 value={form.warehouseId}
-                onChange={(e) => set({ warehouseId: e.target.value })}
+                onChange={(v) => set({ warehouseId: v })}
                 disabled={viewOnly}
-                required
-              >
-                <option value="" disabled>
-                  Select warehouse
-                </option>
-                {warehouses.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.name}
-                  </option>
-                ))}
-              </select>
+                placeholder="Select warehouse"
+                searchPlaceholder="Search warehouse…"
+                options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
+              />
             </Field>
-            <Field label="Area Type">
-              <select
-                className="input"
+            <Field label="Area Type" required error={fieldErrors.areaTypeId}>
+              <SearchableSelect
                 value={form.areaTypeId}
-                onChange={(e) => set({ areaTypeId: e.target.value })}
+                onChange={(v) => set({ areaTypeId: v })}
                 disabled={viewOnly}
-                required
-              >
-                <option value="" disabled>
-                  Select area type
-                </option>
-                {areaTypes.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.areaTypeName} ({a.areaTypeCode})
-                  </option>
-                ))}
-              </select>
+                placeholder="Select area type"
+                options={areaTypes.map((a) => ({
+                  value: a.id,
+                  label: `${a.areaTypeName} (${a.areaTypeCode})`,
+                }))}
+              />
             </Field>
-            <Field label="Aisle">
-              <select
-                className="input"
+            <Field label="Aisle" required error={fieldErrors.aisleId}>
+              <SearchableSelect
                 value={form.aisleId}
-                onChange={(e) => set({ aisleId: e.target.value })}
+                onChange={(v) => set({ aisleId: v })}
                 disabled={viewOnly}
-                required
-              >
-                <option value="" disabled>
-                  Select aisle
-                </option>
-                {aisles.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.aisleName} ({a.aisleCode})
-                  </option>
-                ))}
-              </select>
+                placeholder="Select aisle"
+                options={aisles.map((a) => ({
+                  value: a.id,
+                  label: `${a.aisleName} (${a.aisleCode})`,
+                }))}
+              />
             </Field>
-            <Field label="Shelf">
-              <select
-                className="input"
+            <Field label="Shelf" required error={fieldErrors.shelfId}>
+              <SearchableSelect
                 value={form.shelfId}
-                onChange={(e) => set({ shelfId: e.target.value })}
+                onChange={(v) => set({ shelfId: v })}
                 disabled={viewOnly}
-                required
-              >
-                <option value="" disabled>
-                  Select shelf
-                </option>
-                {shelves.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.shelfLabel} ({s.shelfCode})
-                  </option>
-                ))}
-              </select>
+                placeholder="Select shelf"
+                options={shelves.map((s) => ({
+                  value: s.id,
+                  label: `${s.shelfLabel} (${s.shelfCode})`,
+                }))}
+              />
             </Field>
           </div>
         </Section>
@@ -340,19 +332,13 @@ export default function BinFormPage() {
               />
             </Field>
             <Field label="Dimension UOM">
-              <select
-                className="input"
+              <SearchableSelect
                 value={form.dimensionUomId}
-                onChange={(e) => set({ dimensionUomId: e.target.value })}
+                onChange={(v) => set({ dimensionUomId: v })}
                 disabled={viewOnly}
-              >
-                <option value="">—</option>
-                {uoms.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.uomCode}
-                  </option>
-                ))}
-              </select>
+                placeholder="—"
+                options={uoms.map((u) => ({ value: u.id, label: u.uomCode }))}
+              />
             </Field>
             <label className="mt-6 flex items-center gap-2 text-sm text-slate-700">
               <input
@@ -393,11 +379,20 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({
+  label,
+  required,
+  error,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  error?: string;
+  children: ReactNode;
+}) {
   return (
-    <div>
-      <label className="label">{label}</label>
+    <FormField label={label} required={required} error={error}>
       {children}
-    </div>
+    </FormField>
   );
 }

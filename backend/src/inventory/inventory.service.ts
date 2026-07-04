@@ -18,26 +18,41 @@ const materialInclude = {
   warehouse: { select: { id: true, name: true } },
 } satisfies Prisma.InventoryManagementInclude;
 
+const listInclude = {
+  ...materialInclude,
+  binStocks: {
+    select: {
+      reservedQty: true,
+      availQty: true,
+      inTransitQty: true,
+      qualityIssue: true,
+      qtyIssue: true,
+    },
+  },
+} satisfies Prisma.InventoryManagementInclude;
+
 const detailInclude = {
   ...materialInclude,
-  batches: {
-    include: {
-      bin: { select: { binLabel: true } },
-      goodsReceive: { select: { grNumber: true } },
-    },
+  binStocks: {
+    include: { bin: { select: { binLabel: true } } },
     orderBy: { createdAt: 'asc' as const },
   },
 } satisfies Prisma.InventoryManagementInclude;
 
 type InvList = Prisma.InventoryManagementGetPayload<{
-  include: typeof materialInclude;
-}> & {
-  batches?: { reservedQty: number; availQty: number; inTransitQty: number; qualityIssue: number; qtyIssue: number }[];
-};
-
+  include: typeof listInclude;
+}>;
 type InvDetail = Prisma.InventoryManagementGetPayload<{
   include: typeof detailInclude;
 }>;
+
+interface StockDelta {
+  avail?: number;
+  reserved?: number;
+  inTransit?: number;
+  quality?: number;
+  qtyIssue?: number;
+}
 
 @Injectable()
 export class InventoryService {
@@ -46,7 +61,9 @@ export class InventoryService {
   constructor(private prisma: PrismaService) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.InventoryManagementWhereInput {
-    if (scope.role === 'admin') return {};
+    if (scope.role === 'admin') {
+      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
+    }
     return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
   }
 
@@ -77,18 +94,7 @@ export class InventoryService {
       this.prisma.inventoryManagement.count({ where }),
       this.prisma.inventoryManagement.findMany({
         where,
-        include: {
-          ...materialInclude,
-          batches: {
-            select: {
-              reservedQty: true,
-              availQty: true,
-              inTransitQty: true,
-              qualityIssue: true,
-              qtyIssue: true,
-            },
-          },
-        },
+        include: listInclude,
         orderBy: { materialCode: 'asc' },
         skip: (page - 1) * limit,
         take: limit,
@@ -99,7 +105,7 @@ export class InventoryService {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
       attributes: { page, limit, order_by: 'material_code asc' },
-      rows: rows.map((r) => this.serializeList(r as InvList)),
+      rows: rows.map((r) => this.serializeList(r)),
     };
   }
 
@@ -130,11 +136,8 @@ export class InventoryService {
     for (const item of gr.mrn.items) {
       if (!(item.qtyActual > 0)) continue;
 
-      // Idempotent: one batch per received MRN item.
-      const existing = await this.prisma.inventoryBatch.findUnique({
-        where: { mrnItemId: item.id },
-      });
-      if (existing) continue;
+      // Idempotent: skip items already taken into inventory.
+      if (item.inventoriedAt) continue;
 
       // Material: join mrn_item.item_id -> materials.erp_doc_id
       const material =
@@ -165,39 +168,70 @@ export class InventoryService {
         });
       }
 
-      // company_name from the vendor master (oracleId = mrn_item.vendor_id).
-      let vendorCompanyName = item.vendorName ?? null;
-      if (item.vendorId != null) {
-        const vendor = await this.prisma.vendor.findUnique({
-          where: { oracleId: String(item.vendorId) },
-        });
-        if (vendor?.companyName) vendorCompanyName = vendor.companyName;
-      }
+      const gap =
+        item.qtyActual < item.qtyExpected
+          ? item.qtyExpected - item.qtyActual
+          : 0;
 
-      const batch = await this.prisma.inventoryBatch.create({
-        data: {
-          inventoryId: inv.id,
-          availQty: item.qtyActual, // received qty becomes available
-          binId: item.binId ?? null,
-          goodsReceiveId: gr.id,
-          mrnItemId: item.id,
-          vendorCompanyName,
-        },
+      // Per-bin stock: received qty lands in the receive bin, grouped per
+      // (inventory, bin). Mark the item inventoried in the same transaction.
+      const invId = inv.id;
+      await this.prisma.$transaction(async (tx) => {
+        await this.adjustBinStock(
+          invId,
+          item.binId ?? null,
+          { avail: item.qtyActual, qtyIssue: gap },
+          tx,
+        );
+        await tx.mrnItem.update({
+          where: { id: item.id },
+          data: { inventoriedAt: new Date() },
+        });
       });
-
-      if (item.qtyActual < item.qtyExpected) {
-        const gap = item.qtyExpected - item.qtyActual;
-        await this.prisma.inventoryBatch.update({
-          where: { id: batch.id },
-          data: { qtyIssue: gap },
-        });
-      }
       created++;
     }
     this.logger.log(
       `Inventory generated for GR ${goodsReceiveId}: ${created} batch(es)`,
     );
     return { created };
+  }
+
+  // Increment a bin's stock by the given deltas (negative = decrease),
+  // creating the (inventory, bin) row if needed. Accepts a tx client.
+  async adjustBinStock(
+    inventoryId: string,
+    binId: string | null,
+    d: StockDelta,
+    client?: Prisma.TransactionClient,
+  ) {
+    const c = client ?? this.prisma;
+    const existing = await c.inventoryBinStock.findFirst({
+      where: { inventoryId, binId },
+    });
+    if (existing) {
+      await c.inventoryBinStock.update({
+        where: { id: existing.id },
+        data: {
+          availQty: { increment: d.avail ?? 0 },
+          reservedQty: { increment: d.reserved ?? 0 },
+          inTransitQty: { increment: d.inTransit ?? 0 },
+          qualityIssue: { increment: d.quality ?? 0 },
+          qtyIssue: { increment: d.qtyIssue ?? 0 },
+        },
+      });
+    } else {
+      await c.inventoryBinStock.create({
+        data: {
+          inventoryId,
+          binId,
+          availQty: d.avail ?? 0,
+          reservedQty: d.reserved ?? 0,
+          inTransitQty: d.inTransit ?? 0,
+          qualityIssue: d.quality ?? 0,
+          qtyIssue: d.qtyIssue ?? 0,
+        },
+      });
+    }
   }
 
   // ---------- serializers ----------
@@ -250,30 +284,36 @@ export class InventoryService {
     return {
       id: m.id,
       ...this.materialFields(m),
-      ...this.sumBatches(m.batches ?? []),
+      ...this.sumBatches(m.binStocks),
     };
   }
 
   private serializeDetail(m: InvDetail) {
+    // One row per bin location (quantities already stored per bin).
+    const bins = m.binStocks
+      .map((bs) => ({
+        bin_location: bs.bin?.binLabel ?? null,
+        warehouse_name: m.warehouse?.name ?? null,
+        ...this.sumBatches([bs]),
+      }))
+      // Hide bins that are fully empty.
+      .filter(
+        (b) =>
+          b.reserved_qty !== 0 ||
+          b.avail_qty !== 0 ||
+          b.in_transit_qty !== 0 ||
+          b.quality_issue !== 0 ||
+          b.qty_issue !== 0,
+      )
+      .sort((a, b) =>
+        (a.bin_location ?? '').localeCompare(b.bin_location ?? ''),
+      );
+
     return {
       id: m.id,
       ...this.materialFields(m),
-      ...this.sumBatches(m.batches),
-      batches: m.batches.map((b) => ({
-        id: b.id,
-        reserved_qty: b.reservedQty,
-        avail_qty: b.availQty,
-        in_transit_qty: b.inTransitQty,
-        quality_issue: b.qualityIssue,
-        qty_issue: b.qtyIssue,
-        on_hand:
-          b.reservedQty + b.availQty + b.qualityIssue + b.qtyIssue,
-        warehouse_name: m.warehouse?.name ?? null,
-        bin_location: b.bin?.binLabel ?? null,
-        gr_number: b.goodsReceive?.grNumber ?? null,
-        company_name: b.vendorCompanyName ?? null,
-        created_at: b.createdAt,
-      })),
+      ...this.sumBatches(m.binStocks),
+      bins,
     };
   }
 }

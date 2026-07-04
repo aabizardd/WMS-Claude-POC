@@ -1,22 +1,22 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import api from '../../lib/api';
-import type { DiscrepancyDetail } from '../../types';
+import { useEffect, useState, type ReactNode } from "react";
+import { Link, useParams } from "react-router-dom";
+import api from "../../lib/api";
+import type { DiscrepancyDetail } from "../../types";
 
 function qtyTypeBadge(type: string) {
   const map: Record<string, string> = {
-    shortage: 'bg-amber-50 text-amber-700',
-    overage: 'bg-emerald-50 text-emerald-700',
-    quarantine: 'bg-rose-50 text-rose-700',
+    shortage: "bg-amber-50 text-amber-700",
+    overage: "bg-emerald-50 text-emerald-700",
+    quarantine: "bg-rose-50 text-rose-700",
   };
-  return map[type] ?? 'bg-slate-100 text-slate-600';
+  return map[type] ?? "bg-slate-100 text-slate-600";
 }
 
 export default function DiscrepancyDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [disc, setDisc] = useState<DiscrepancyDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -24,7 +24,7 @@ export default function DiscrepancyDetailPage() {
     api
       .get<DiscrepancyDetail>(`/discrepancy/${id}`)
       .then((r) => active && setDisc(r.data))
-      .catch(() => active && setError('Failed to load discrepancy.'))
+      .catch(() => active && setError("Failed to load discrepancy."))
       .finally(() => active && setLoading(false));
     return () => {
       active = false;
@@ -40,9 +40,9 @@ export default function DiscrepancyDetailPage() {
   }
   if (error || !disc) {
     return (
-      <div className="mx-auto max-w-3xl space-y-4">
+      <div className="space-y-4">
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error || 'Discrepancy not found.'}
+          {error || "Discrepancy not found."}
         </div>
         <Link to="/admin/discrepancy" className="btn-secondary">
           ← Back to Discrepancy
@@ -51,8 +51,10 @@ export default function DiscrepancyDetailPage() {
     );
   }
 
+  const isOutbound = disc.discrepancy_from === "outbound";
+
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="space-y-6">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <Link
@@ -67,7 +69,11 @@ export default function DiscrepancyDetailPage() {
               strokeWidth={2}
               viewBox="0 0 24 24"
             >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M15 19l-7-7 7-7"
+              />
             </svg>
           </Link>
           <div>
@@ -75,7 +81,7 @@ export default function DiscrepancyDetailPage() {
               {disc.discrepancy_id}
             </h1>
             <p className="mt-1 text-sm text-slate-500">
-              {disc.gr_number ?? '—'} · {disc.discrepancy_type} ·{' '}
+              {disc.source_number ?? "—"} · {disc.discrepancy_type} ·{" "}
               {disc.discrepancy_from}
             </p>
           </div>
@@ -91,7 +97,8 @@ export default function DiscrepancyDetailPage() {
         </h3>
         <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
           <Meta label="Discrepancy ID" value={disc.discrepancy_id} />
-          <Meta label="GR Number" value={disc.gr_number} />
+          <Meta label="Source Number" value={disc.source_number} />
+          <Meta label="Source" value={disc.source} />
           <Meta label="Type" value={disc.discrepancy_type} />
           <Meta label="From" value={disc.discrepancy_from} />
           <Meta label="Reported By" value={disc.reported_by} />
@@ -109,53 +116,40 @@ export default function DiscrepancyDetailPage() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-5 py-3">PO Number</th>
+                {!isOutbound && <th className="px-5 py-3">PO Number</th>}
                 <th className="px-5 py-3">Item Name</th>
                 <th className="px-5 py-3">Source</th>
                 <th className="px-5 py-3 text-right">Discrepancy</th>
-                {disc.discrepancy_type === 'quality' && (
-                  <>
-                    <th className="px-5 py-3 text-right">Passed</th>
-                    <th className="px-5 py-3 text-right">Scrapped</th>
-                  </>
-                )}
-                <th className="px-5 py-3 text-right">Remaining</th>
                 <th className="px-5 py-3">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {disc.details.map((d) => (
                 <tr key={d.id} className="hover:bg-slate-50">
-                  <td className="px-5 py-3 font-medium text-slate-800">
-                    {d.po_number}
-                  </td>
+                  {!isOutbound && (
+                    <td className="px-5 py-3 font-medium text-slate-800">
+                      {d.po_number}
+                    </td>
+                  )}
                   <td className="px-5 py-3 text-slate-600">
-                    {d.item_name ?? '—'}
+                    {d.item_name ?? "—"}
                   </td>
                   <td className="px-5 py-3 text-slate-600">{d.source_from}</td>
                   <td className="px-5 py-3 text-right font-medium text-slate-800">
                     {d.qty_discrepancy}
                   </td>
-                  {disc.discrepancy_type === 'quality' && (
-                    <>
-                      <td className="px-5 py-3 text-right text-slate-600">
-                        {d.qty_passed}
-                      </td>
-                      <td className="px-5 py-3 text-right text-slate-600">
-                        {d.qty_scrapped}
-                      </td>
-                    </>
-                  )}
-                  <td className="px-5 py-3 text-right text-slate-600">
-                    {d.qty_remaining}
-                  </td>
+
                   <td className="px-5 py-3">
                     <span
-                      className={`inline-block rounded-full px-2.5 py-1 text-xs font-medium ${qtyTypeBadge(
-                        d.qty_discrepancy_type,
-                      )}`}
+                      className={`inline-block rounded-full px-2.5 py-1 text-xs font-medium  ${
+                        disc.discrepancy_type === "quality"
+                          ? qtyTypeBadge("quarantine")
+                          : qtyTypeBadge(d.qty_discrepancy_type)
+                      }`}
                     >
-                      {d.qty_discrepancy_type}
+                      {disc.discrepancy_type === "quality"
+                        ? "Quarantine"
+                        : d.qty_discrepancy_type}
                     </span>
                   </td>
                 </tr>

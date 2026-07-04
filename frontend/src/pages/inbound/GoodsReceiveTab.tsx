@@ -3,20 +3,13 @@ import { Link } from 'react-router-dom';
 import api from '../../lib/api';
 import type { GoodsReceiveRow, Paginated } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { grStatusBadgeClass, grStatusLabel } from '../../lib/grStatus';
 
 const LIMIT = 10;
 
 function statusBadge(status: string) {
-  const map: Record<string, string> = {
-    Open: 'bg-amber-50 text-amber-700',
-    Syncing: 'bg-indigo-50 text-indigo-700 animate-pulse',
-    'Sync Failed': 'bg-rose-50 text-rose-700',
-    'On Progress': 'bg-blue-50 text-blue-700',
-    'Partially Received': 'bg-blue-50 text-blue-700',
-    Received: 'bg-emerald-50 text-emerald-700',
-    Completed: 'bg-emerald-50 text-emerald-700',
-  };
-  return map[status] ?? 'bg-slate-100 text-slate-600';
+  const base = grStatusBadgeClass(status);
+  return status === 'Syncing' ? `${base} animate-pulse` : base;
 }
 
 export default function GoodsReceiveTab() {
@@ -138,14 +131,14 @@ export default function GoodsReceiveTab() {
                           g.status,
                         )}`}
                       >
-                          {g.status}
+                          {grStatusLabel(g.status)}
                           {g.status === 'Syncing' && '…'}
                       </span>
                     </td>
                     <td className="px-6 py-3">
                       <div className="flex justify-end">
                         <Link
-                          to={`/admin/inbound/goods-receive/${g.id}`}
+                          to={`/admin/inbound/pib/goods-receive/${g.id}`}
                           className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
                         >
                           {canUpdate ? 'Receive' : 'View'}

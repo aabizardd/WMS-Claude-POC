@@ -4,9 +4,13 @@ import axios from 'axios';
 import api from '../../lib/api';
 import type { User } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
+import { useConfirm } from '../../context/ConfirmContext';
 
 export default function UsersPage() {
   const { has } = useAuth();
+  const toast = useToast();
+  const confirm = useConfirm();
   const canCreate = has('users:create');
   const canUpdate = has('users:update');
   const canDelete = has('users:delete');
@@ -25,14 +29,21 @@ export default function UsersPage() {
   }, []);
 
   async function handleDelete(u: User) {
-    if (!confirm(`Delete user "${u.name}"?`)) return;
+    const ok = await confirm({
+      title: 'Delete user?',
+      description: `"${u.name}" will be permanently deleted.`,
+      type: 'danger',
+      confirmText: 'Delete',
+    });
+    if (!ok) return;
     try {
       await api.delete(`/users/${u.id}`);
+      toast.success('User deleted');
       await load();
     } catch (err) {
       if (axios.isAxiosError(err)) {
-        alert(err.response?.data?.message ?? 'Delete failed');
-      }
+        toast.error(err.response?.data?.message ?? 'Delete failed');
+      } else toast.error('Delete failed');
     }
   }
 

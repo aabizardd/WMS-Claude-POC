@@ -2,8 +2,11 @@ import { useEffect, useState, type FormEvent } from 'react';
 import axios from 'axios';
 import api from '../../lib/api';
 import Modal from '../../components/Modal';
+import FormField, { requiredErrors } from '../../components/form/FormField';
 import type { MaterialCategory } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
+import { useConfirm } from '../../context/ConfirmContext';
 
 interface FormState {
   materialCategoryName: string;
@@ -21,6 +24,8 @@ const emptyForm: FormState = {
 
 export default function MaterialCategoriesPage() {
   const { has } = useAuth();
+  const toast = useToast();
+  const confirm = useConfirm();
   const canCreate = has('material-categories:create');
   const canUpdate = has('material-categories:update');
   const canDelete = has('material-categories:delete');
@@ -31,6 +36,7 @@ export default function MaterialCategoriesPage() {
   const [editing, setEditing] = useState<MaterialCategory | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   async function load() {
@@ -47,6 +53,7 @@ export default function MaterialCategoriesPage() {
     setEditing(null);
     setForm(emptyForm);
     setError('');
+    setFieldErrors({});
     setModalOpen(true);
   }
   function openEdit(it: MaterialCategory) {
@@ -58,12 +65,19 @@ export default function MaterialCategoriesPage() {
       isActive: it.isActive,
     });
     setError('');
+    setFieldErrors({});
     setModalOpen(true);
   }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
+    const errs = requiredErrors([
+      ['materialCategoryCode', form.materialCategoryCode, 'Code is required'],
+      ['materialCategoryName', form.materialCategoryName, 'Name is required'],
+    ]);
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) return;
     setSaving(true);
     try {
       if (editing) {
@@ -84,13 +98,21 @@ export default function MaterialCategoriesPage() {
   }
 
   async function handleDelete(it: MaterialCategory) {
-    if (!confirm(`Delete category "${it.materialCategoryName}"?`)) return;
+    const ok = await confirm({
+      title: 'Delete category?',
+      description: `"${it.materialCategoryName}" will be permanently deleted.`,
+      type: 'danger',
+      confirmText: 'Delete',
+    });
+    if (!ok) return;
     try {
       await api.delete(`/material-categories/${it.id}`);
+      toast.success('Category deleted');
       await load();
     } catch (err) {
       if (axios.isAxiosError(err))
-        alert(err.response?.data?.message ?? 'Delete failed');
+        toast.error(err.response?.data?.message ?? 'Delete failed');
+      else toast.error('Delete failed');
     }
   }
 
@@ -207,29 +229,27 @@ export default function MaterialCategoriesPage() {
             </div>
           )}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="label">Code</label>
+            <FormField label="Code" required error={fieldErrors.materialCategoryCode}>
               <input
                 className="input"
                 value={form.materialCategoryCode}
-                onChange={(e) =>
-                  setForm({ ...form, materialCategoryCode: e.target.value })
-                }
+                onChange={(e) => {
+                  setForm({ ...form, materialCategoryCode: e.target.value });
+                  setFieldErrors((p) => ({ ...p, materialCategoryCode: '' }));
+                }}
                 placeholder="CAT-001"
-                required
               />
-            </div>
-            <div>
-              <label className="label">Name</label>
+            </FormField>
+            <FormField label="Name" required error={fieldErrors.materialCategoryName}>
               <input
                 className="input"
                 value={form.materialCategoryName}
-                onChange={(e) =>
-                  setForm({ ...form, materialCategoryName: e.target.value })
-                }
-                required
+                onChange={(e) => {
+                  setForm({ ...form, materialCategoryName: e.target.value });
+                  setFieldErrors((p) => ({ ...p, materialCategoryName: '' }));
+                }}
               />
-            </div>
+            </FormField>
           </div>
           <div>
             <label className="label">Description</label>

@@ -31,7 +31,7 @@ export default function InventoryDetailPage() {
   }
   if (error || !inv) {
     return (
-      <div className="mx-auto max-w-3xl space-y-4">
+      <div className="space-y-4">
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error || 'Inventory not found.'}
         </div>
@@ -43,7 +43,7 @@ export default function InventoryDetailPage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="space-y-6">
       <div className="flex items-start gap-3">
         <Link
           to="/admin/inventory"
@@ -93,19 +93,17 @@ export default function InventoryDetailPage() {
         </div>
       </div>
 
-      {/* Batches */}
+      {/* Grouped by bin location */}
       <div className="card overflow-hidden">
         <div className="border-b border-slate-200 px-5 py-3">
           <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-            Batches ({inv.batches.length})
+            By Bin Location ({inv.bins.length})
           </h3>
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-5 py-3">GR Number</th>
-                <th className="px-5 py-3">Company (Vendor)</th>
                 <th className="px-5 py-3">Bin Location</th>
                 <th className="px-5 py-3">Warehouse</th>
                 <th className="px-5 py-3 text-right">On Hand</th>
@@ -117,16 +115,10 @@ export default function InventoryDetailPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {inv.batches.map((b) => (
-                <tr key={b.id} className="hover:bg-slate-50">
+              {inv.bins.map((b, i) => (
+                <tr key={b.bin_location ?? `no-bin-${i}`} className="hover:bg-slate-50">
                   <td className="px-5 py-3 font-medium text-slate-800">
-                    {b.gr_number ?? '—'}
-                  </td>
-                  <td className="px-5 py-3 text-slate-600">
-                    {b.company_name ?? '—'}
-                  </td>
-                  <td className="px-5 py-3 text-slate-600">
-                    {b.bin_location ?? '—'}
+                    {b.bin_location ?? '— (no bin)'}
                   </td>
                   <td className="px-5 py-3 text-slate-600">
                     {b.warehouse_name ?? '—'}

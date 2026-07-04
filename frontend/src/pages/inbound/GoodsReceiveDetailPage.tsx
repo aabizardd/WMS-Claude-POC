@@ -5,6 +5,11 @@ import api from '../../lib/api';
 import Modal from '../../components/Modal';
 import type { GoodsReceiveDetail } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { grStatusBadgeClass, grStatusLabel } from '../../lib/grStatus';
+import SearchableSelect from '../../components/SearchableSelect';
+import ActionMenu from '../../components/ActionMenu';
+import { printDoc } from '../../lib/print';
+import { PrintIcon } from '../../components/icons';
 
 const POLL_INTERVAL_MS = 3000;
 const POLL_TIMEOUT_MS = 120_000;
@@ -17,18 +22,8 @@ interface BinOption {
 }
 
 function statusBadgeClass(status: string) {
-  const map: Record<string, string> = {
-    Open: 'bg-amber-50 text-amber-700',
-    Syncing: 'bg-indigo-50 text-indigo-700',
-    'Sync Failed': 'bg-rose-50 text-rose-700',
-    'On Progress': 'bg-blue-50 text-blue-700',
-    'Partially Received': 'bg-blue-50 text-blue-700',
-    Received: 'bg-emerald-50 text-emerald-700',
-    Completed: 'bg-emerald-50 text-emerald-700',
-  };
-  const base = map[status] ?? 'bg-slate-100 text-slate-600';
-  if (status === 'Syncing') return `${base} animate-pulse`;
-  return base;
+  const base = grStatusBadgeClass(status);
+  return status === 'Syncing' ? `${base} animate-pulse` : base;
 }
 
 export default function GoodsReceiveDetailPage() {
@@ -314,11 +309,11 @@ export default function GoodsReceiveDetailPage() {
   }
   if (loadError || !gr) {
     return (
-      <div className="mx-auto max-w-3xl space-y-4">
+      <div className="space-y-4">
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {loadError || 'Goods Receive not found.'}
         </div>
-        <Link to="/admin/inbound/goods-receive" className="btn-secondary">
+        <Link to="/admin/inbound/pib/goods-receive" className="btn-secondary">
           ← Back to Goods Receive
         </Link>
       </div>
@@ -330,12 +325,52 @@ export default function GoodsReceiveDetailPage() {
   const isOpen = gr.status === 'Open';
   const editable = canUpdate && isOpen;
 
+  function handlePrint() {
+    if (!gr) return;
+    const m = gr.mrn;
+    printDoc({
+      title: `Goods Receive — ${gr.gr_number}`,
+      subtitle: `${gr.shipment_number ?? '—'} · ${gr.receiving_location_name ?? 'No location'}`,
+      meta: [
+        { label: 'GR Number', value: gr.gr_number },
+        { label: 'Status', value: grStatusLabel(gr.status) },
+        { label: 'Shipment Number', value: gr.shipment_number },
+        { label: 'Warehouse', value: gr.warehouse?.name },
+        { label: 'Oracle ID', value: m.oracle_id },
+        { label: 'Oracle Status', value: m.oracle_status },
+        { label: 'Receiving Location', value: m.receiving_location_name },
+        { label: 'Vessel Number', value: m.vessel_number },
+        { label: 'Bill of Lading', value: m.bill_of_lading },
+        { label: 'Port', value: m.port },
+        { label: 'Expected Delivery', value: m.expected_delivery_date },
+        { label: 'Actual Delivery', value: m.actual_delivery_date },
+        { label: 'Date Created', value: m.date_created },
+        { label: 'Memo', value: m.memo },
+      ],
+      tables: [
+        {
+          heading: 'Items',
+          columns: ['Item', 'PO Number', 'Vendor', 'Recv. Location', 'Expected', 'Actual', 'Bin Destination'],
+          rows: gr.items.map((it) => [
+            it.item_name,
+            it.po_number,
+            it.vendor_name,
+            it.receiving_location_name,
+            it.qty_expected,
+            it.qty_actual,
+            it.bin_label,
+          ]),
+        },
+      ],
+    });
+  }
+
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="space-y-6">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <Link
-            to="/admin/inbound/goods-receive"
+            to="/admin/inbound/pib/goods-receive"
             className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
             aria-label="Back"
           >
@@ -359,12 +394,19 @@ export default function GoodsReceiveDetailPage() {
             </p>
           </div>
         </div>
-        <span
-          className={`rounded-full px-3 py-1 text-xs font-medium ${statusBadgeClass(gr.status)}`}
-        >
-          {gr.status}
-          {gr.status === 'Syncing' && '…'}
-        </span>
+        <div className="flex items-center gap-2">
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-medium ${statusBadgeClass(gr.status)}`}
+          >
+            {grStatusLabel(gr.status)}
+            {gr.status === 'Syncing' && '…'}
+          </span>
+          <ActionMenu
+            items={[
+              { label: 'Print', icon: <PrintIcon />, onClick: handlePrint },
+            ]}
+          />
+        </div>
       </div>
 
       {pollTimeout && (
@@ -469,24 +511,20 @@ export default function GoodsReceiveDetailPage() {
                           Loading bins…
                         </span>
                       ) : (
-                        <select
-                          className="input text-sm"
+                        <SearchableSelect
+                          className="w-48"
                           value={binSelections[it.id] ?? ''}
                           disabled={!editable}
-                          onChange={(e) =>
-                            setBinSelections((s) => ({
-                              ...s,
-                              [it.id]: e.target.value,
-                            }))
+                          onChange={(v) =>
+                            setBinSelections((s) => ({ ...s, [it.id]: v }))
                           }
-                        >
-                          <option value="">— Select —</option>
-                          {bins.map((b) => (
-                            <option key={b.id} value={b.id}>
-                              {b.binLabel} ({b.binCode})
-                            </option>
-                          ))}
-                        </select>
+                          placeholder="— Select —"
+                          searchPlaceholder="Search bin…"
+                          options={bins.map((b) => ({
+                            value: b.id,
+                            label: `${b.binLabel} (${b.binCode})`,
+                          }))}
+                        />
                       )}
                     </td>
                   </tr>
@@ -500,7 +538,7 @@ export default function GoodsReceiveDetailPage() {
           {savedAt && (
             <span className="text-xs text-emerald-600">Saved at {savedAt}</span>
           )}
-          <Link to="/admin/inbound/goods-receive" className="btn-secondary">
+          <Link to="/admin/inbound/pib/goods-receive" className="btn-secondary">
             {editable ? 'Cancel' : 'Back'}
           </Link>
           {editable && (
@@ -508,7 +546,7 @@ export default function GoodsReceiveDetailPage() {
               {saving ? 'Saving…' : 'Confirm'}
             </button>
           )}
-          {canUpdate && (gr.status === 'Syncing' || gr.status === 'Sync Failed') && (
+          {canUpdate && (gr.status === 'Syncing' || gr.status === 'SyncFailed') && (
             <button
               type="button"
               className="btn-primary"
@@ -517,7 +555,7 @@ export default function GoodsReceiveDetailPage() {
               Retry
             </button>
           )}
-          {has('putaway:create') && gr.status === 'On Progress' && (
+          {has('putaway:create') && gr.status === 'OnProgress' && (
             <button
               type="button"
               className="btn-secondary"
@@ -649,23 +687,19 @@ export default function GoodsReceiveDetailPage() {
                     <label className="block text-xs text-slate-400">
                       Picker
                     </label>
-                    <select
-                      className="input mt-0.5 w-32 text-sm"
+                    <SearchableSelect
+                      className="mt-0.5 w-40"
                       value={putawayPicker[it.id] ?? ''}
-                      onChange={(e) =>
-                        setPutawayPicker((p) => ({
-                          ...p,
-                          [it.id]: e.target.value,
-                        }))
+                      onChange={(v) =>
+                        setPutawayPicker((p) => ({ ...p, [it.id]: v }))
                       }
-                    >
-                      <option value="">— Auto —</option>
-                      {pickers.map((pu) => (
-                        <option key={pu.id} value={String(pu.id)}>
-                          {pu.name}
-                        </option>
-                      ))}
-                    </select>
+                      placeholder="— Auto —"
+                      searchPlaceholder="Search picker…"
+                      options={pickers.map((pu) => ({
+                        value: String(pu.id),
+                        label: pu.name,
+                      }))}
+                    />
                   </div>
                 </div>
               ))}

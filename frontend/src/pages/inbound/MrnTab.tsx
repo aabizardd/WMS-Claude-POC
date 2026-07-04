@@ -4,6 +4,7 @@ import axios from 'axios';
 import api from '../../lib/api';
 import Modal from '../../components/Modal';
 import type { ErpSyncResult, Mrn, Paginated } from '../../types';
+import { grStatusLabel } from '../../lib/grStatus';
 import { useAuth } from '../../context/AuthContext';
 
 const LIMIT = 10;
@@ -180,7 +181,7 @@ export default function MrnTab() {
                     <td className="px-6 py-3">
                       {m.goods_receive ? (
                         <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
-                          {m.goods_receive.status}
+                          {grStatusLabel(m.goods_receive.status)}
                         </span>
                       ) : (
                         '—'
@@ -192,7 +193,7 @@ export default function MrnTab() {
                     <td className="px-6 py-3">
                       <div className="flex justify-end">
                         <Link
-                          to={`/admin/inbound/mrn/${m.id}`}
+                          to={`/admin/inbound/pib/mrn/${m.id}`}
                           className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
                         >
                           View

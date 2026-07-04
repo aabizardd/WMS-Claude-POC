@@ -97,7 +97,11 @@ export class GoodsReceiveReceiveService {
     ) {
       throw new NotFoundException(`Goods Receive ${id} not found`);
     }
-    if (gr.status !== 'Open' && gr.status !== 'Syncing' && gr.status !== 'Sync Failed') {
+    if (
+      gr.status !== 'Open' &&
+      gr.status !== 'Syncing' &&
+      gr.status !== 'SyncFailed'
+    ) {
       throw new Error(
         `Cannot receive: GR status is "${gr.status}" (expected Open or Syncing)`,
       );
@@ -238,7 +242,7 @@ export class GoodsReceiveReceiveService {
           );
           await this.prisma.goodsReceive.update({
             where: { id },
-            data: { status: 'On Progress' },
+            data: { status: 'OnProgress' },
           });
           // Record received goods into inventory (idempotent).
           try {
@@ -267,7 +271,7 @@ export class GoodsReceiveReceiveService {
 
       await this.prisma.goodsReceive.update({
         where: { id },
-        data: { status: 'Sync Failed' },
+        data: { status: 'SyncFailed' },
       });
       this.logger.warn(
         `Receive timed out after ${maxAttempts} attempts — GR ${id} set to Sync Failed`,

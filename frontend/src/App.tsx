@@ -5,6 +5,7 @@ import AdminLayout from './components/admin/AdminLayout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import MasterDataPage from './pages/MasterDataPage';
+import SettingsPage from './pages/settings/SettingsPage';
 import UsersPage from './pages/users/UsersPage';
 import UserFormPage from './pages/users/UserFormPage';
 import RolesPage from './pages/roles/RolesPage';
@@ -22,7 +23,8 @@ import BinsPage from './pages/warehouse/BinsPage';
 import BinFormPage from './pages/warehouse/BinFormPage';
 import VendorsPage from './pages/vendor/VendorsPage';
 import CustomersPage from './pages/customer/CustomersPage';
-import InboundLayout, { InboundPlaceholder } from './pages/inbound/InboundLayout';
+import InboundLayout from './pages/inbound/InboundLayout';
+import InboundLandingPage from './pages/inbound/InboundLandingPage';
 import MrnTab from './pages/inbound/MrnTab';
 import MrnDetailPage from './pages/inbound/MrnDetailPage';
 import GoodsReceiveTab from './pages/inbound/GoodsReceiveTab';
@@ -33,6 +35,20 @@ import InventoryPage from './pages/inventory/InventoryPage';
 import InventoryDetailPage from './pages/inventory/InventoryDetailPage';
 import DiscrepancyPage from './pages/discrepancy/DiscrepancyPage';
 import DiscrepancyDetailPage from './pages/discrepancy/DiscrepancyDetailPage';
+import OutboundLandingPage from './pages/outbound/OutboundLandingPage';
+import OutboundLayout from './pages/outbound/OutboundLayout';
+import SalesOrderList from './pages/outbound/SalesOrderList';
+import PickingList from './pages/outbound/PickingList';
+import PickingDetailPage from './pages/outbound/PickingDetailPage';
+import PackingList from './pages/outbound/PackingList';
+import PackingDetailPage from './pages/outbound/PackingDetailPage';
+import DeliveryList from './pages/outbound/DeliveryList';
+import DeliveryDetailPage from './pages/outbound/DeliveryDetailPage';
+import HistoryList from './pages/outbound/HistoryList';
+import HistoryDetailPage from './pages/outbound/HistoryDetailPage';
+import SalesOrderDetailPage from './pages/outbound/SalesOrderDetailPage';
+import ComplaintsPage from './pages/complaint/ComplaintsPage';
+import ComplaintDetailPage from './pages/complaint/ComplaintDetailPage';
 
 export default function App() {
   return (
@@ -43,6 +59,7 @@ export default function App() {
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<Dashboard />} />
           <Route path="master-data" element={<MasterDataPage />} />
+          <Route path="settings" element={<SettingsPage />} />
 
           {/* User Management */}
           <Route
@@ -214,8 +231,11 @@ export default function App() {
             }
           />
 
-          {/* Inbound (tabbed) */}
-          <Route path="inbound" element={<InboundLayout />}>
+          {/* Inbound — landing page (type selection) */}
+          <Route path="inbound" element={<InboundLandingPage />} />
+
+          {/* Inbound from PIB (tabbed) */}
+          <Route path="inbound/pib" element={<InboundLayout />}>
             <Route index element={<Navigate to="mrn" replace />} />
             <Route
               path="mrn"
@@ -243,11 +263,15 @@ export default function App() {
             />
             <Route
               path="history"
-              element={<InboundPlaceholder title="History" />}
+              element={
+                <RequirePermission permission="putaway:read">
+                  <PutawayTab history />
+                </RequirePermission>
+              }
             />
           </Route>
           <Route
-            path="inbound/mrn/:id"
+            path="inbound/pib/mrn/:id"
             element={
               <RequirePermission permission="mrn:read">
                 <MrnDetailPage />
@@ -255,7 +279,7 @@ export default function App() {
             }
           />
             <Route
-              path="inbound/goods-receive/:id"
+              path="inbound/pib/goods-receive/:id"
               element={
                 <RequirePermission permission="goods-receive:read">
                   <GoodsReceiveDetailPage />
@@ -263,7 +287,7 @@ export default function App() {
               }
             />
             <Route
-              path="inbound/putaway/:id"
+              path="inbound/pib/putaway/:id"
               element={
                 <RequirePermission permission="putaway:read">
                   <PutawayDetailPage />
@@ -285,6 +309,112 @@ export default function App() {
             element={
               <RequirePermission permission="inventory:read">
                 <InventoryDetailPage />
+              </RequirePermission>
+            }
+          />
+
+          {/* Outbound — landing page (type selection) */}
+          <Route path="outbound" element={<OutboundLandingPage />} />
+
+          {/* Outbound from Sales Order (tabbed) */}
+          <Route path="outbound/sales-order" element={<OutboundLayout />}>
+            <Route index element={<Navigate to="list" replace />} />
+            <Route
+              path="list"
+              element={
+                <RequirePermission permission="sales-orders:read">
+                  <SalesOrderList />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="picking"
+              element={
+                <RequirePermission permission="picking:read">
+                  <PickingList />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="packing"
+              element={
+                <RequirePermission permission="packing:read">
+                  <PackingList />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="delivery"
+              element={
+                <RequirePermission permission="delivery:read">
+                  <DeliveryList />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="history"
+              element={
+                <RequirePermission permission="delivery:read">
+                  <HistoryList />
+                </RequirePermission>
+              }
+            />
+          </Route>
+          <Route
+            path="outbound/sales-order/list/:id"
+            element={
+              <RequirePermission permission="sales-orders:read">
+                <SalesOrderDetailPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="outbound/sales-order/picking/:id"
+            element={
+              <RequirePermission permission="picking:read">
+                <PickingDetailPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="outbound/sales-order/packing/:id"
+            element={
+              <RequirePermission permission="packing:read">
+                <PackingDetailPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="outbound/sales-order/delivery/:id"
+            element={
+              <RequirePermission permission="delivery:read">
+                <DeliveryDetailPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="outbound/sales-order/history/:id"
+            element={
+              <RequirePermission permission="delivery:read">
+                <HistoryDetailPage />
+              </RequirePermission>
+            }
+          />
+
+          {/* Complaint */}
+          <Route
+            path="complaints"
+            element={
+              <RequirePermission permission="complaints:read">
+                <ComplaintsPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="complaints/:id"
+            element={
+              <RequirePermission permission="complaints:read">
+                <ComplaintDetailPage />
               </RequirePermission>
             }
           />

@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import api from '../../lib/api';
 import type { Mrn } from '../../types';
+import { grStatusLabel } from '../../lib/grStatus';
 
 export default function MrnDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -31,11 +32,11 @@ export default function MrnDetailPage() {
   }
   if (error || !mrn) {
     return (
-      <div className="mx-auto max-w-3xl space-y-4">
+      <div className="space-y-4">
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error || 'MRN not found.'}
         </div>
-        <Link to="/admin/inbound/mrn" className="btn-secondary">
+        <Link to="/admin/inbound/pib/mrn" className="btn-secondary">
           ← Back to MRN
         </Link>
       </div>
@@ -43,11 +44,11 @@ export default function MrnDetailPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="space-y-6">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <Link
-            to="/admin/inbound/mrn"
+            to="/admin/inbound/pib/mrn"
             className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
             aria-label="Back"
           >
@@ -107,11 +108,11 @@ export default function MrnDetailPage() {
               <div className="flex justify-between">
                 <span className="text-slate-400">Status</span>
                 <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
-                  {mrn.goods_receive.status}
+                  {grStatusLabel(mrn.goods_receive.status)}
                 </span>
               </div>
               <Link
-                to={`/admin/inbound/goods-receive/${mrn.goods_receive.id}`}
+                to={`/admin/inbound/pib/goods-receive/${mrn.goods_receive.id}`}
                 className="btn-secondary mt-2 w-full"
               >
                 Open Goods Receive

@@ -30,7 +30,9 @@ export class GoodsReceiveService {
   constructor(private prisma: PrismaService) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.GoodsReceiveWhereInput {
-    if (scope.role === 'admin') return {};
+    if (scope.role === 'admin') {
+      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
+    }
     return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
   }
 

@@ -4,11 +4,15 @@ import axios from 'axios';
 import api from '../../lib/api';
 import type { Bin, Paginated } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
+import { useConfirm } from '../../context/ConfirmContext';
 
 const LIMIT = 10;
 
 export default function BinsPage() {
   const { has } = useAuth();
+  const toast = useToast();
+  const confirm = useConfirm();
   const canCreate = has('bins:create');
   const canUpdate = has('bins:update');
   const canDelete = has('bins:delete');
@@ -33,13 +37,21 @@ export default function BinsPage() {
   }, [page, search]);
 
   async function handleDelete(b: Bin) {
-    if (!confirm(`Delete bin "${b.bin_label}"?`)) return;
+    const ok = await confirm({
+      title: 'Delete bin?',
+      description: `"${b.bin_label}" will be permanently deleted.`,
+      type: 'danger',
+      confirmText: 'Delete',
+    });
+    if (!ok) return;
     try {
       await api.delete(`/bins/${b.id}`);
+      toast.success('Bin deleted');
       await load();
     } catch (err) {
       if (axios.isAxiosError(err))
-        alert(err.response?.data?.message ?? 'Delete failed');
+        toast.error(err.response?.data?.message ?? 'Delete failed');
+      else toast.error('Delete failed');
     }
   }
 

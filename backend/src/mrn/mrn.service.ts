@@ -20,7 +20,9 @@ export class MrnService {
   constructor(private prisma: PrismaService) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.MrnWhereInput {
-    if (scope.role === 'admin') return {};
+    if (scope.role === 'admin') {
+      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
+    }
     return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
   }
 

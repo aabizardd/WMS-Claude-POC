@@ -9,6 +9,7 @@ import type {
   Uom,
 } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import SearchableSelect from '../../components/SearchableSelect';
 
 interface FormState {
   materialCode: string;
@@ -42,6 +43,7 @@ export default function MaterialEditPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [loadError, setLoadError] = useState('');
 
   const { has } = useAuth();
@@ -96,6 +98,12 @@ export default function MaterialEditPage() {
     e.preventDefault();
     if (!form) return;
     setError('');
+    // Material code is required only for local (non-ERP) materials.
+    if (!fromErp && !viewOnly && !form.materialCode.trim()) {
+      setFieldErrors({ materialCode: 'Material code is required' });
+      return;
+    }
+    setFieldErrors({});
     setSaving(true);
     // Code & name are ignored by the API for ERP materials, but we only send
     // them for local ones to keep the payload honest.
@@ -141,7 +149,7 @@ export default function MaterialEditPage() {
 
   if (loadError || !material || !form) {
     return (
-      <div className="mx-auto max-w-3xl space-y-4">
+      <div className="space-y-4">
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {loadError || 'Material not found.'}
         </div>
@@ -155,7 +163,7 @@ export default function MaterialEditPage() {
   const set = (patch: Partial<FormState>) => setForm({ ...form, ...patch });
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">
@@ -229,13 +237,20 @@ export default function MaterialEditPage() {
 
           <Section title="General">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Field label="Material Code" locked={fromErp}>
+              <Field
+                label="Material Code"
+                locked={fromErp}
+                required={!fromErp}
+                error={fieldErrors.materialCode}
+              >
                 <input
                   className="input"
                   value={form.materialCode}
-                  onChange={(e) => set({ materialCode: e.target.value })}
+                  onChange={(e) => {
+                    set({ materialCode: e.target.value });
+                    setFieldErrors((p) => ({ ...p, materialCode: '' }));
+                  }}
                   disabled={fromErp || viewOnly}
-                  required
                 />
               </Field>
               <Field label="Material Name" locked={fromErp}>
@@ -252,34 +267,28 @@ export default function MaterialEditPage() {
           <Section title="Classification">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Field label="Category">
-                <select
-                  className="input"
+                <SearchableSelect
                   value={form.materialCategoryId}
-                  onChange={(e) => set({ materialCategoryId: e.target.value })}
+                  onChange={(v) => set({ materialCategoryId: v })}
                   disabled={viewOnly}
-                >
-                  <option value="">—</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.materialCategoryName} ({c.materialCategoryCode})
-                    </option>
-                  ))}
-                </select>
+                  placeholder="—"
+                  options={categories.map((c) => ({
+                    value: c.id,
+                    label: `${c.materialCategoryName} (${c.materialCategoryCode})`,
+                  }))}
+                />
               </Field>
               <Field label="Type">
-                <select
-                  className="input"
+                <SearchableSelect
                   value={form.materialTypeId}
-                  onChange={(e) => set({ materialTypeId: e.target.value })}
+                  onChange={(v) => set({ materialTypeId: v })}
                   disabled={viewOnly}
-                >
-                  <option value="">—</option>
-                  {types.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.materialTypeName} ({t.materialTypeCode})
-                    </option>
-                  ))}
-                </select>
+                  placeholder="—"
+                  options={types.map((t) => ({
+                    value: t.id,
+                    label: `${t.materialTypeName} (${t.materialTypeCode})`,
+                  }))}
+                />
               </Field>
             </div>
           </Section>
@@ -444,16 +453,27 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function Field({
   label,
   locked,
+  required,
+  error,
   children,
 }: {
   label: string;
   locked?: boolean;
+  required?: boolean;
+  error?: string;
   children: ReactNode;
 }) {
   return (
-    <div>
+    <div
+      className={
+        error
+          ? '[&_.input]:border-red-400 [&_.input]:focus:border-red-500 [&_.input]:focus:ring-red-200'
+          : undefined
+      }
+    >
       <label className="label flex items-center gap-1.5">
         {label}
+        {required && <span className="text-red-500">*</span>}
         {locked && (
           <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-slate-400">
             ERP
@@ -461,6 +481,7 @@ function Field({
         )}
       </label>
       {children}
+      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
   );
 }
@@ -489,19 +510,13 @@ function UomSelect({
 }) {
   return (
     <Field label={label}>
-      <select
-        className="input"
+      <SearchableSelect
         value={value}
+        onChange={onChange}
         disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        <option value="">—</option>
-        {uoms.map((u) => (
-          <option key={u.id} value={u.id}>
-            {u.uomCode}
-          </option>
-        ))}
-      </select>
+        placeholder="—"
+        options={uoms.map((u) => ({ value: u.id, label: u.uomCode }))}
+      />
     </Field>
   );
 }

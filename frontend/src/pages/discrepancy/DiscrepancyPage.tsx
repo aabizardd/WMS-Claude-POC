@@ -121,7 +121,8 @@ export default function DiscrepancyPage() {
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-6 py-3">Discrepancy ID</th>
-                <th className="px-6 py-3">GR Number</th>
+                <th className="px-6 py-3">Source Number</th>
+                <th className="px-6 py-3">Source</th>
                 <th className="px-6 py-3">Type</th>
                 <th className="px-6 py-3">From</th>
                 <th className="px-6 py-3">Reported By</th>
@@ -134,7 +135,7 @@ export default function DiscrepancyPage() {
               {loading ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="px-6 py-10 text-center text-slate-400"
                   >
                     Loading…
@@ -147,7 +148,10 @@ export default function DiscrepancyPage() {
                       {d.discrepancy_id}
                     </td>
                     <td className="px-6 py-3 text-slate-600">
-                      {d.gr_number ?? '—'}
+                      {d.source_number ?? '—'}
+                    </td>
+                    <td className="px-6 py-3 text-slate-600">
+                      {d.source ?? '—'}
                     </td>
                     <td className="px-6 py-3">
                       <span
@@ -193,7 +197,7 @@ export default function DiscrepancyPage() {
               ) : (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="px-6 py-10 text-center text-slate-400"
                   >
                     No discrepancies recorded yet.

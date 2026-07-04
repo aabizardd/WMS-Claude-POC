@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { Link, NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 
 interface Tab {
@@ -8,14 +8,14 @@ interface Tab {
 }
 
 const TABS: Tab[] = [
-  { to: '/admin/inbound/mrn', label: 'MRN', permission: 'mrn:read' },
+  { to: '/admin/inbound/pib/mrn', label: 'MRN', permission: 'mrn:read' },
   {
-    to: '/admin/inbound/goods-receive',
+    to: '/admin/inbound/pib/goods-receive',
     label: 'Goods Receive',
     permission: 'goods-receive:read',
   },
-  { to: '/admin/inbound/putaway', label: 'Putaway', permission: 'putaway:read' },
-  { to: '/admin/inbound/history', label: 'History' },
+  { to: '/admin/inbound/pib/putaway', label: 'Putaway', permission: 'putaway:read' },
+  { to: '/admin/inbound/pib/history', label: 'History' },
 ];
 
 export default function InboundLayout() {
@@ -25,8 +25,17 @@ export default function InboundLayout() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-800">Inbound</h1>
-        <p className="mt-1 text-sm text-slate-500">
+        <Link
+          to="/admin/inbound"
+          className="mb-1 inline-flex items-center gap-1 text-sm text-slate-400 hover:text-slate-600"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+          </svg>
+          Inbound
+        </Link>
+        <h1 className="page-title">Inbound from PIB</h1>
+        <p className="page-subtitle">
           MRN → Goods Receive → Putaway → History.
         </p>
       </div>

@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { InventoryService } from '../inventory/inventory.service';
 import type { GeneratePutawayDto } from './dto/generate-putaway.dto';
 
 export interface WarehouseScope {
@@ -39,21 +40,34 @@ type PutawayDetail = Prisma.PutawayGetPayload<{ include: typeof detailInclude }>
 export class PutawayService {
   private readonly logger = new Logger(PutawayService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private inventory: InventoryService,
+  ) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.PutawayWhereInput {
-    if (scope.role === 'admin') return {};
+    if (scope.role === 'admin') {
+      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
+    }
     return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
   }
 
   async findAll(
-    query: { page?: number; limit?: number; search?: string },
+    query: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      history?: string | boolean;
+    },
     scope: WarehouseScope,
   ) {
     const page = Number(query.page) || 1;
     const limit = Number(query.limit) || 10;
 
     const where: Prisma.PutawayWhereInput = { ...this.scopeWhere(scope) };
+    // History tab = Closed only; Putaway tab = active (Open / OnProgress).
+    const isHistory = query.history === true || query.history === 'true';
+    where.status = isHistory ? 'Closed' : { not: 'Closed' };
     if (query.search) {
       where.OR = [
         { putawayCode: { contains: query.search, mode: 'insensitive' } },
@@ -330,16 +344,47 @@ export class PutawayService {
           });
         }
 
-        // Update inventory batch
-        await tx.inventoryBatch.update({
-          where: { mrnItemId: it.mrnItemId },
-          data: {
-            availQty: row.actualQty,
-            qualityIssue: { increment: row.qualityIssue },
-            qtyIssue: { increment: row.qtyIssue },
-            binId: row.binId,
-          },
+        // Move stock between bins. The receive bin (mrn_item.bin_id) loses the
+        // full putaway amount; the destination bin gains avail + the issues.
+        // Resolve the inventory row the same way it was keyed on receive:
+        // (material_code, warehouse).
+        const mrnItem = it.mrnItem;
+        const material =
+          mrnItem.itemId != null
+            ? await tx.material.findUnique({
+                where: { erpDocId: String(mrnItem.itemId) },
+                select: { materialCode: true },
+              })
+            : null;
+        const materialCode =
+          material?.materialCode ??
+          mrnItem.itemName ??
+          `ITEM-${mrnItem.itemId}`;
+        const inv = await tx.inventoryManagement.findFirst({
+          where: { materialCode, warehouseId: putaway.warehouseId },
+          select: { id: true },
         });
+        if (inv) {
+          const putawayTotal = row.actualQty + row.qualityIssue + row.qtyIssue;
+          // Source bin (receive bin): remove the whole putaway amount.
+          await this.inventory.adjustBinStock(
+            inv.id,
+            mrnItem.binId ?? null,
+            { avail: -putawayTotal },
+            tx,
+          );
+          // Destination bin: good qty + accumulated issues.
+          await this.inventory.adjustBinStock(
+            inv.id,
+            row.binId,
+            {
+              avail: row.actualQty,
+              quality: row.qualityIssue,
+              qtyIssue: row.qtyIssue,
+            },
+            tx,
+          );
+        }
       }
 
       await tx.putaway.update({
@@ -348,13 +393,28 @@ export class PutawayService {
       });
     });
 
-    // Record quality discrepancy for this GR if any putaway has quality_issue
+    // Record discrepancies for this GR from the closed putaway(s).
     if (!hasRemaining && putaway.goodsReceive?.id) {
       try {
         await this.recordQualityDiscrepancy(putaway.goodsReceive.id);
       } catch (e) {
         this.logger.error(
           `Quality discrepancy recording failed for GR ${putaway.goodsReceive.id}: ${(e as Error).message}`,
+        );
+      }
+      try {
+        await this.recordQuantityDiscrepancy(putaway.goodsReceive.id);
+      } catch (e) {
+        this.logger.error(
+          `Quantity discrepancy recording failed for GR ${putaway.goodsReceive.id}: ${(e as Error).message}`,
+        );
+      }
+      // When every putaway of this GR is Closed, close the GR too.
+      try {
+        await this.maybeCloseGoodsReceive(putaway.goodsReceive.id);
+      } catch (e) {
+        this.logger.error(
+          `GR auto-close failed for ${putaway.goodsReceive.id}: ${(e as Error).message}`,
         );
       }
     }
@@ -396,9 +456,6 @@ export class PutawayService {
         itemName: it.itemName,
         sourceFrom: 'GR' as const,
         qtyDiscrepancy: it.qualityIssue,
-        qtyPassed: it.actualQty,
-        qtyScrapped: it.qualityIssue,
-        qtyRemaining: it.remainingQty,
         qtyDiscrepancyType: 'shortage' as const,
       }));
 
@@ -429,6 +486,106 @@ export class PutawayService {
         },
       });
       this.logger.log(`Created quality discrepancy ${discId} for GR ${gr.mrn.shipmentNumber}`);
+    }
+  }
+
+  // Quantity issues entered during putaway become quantity discrepancy details
+  // (source = Putaway) grouped under the GR's quantity discrepancy.
+  private async recordQuantityDiscrepancy(goodsReceiveId: string) {
+    const gr = await this.prisma.goodsReceive.findUnique({
+      where: { id: goodsReceiveId },
+      include: {
+        mrn: { include: { items: true } },
+        putaways: {
+          where: { status: 'Closed' },
+          include: { items: true },
+        },
+      },
+    });
+    if (!gr) return;
+
+    const issueItems = gr.putaways
+      .flatMap((p) => p.items)
+      .filter((it) => it.qtyIssue > 0);
+
+    const existing = await this.prisma.discrepancy.findFirst({
+      where: { grId: goodsReceiveId, discrepancyType: 'quantity' },
+    });
+
+    const detailRows = issueItems.map((it) => ({
+      poNumber: it.poNumber ?? '',
+      itemName: it.itemName,
+      sourceFrom: 'Putaway' as const,
+      qtyDiscrepancy: it.qtyIssue,
+      qtyDiscrepancyType: 'shortage' as const,
+    }));
+
+    if (existing) {
+      // Rebuild only the Putaway-source rows; keep GR-source rows intact.
+      await this.prisma.discrepancyDetail.deleteMany({
+        where: { discrepancyId: existing.id, sourceFrom: 'Putaway' },
+      });
+      if (detailRows.length > 0) {
+        await this.prisma.discrepancyDetail.createMany({
+          data: detailRows.map((r) => ({ ...r, discrepancyId: existing.id })),
+        });
+      }
+      this.logger.log(
+        `Updated quantity discrepancy (putaway) for GR ${gr.mrn.shipmentNumber}`,
+      );
+    } else if (detailRows.length > 0) {
+      const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const count = await this.prisma.discrepancy.count({
+        where: { discrepancyId: { startsWith: `DISC-${today}` } },
+      });
+      const seq = String(count + 1).padStart(3, '0');
+      const discId = `DISC-${today}-${seq}`;
+
+      await this.prisma.discrepancy.create({
+        data: {
+          discrepancyId: discId,
+          grId: goodsReceiveId,
+          discrepancyType: 'quantity',
+          discrepancyFrom: 'inbound',
+          warehouseId: gr.warehouseId,
+          details: { create: detailRows },
+        },
+      });
+      this.logger.log(
+        `Created quantity discrepancy ${discId} (putaway) for GR ${gr.mrn.shipmentNumber}`,
+      );
+    }
+  }
+
+  // Close the GR only when BOTH conditions hold:
+  //  1) every Putaway document of the GR is Closed, and
+  //  2) every GR item has remaining qty = 0 (nothing left to putaway).
+  // Otherwise the GR stays On Progress.
+  private async maybeCloseGoodsReceive(goodsReceiveId: string) {
+    const [total, notClosed, itemsWithRemaining] = await this.prisma.$transaction([
+      this.prisma.putaway.count({ where: { grId: goodsReceiveId } }),
+      this.prisma.putaway.count({
+        where: { grId: goodsReceiveId, status: { not: 'Closed' } },
+      }),
+      this.prisma.mrnItem.count({
+        where: {
+          mrn: { goodsReceive: { id: goodsReceiveId } },
+          qtyRemaining: { gt: 0 },
+        },
+      }),
+    ]);
+
+    const allPutawaysClosed = total > 0 && notClosed === 0;
+    const allItemsFulfilled = itemsWithRemaining === 0;
+
+    if (allPutawaysClosed && allItemsFulfilled) {
+      await this.prisma.goodsReceive.update({
+        where: { id: goodsReceiveId },
+        data: { status: 'Closed' },
+      });
+      this.logger.log(
+        `GR ${goodsReceiveId} closed — all putaways done and no remaining qty`,
+      );
     }
   }
 

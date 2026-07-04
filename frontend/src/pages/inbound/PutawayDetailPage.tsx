@@ -3,6 +3,10 @@ import { Link, useParams } from 'react-router-dom';
 import api from '../../lib/api';
 import Modal from '../../components/Modal';
 import NumberInput from '../../components/NumberInput';
+import SearchableSelect from '../../components/SearchableSelect';
+import ActionMenu from '../../components/ActionMenu';
+import { PrintIcon } from '../../components/icons';
+import { printDoc } from '../../lib/print';
 import type { PutawayDetail } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import axios from 'axios';
@@ -185,20 +189,53 @@ export default function PutawayDetailPage() {
   }
   if (error || !pt) {
     return (
-      <div className="mx-auto max-w-3xl space-y-4">
+      <div className="space-y-4">
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error || 'Putaway not found.'}
         </div>
-        <Link to="/admin/inbound/putaway" className="btn-secondary">← Back to Putaway</Link>
+        <Link to="/admin/inbound/pib/putaway" className="btn-secondary">← Back to Putaway</Link>
       </div>
     );
   }
 
+  function handlePrint() {
+    if (!pt) return;
+    printDoc({
+      title: `Putaway — ${pt.putaway_code}`,
+      subtitle: `${pt.gr_number ?? '—'} · ${pt.warehouse_name ?? 'No warehouse'}`,
+      meta: [
+        { label: 'Putaway Code', value: pt.putaway_code },
+        { label: 'GR Number', value: pt.gr_number },
+        { label: 'Warehouse', value: pt.warehouse_name },
+        { label: 'Status', value: pt.status === 'OnProgress' ? 'On Progress' : pt.status },
+        { label: 'Items', value: pt.items.length },
+      ],
+      tables: [
+        {
+          heading: 'Items',
+          columns: ['Item', 'PO Number', 'Material Code', 'Vendor', 'Planned', 'Actual', 'Quality Issue', 'Qty Issue', 'Bin', 'Picker'],
+          rows: pt.items.map((it) => [
+            it.item_name,
+            it.po_number,
+            it.material_code,
+            it.vendor_name,
+            it.planned_qty,
+            it.actual_qty,
+            it.quality_issue,
+            it.qty_issue,
+            it.bin_label,
+            it.picker?.name ?? null,
+          ]),
+        },
+      ],
+    });
+  }
+
   return (
-    <div className="mx-auto max-w-full space-y-6">
+    <div className="space-y-6">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
-          <Link to="/admin/inbound/putaway" className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Back">
+          <Link to="/admin/inbound/pib/putaway" className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Back">
             <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
             </svg>
@@ -210,9 +247,14 @@ export default function PutawayDetailPage() {
             </p>
           </div>
         </div>
-        <span className={`rounded-full px-3 py-1 text-xs font-medium ${statusBadge(pt.status)}`}>
-          {pt.status === 'OnProgress' ? 'On Progress' : pt.status}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className={`rounded-full px-3 py-1 text-xs font-medium ${statusBadge(pt.status)}`}>
+            {pt.status === 'OnProgress' ? 'On Progress' : pt.status}
+          </span>
+          <ActionMenu
+            items={[{ label: 'Print', icon: <PrintIcon />, onClick: handlePrint }]}
+          />
+        </div>
       </div>
 
       <div className="card p-5">
@@ -336,38 +378,38 @@ export default function PutawayDetailPage() {
                       <td className="px-3 py-3 text-right text-slate-600">{remainVal}</td>
                       <td className="px-3 py-3">
                         {putawayMode ? (
-                          <select
-                            className="input text-xs w-32"
+                          <SearchableSelect
+                            className="w-40"
                             value={putawayBins[it.id] ?? ''}
-                            onChange={(e) =>
-                              setPutawayBins((s) => ({ ...s, [it.id]: e.target.value }))
+                            onChange={(v) =>
+                              setPutawayBins((s) => ({ ...s, [it.id]: v }))
                             }
-                          >
-                            <option value="">— Select —</option>
-                            {bins.map((b) => (
-                              <option key={b.id} value={b.id}>
-                                {b.binLabel}
-                              </option>
-                            ))}
-                          </select>
+                            placeholder="— Select —"
+                            searchPlaceholder="Search bin…"
+                            options={bins.map((b) => ({
+                              value: b.id,
+                              label: b.binLabel,
+                            }))}
+                          />
                         ) : (
                           <span className="text-slate-600">{it.bin_label || '—'}</span>
                         )}
                       </td>
                       <td className="px-3 py-3">
                         {canAssign && !putawayMode ? (
-                          <select
-                            className="input text-xs w-28"
+                          <SearchableSelect
+                            className="w-36"
                             value={pickerSelects[it.id] ?? ''}
-                            onChange={(e) =>
-                              setPickerSelects((s) => ({ ...s, [it.id]: e.target.value }))
+                            onChange={(v) =>
+                              setPickerSelects((s) => ({ ...s, [it.id]: v }))
                             }
-                          >
-                            <option value="">— Select —</option>
-                            {pickers.map((pu) => (
-                              <option key={pu.id} value={String(pu.id)}>{pu.name}</option>
-                            ))}
-                          </select>
+                            placeholder="— Select —"
+                            searchPlaceholder="Search picker…"
+                            options={pickers.map((pu) => ({
+                              value: String(pu.id),
+                              label: pu.name,
+                            }))}
+                          />
                         ) : (
                           <span className="text-slate-600">{it.picker?.name ?? '—'}</span>
                         )}

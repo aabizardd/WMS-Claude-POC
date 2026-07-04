@@ -9,6 +9,7 @@ export interface WarehouseScope {
 
 const listInclude = {
   goodsReceive: { select: { grNumber: true } },
+  picking: { select: { pickingCode: true } },
   reportedBy: { select: { id: true, name: true } },
   warehouse: { select: { id: true, name: true } },
   _count: { select: { details: true } },
@@ -16,10 +17,25 @@ const listInclude = {
 
 const detailInclude = {
   goodsReceive: { select: { grNumber: true } },
+  picking: { select: { pickingCode: true } },
   reportedBy: { select: { id: true, name: true } },
   warehouse: { select: { id: true, name: true } },
   details: { orderBy: { createdAt: 'asc' as const } },
 } satisfies Prisma.DiscrepancyInclude;
+
+// Header "Source Number" + "Source" label, derived from the linked document.
+function sourceOf(d: {
+  goodsReceive?: { grNumber: string } | null;
+  picking?: { pickingCode: string } | null;
+}) {
+  if (d.goodsReceive) {
+    return { source_number: d.goodsReceive.grNumber, source: 'Inbound - Goods Receive' };
+  }
+  if (d.picking) {
+    return { source_number: d.picking.pickingCode, source: 'Outbound - Picking' };
+  }
+  return { source_number: null as string | null, source: null as string | null };
+}
 
 type DiscList = Prisma.DiscrepancyGetPayload<{ include: typeof listInclude }>;
 type DiscDetail = Prisma.DiscrepancyGetPayload<{ include: typeof detailInclude }>;
@@ -31,7 +47,9 @@ export class DiscrepancyService {
   constructor(private prisma: PrismaService) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.DiscrepancyWhereInput {
-    if (scope.role === 'admin') return {};
+    if (scope.role === 'admin') {
+      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
+    }
     return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
   }
 
@@ -54,6 +72,11 @@ export class DiscrepancyService {
         {
           goodsReceive: {
             grNumber: { contains: query.search, mode: 'insensitive' },
+          },
+        },
+        {
+          picking: {
+            pickingCode: { contains: query.search, mode: 'insensitive' },
           },
         },
       ];
@@ -140,7 +163,6 @@ export class DiscrepancyService {
               mrnItemId: it.id,
               sourceFrom: 'GR' as const,
               qtyDiscrepancy: gap,
-              qtyRemaining: gap,
               qtyDiscrepancyType: 'shortage' as const,
             };
           }),
@@ -158,7 +180,7 @@ export class DiscrepancyService {
     return {
       id: d.id,
       discrepancy_id: d.discrepancyId,
-      gr_number: d.goodsReceive?.grNumber ?? null,
+      ...sourceOf(d),
       discrepancy_type: d.discrepancyType,
       discrepancy_from: d.discrepancyFrom,
       reported_by: d.reportedBy?.name ?? null,
@@ -172,7 +194,7 @@ export class DiscrepancyService {
     return {
       id: d.id,
       discrepancy_id: d.discrepancyId,
-      gr_number: d.goodsReceive?.grNumber ?? null,
+      ...sourceOf(d),
       discrepancy_type: d.discrepancyType,
       discrepancy_from: d.discrepancyFrom,
       reported_by: d.reportedBy?.name ?? null,
@@ -184,9 +206,6 @@ export class DiscrepancyService {
         item_name: x.itemName,
         source_from: x.sourceFrom,
         qty_discrepancy: x.qtyDiscrepancy,
-        qty_passed: x.qtyPassed,
-        qty_scrapped: x.qtyScrapped,
-        qty_remaining: x.qtyRemaining,
         qty_discrepancy_type: x.qtyDiscrepancyType,
       })),
     };

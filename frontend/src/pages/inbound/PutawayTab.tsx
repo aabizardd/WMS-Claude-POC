@@ -14,7 +14,7 @@ function statusBadge(status: string) {
   return map[status] ?? 'bg-slate-100 text-slate-600';
 }
 
-export default function PutawayTab() {
+export default function PutawayTab({ history = false }: { history?: boolean }) {
   const [data, setData] = useState<Paginated<PutawayRow> | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -24,15 +24,24 @@ export default function PutawayTab() {
   async function load() {
     setLoading(true);
     const r = await api.get<Paginated<PutawayRow>>('/putaway', {
-      params: { page, limit: LIMIT, search: search || undefined },
+      params: {
+        page,
+        limit: LIMIT,
+        search: search || undefined,
+        history: history || undefined,
+      },
     });
     setData(r.data);
     setLoading(false);
   }
   useEffect(() => {
+    setPage(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history]);
+  useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search]);
+  }, [page, search, history]);
 
   function onSearch(e: FormEvent) {
     e.preventDefault();
@@ -45,8 +54,10 @@ export default function PutawayTab() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-500">
-        {data ? `${data.total_data} putaways` : 'Putaway'} · generated from Goods
-        Receive.
+        {data ? `${data.total_data} putaways` : 'Putaway'} ·{' '}
+        {history
+          ? 'completed (Closed) putaways.'
+          : 'active putaways (Open / On Progress).'}
       </p>
 
       <form onSubmit={onSearch} className="flex gap-2">
@@ -125,7 +136,7 @@ export default function PutawayTab() {
                     <td className="px-6 py-3">
                       <div className="flex justify-end">
                         <Link
-                          to={`/admin/inbound/putaway/${p.id}`}
+                          to={`/admin/inbound/pib/putaway/${p.id}`}
                           className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
                         >
                           View
@@ -137,7 +148,9 @@ export default function PutawayTab() {
               ) : (
                 <tr>
                   <td colSpan={7} className="px-6 py-10 text-center text-slate-400">
-                    No putaways generated yet.
+                    {history
+                      ? 'No completed putaways yet.'
+                      : 'No active putaways.'}
                   </td>
                 </tr>
               )}

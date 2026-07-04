@@ -48,8 +48,12 @@ export class UsersService {
 
   findAll(scope: WarehouseScope) {
     const where: Prisma.UserWhereInput = {};
+    // Non-admins only see users in their warehouse (unchanged). Admins follow
+    // the active warehouse from the header selector; "All" (no selection) → all.
     if (scope.role !== 'admin') {
       where.warehouseId = scope.warehouseId ?? '__no_warehouse__';
+    } else if (scope.warehouseId) {
+      where.warehouseId = scope.warehouseId;
     }
     return this.prisma.user.findMany({
       where,
