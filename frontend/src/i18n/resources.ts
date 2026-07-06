@@ -29,6 +29,7 @@ const en: Dict = {
     discrepancy: 'Discrepancy',
     complaint: 'Complaint',
     settings: 'Settings',
+    syncLogs: 'Sync Logs',
   },
   topbar: {
     warehouse: 'Warehouse',
@@ -67,6 +68,7 @@ const id: Dict = {
     discrepancy: 'Diskrepansi',
     complaint: 'Keluhan',
     settings: 'Pengaturan',
+    syncLogs: 'Log Sinkronisasi',
   },
   topbar: {
     warehouse: 'Gudang',
@@ -105,6 +107,7 @@ const zh: Dict = {
     discrepancy: '差异',
     complaint: '投诉',
     settings: '设置',
+    syncLogs: '同步日志',
   },
   topbar: {
     warehouse: '仓库',

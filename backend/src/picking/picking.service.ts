@@ -36,6 +36,12 @@ const detailInclude = {
 type PickingList = Prisma.PickingGetPayload<{ include: typeof listInclude }>;
 type PickingDetail = Prisma.PickingGetPayload<{ include: typeof detailInclude }>;
 
+// SO statuses that still allow generating a picking (remaining = qty - shipped).
+const PICKABLE_STATUSES = [
+  'Pending Fulfillment',
+  'Pending Billing/Partially Fulfilled',
+];
+
 @Injectable()
 export class PickingService {
   private readonly logger = new Logger(PickingService.name);
@@ -145,7 +151,7 @@ export class PickingService {
       delivery_status: so.deliveryStatus,
       customer_name: so.customerName,
       warehouse: so.warehouse,
-      can_generate: so.statusName === 'Pending Fulfillment',
+      can_generate: PICKABLE_STATUSES.includes(so.statusName ?? ''),
       items: so.items
         .filter((it) => it.remainingQty > 0)
         .map((it) => ({
@@ -176,9 +182,9 @@ export class PickingService {
     ) {
       throw new NotFoundException(`Sales Order ${dto.salesOrderId} not found`);
     }
-    if (so.statusName !== 'Pending Fulfillment') {
+    if (!PICKABLE_STATUSES.includes(so.statusName ?? '')) {
       throw new BadRequestException(
-        `Generate Picking is only allowed for status "Pending Fulfillment" (current: ${so.statusName ?? '—'})`,
+        `Generate Picking is only allowed for status ${PICKABLE_STATUSES.map((s) => `"${s}"`).join(' or ')} (current: ${so.statusName ?? '—'})`,
       );
     }
     if (!dto.items?.length) {

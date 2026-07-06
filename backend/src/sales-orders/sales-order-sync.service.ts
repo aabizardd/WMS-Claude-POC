@@ -200,19 +200,20 @@ export class SalesOrderSyncService {
     const oracleId = String(so.id);
     const newLm = so.last_modified ? new Date(so.last_modified) : null;
 
-    // Update only when last_modified changed (idempotent, avoids churn).
+    // Header write is gated on last_modified (avoids churn), BUT detail items are
+    // ALWAYS reconciled 1:1 below — Oracle can change item-level data (e.g.
+    // `shipped` from a fulfillment) without bumping the SO header timestamp, so
+    // skipping items when the header is unchanged leaves details stale.
     const existing = await this.prisma.salesOrder.findUnique({
       where: { oracleId },
       select: { id: true, lastModified: true },
     });
-    if (
+    const headerChanged = !(
       existing &&
       newLm &&
       existing.lastModified &&
       existing.lastModified.getTime() === newLm.getTime()
-    ) {
-      return false;
-    }
+    );
 
     // Resolve header location -> WMS warehouse (by Oracle id) for scoping.
     let warehouseId: string | null = null;
@@ -244,12 +245,16 @@ export class SalesOrderSyncService {
       dateCreated: so.datecreated ?? null,
     };
 
+    let touched = headerChanged;
     await this.prisma.$transaction(async (tx) => {
-      const record = await tx.salesOrder.upsert({
-        where: { oracleId },
-        update: header,
-        create: { oracleId, createdBy: 'ERP Sync', ...header },
-      });
+      // Write the header only when it changed; otherwise reuse the existing row.
+      const record = headerChanged
+        ? await tx.salesOrder.upsert({
+            where: { oracleId },
+            update: header,
+            create: { oracleId, createdBy: 'ERP Sync', ...header },
+          })
+        : existing!;
 
       // Upsert details by (salesOrderId, lineNumber) — no duplicates, header-
       // detail relation preserved, and WMS-managed remainingQty/picking links
@@ -266,6 +271,7 @@ export class SalesOrderSyncService {
           materialId = mat?.id ?? null;
         }
         const quantity = this.toNumber(it.quantity);
+        const shipped = this.toNumber(it.shipped);
         const itemData = {
           itemOracleId: it.item_id != null ? String(it.item_id) : null,
           itemName: it.item_name ?? null,
@@ -273,10 +279,28 @@ export class SalesOrderSyncService {
           quantity,
           rate: this.toNumber(it.rate),
           amount: this.toNumber(it.amount),
-          shipped: this.toNumber(it.shipped),
+          shipped,
           description: it.description ?? null,
           locationId: it.location_id != null ? String(it.location_id) : null,
         };
+
+        // Remaining-to-pick = quantity - shipped. Recompute this only when the
+        // Oracle `shipped` changes (e.g. SO moves to Partially Fulfilled after a
+        // partial shipment); otherwise preserve the WMS-managed value so in-
+        // progress Generate Picking decrements are not clobbered every sync.
+        const prev = await tx.salesOrderItem.findUnique({
+          where: {
+            salesOrderId_lineNumber: {
+              salesOrderId: record.id,
+              lineNumber: it.line_number,
+            },
+          },
+          select: { shipped: true },
+        });
+        const shippedChanged = !prev || prev.shipped !== shipped;
+        if (shippedChanged) touched = true;
+        const remainingQty = Math.max(0, quantity - shipped);
+
         await tx.salesOrderItem.upsert({
           where: {
             salesOrderId_lineNumber: {
@@ -284,14 +308,18 @@ export class SalesOrderSyncService {
               lineNumber: it.line_number,
             },
           },
-          // remainingQty intentionally not updated (WMS-managed).
-          update: itemData,
-          create: { salesOrderId: record.id, lineNumber: it.line_number, remainingQty: quantity, ...itemData },
+          update: shippedChanged ? { ...itemData, remainingQty } : itemData,
+          create: {
+            salesOrderId: record.id,
+            lineNumber: it.line_number,
+            remainingQty,
+            ...itemData,
+          },
         });
       }
     });
 
-    return true;
+    return touched;
   }
 
   private toNumber(v: unknown): number {

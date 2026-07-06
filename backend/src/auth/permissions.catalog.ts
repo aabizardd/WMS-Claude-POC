@@ -41,8 +41,8 @@ const RESOURCES: { resource: string; label: string; actions: string[] }[] = [
   // Inbound — MRN mirrors Oracle PIB (read/sync); Goods Receive is editable.
   { resource: 'mrn', label: 'MRN', actions: ['read', 'sync'] },
   { resource: 'goods-receive', label: 'Goods Receive', actions: ['read', 'update'] },
-  // Inventory is generated automatically on receive — read only.
-  { resource: 'inventory', label: 'Inventory', actions: ['read'] },
+  // Inventory is generated automatically on receive; manual bin adjustment adds update.
+  { resource: 'inventory', label: 'Inventory', actions: ['read', 'update'] },
   // Discrepancy is recorded automatically (quantity gap on receive) — read only.
   { resource: 'discrepancy', label: 'Discrepancy', actions: ['read'] },
   // Putaway generated from Goods Receive — read, create, update.
@@ -51,12 +51,14 @@ const RESOURCES: { resource: string; label: string; actions: string[] }[] = [
   { resource: 'sales-orders', label: 'Sales Orders', actions: ['read', 'sync'] },
   // Outbound — Picking generated from Sales Order — read, create (generate).
   { resource: 'picking', label: 'Picking', actions: ['read', 'create', 'update', 'delete'] },
-  // Outbound — Packing generated from (Closed) Picking — read, create.
-  { resource: 'packing', label: 'Packing', actions: ['read', 'create'] },
+  // Outbound — Packing generated from (Closed) Picking — read, create, update (progress).
+  { resource: 'packing', label: 'Packing', actions: ['read', 'create', 'update'] },
   // Outbound — Delivery generated from Packing — read, create.
   { resource: 'delivery', label: 'Delivery', actions: ['read', 'create', 'update'] },
   // Complaint — users create & see their own; admin manages (update status).
   { resource: 'complaints', label: 'Complaints', actions: ['read', 'create', 'update'] },
+  // Sync Log — view failed Oracle syncs and retry them (admin/ops).
+  { resource: 'sync-logs', label: 'Sync Logs', actions: ['read', 'update'] },
 ];
 
 export const PERMISSIONS: PermissionDef[] = RESOURCES.flatMap((r) =>

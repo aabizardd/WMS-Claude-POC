@@ -6,6 +6,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import MasterDataPage from './pages/MasterDataPage';
 import SettingsPage from './pages/settings/SettingsPage';
+import SyncLogsPage from './pages/sync/SyncLogsPage';
 import UsersPage from './pages/users/UsersPage';
 import UserFormPage from './pages/users/UserFormPage';
 import RolesPage from './pages/roles/RolesPage';
@@ -60,6 +61,14 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="master-data" element={<MasterDataPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route
+            path="sync-logs"
+            element={
+              <RequirePermission permission="sync-logs:read">
+                <SyncLogsPage />
+              </RequirePermission>
+            }
+          />
 
           {/* User Management */}
           <Route

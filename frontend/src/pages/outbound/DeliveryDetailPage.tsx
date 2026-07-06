@@ -5,7 +5,7 @@ import api from '../../lib/api';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
-import type { DeliveryDetail } from '../../types';
+import type { DeliveryDetail, ShipmentResult } from '../../types';
 
 export default function DeliveryDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -18,6 +18,7 @@ export default function DeliveryDetailPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [shipping, setShipping] = useState(false);
+  const [shipError, setShipError] = useState('');
 
   function load() {
     setLoading(true);
@@ -32,28 +33,40 @@ export default function DeliveryDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  async function runShipment() {
+    setShipError('');
+    setShipping(true);
+    try {
+      // Submits an Item Fulfillment to Oracle; SDO ID is filled only on success.
+      const r = await api.put<ShipmentResult>(`/delivery/${id}/generate-shipment`, {});
+      const f = r.data.fulfillment;
+      toast.success(
+        `${f?.message ?? 'Shipment generated'}${f?.fulfillment_id ? ` (Fulfillment #${f.fulfillment_id})` : ''} — SDO ${r.data.sdo_id}`,
+      );
+      setDl(r.data);
+    } catch (err) {
+      let msg = 'Generate failed';
+      if (axios.isAxiosError(err)) {
+        const m = err.response?.data?.message;
+        msg = Array.isArray(m) ? m.join(', ') : m ?? msg;
+      }
+      setShipError(msg);
+      toast.error(msg);
+    } finally {
+      setShipping(false);
+    }
+  }
+
   async function handleGenerateShipment() {
     const ok = await confirm({
       title: 'Generate Shipment?',
       description:
-        'An SDO ID will be generated and the delivery will be Closed (moved to History). This cannot be undone.',
+        'An Item Fulfillment will be submitted to Oracle. On success an SDO ID is generated and the delivery is Closed (moved to History). This cannot be undone.',
       type: 'info',
       confirmText: 'Generate Shipment',
     });
     if (!ok) return;
-    setShipping(true);
-    try {
-      const r = await api.put<DeliveryDetail>(`/delivery/${id}/generate-shipment`, {});
-      toast.success(`Shipment generated: ${r.data.sdo_id}`);
-      setDl(r.data);
-    } catch (err) {
-      if (axios.isAxiosError(err)) {
-        const msg = err.response?.data?.message;
-        toast.error(Array.isArray(msg) ? msg.join(', ') : msg ?? 'Generate failed');
-      } else toast.error('Generate failed');
-    } finally {
-      setShipping(false);
-    }
+    await runShipment();
   }
 
   if (loading) {
@@ -76,6 +89,21 @@ export default function DeliveryDetailPage() {
 
   return (
     <div className="space-y-6">
+      {/* Blocking loading overlay while hitting the Oracle fulfillment API */}
+      {shipping && (
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-900/50">
+          <div className="flex flex-col items-center gap-3 rounded-xl bg-white px-8 py-6 shadow-xl">
+            <svg className="h-8 w-8 animate-spin text-brand-600" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <div className="text-sm font-medium text-slate-700">
+              Submitting Item Fulfillment to Oracle…
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <Link
@@ -116,6 +144,20 @@ export default function DeliveryDetailPage() {
         </div>
       </div>
 
+      {/* Fulfillment failure — allow retry */}
+      {shipError && dl.status !== 'Closed' && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <div>
+            <span className="font-semibold">Shipment failed:</span> {shipError}
+          </div>
+          {canShip && (
+            <button className="btn-primary" onClick={runShipment} disabled={shipping}>
+              {shipping ? 'Retrying…' : 'Retry'}
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="card p-5">
         <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
           Delivery Document
@@ -136,6 +178,7 @@ export default function DeliveryDetailPage() {
               )
             }
           />
+          <Meta label="Sales Order (Oracle ID)" value={dl.so_oracle_id} />
           <Meta label="Location" value={dl.location} />
           <Meta label="Customer" value={dl.customer} />
           <Meta label="Status" value={dl.status} />
@@ -152,9 +195,11 @@ export default function DeliveryDetailPage() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="table-head">
               <tr>
+                <th className="px-5 py-3 text-right">Line #</th>
                 <th className="px-5 py-3">Material Code</th>
                 <th className="px-5 py-3">Material Name</th>
                 <th className="px-5 py-3 text-right">Qty</th>
+                <th className="px-5 py-3">UOM</th>
                 <th className="px-5 py-3">Bin</th>
                 <th className="px-5 py-3">Picker</th>
               </tr>
@@ -162,18 +207,22 @@ export default function DeliveryDetailPage() {
             <tbody className="divide-y divide-slate-100">
               {dl.items.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-5 py-8 text-center text-slate-400">
+                  <td colSpan={7} className="px-5 py-8 text-center text-slate-400">
                     No items.
                   </td>
                 </tr>
               ) : (
                 dl.items.map((it) => (
                   <tr key={it.id} className="hover:bg-slate-50">
+                    <td className="px-5 py-3 text-right text-slate-600">
+                      {it.line_number ?? '—'}
+                    </td>
                     <td className="px-5 py-3 font-medium text-slate-800">
                       {it.material_code ?? '—'}
                     </td>
                     <td className="px-5 py-3 text-slate-600">{it.material_name ?? '—'}</td>
                     <td className="px-5 py-3 text-right text-slate-600">{it.qty}</td>
+                    <td className="px-5 py-3 text-slate-600">{it.uom ?? '—'}</td>
                     <td className="px-5 py-3 text-slate-600">{it.bin_label ?? '—'}</td>
                     <td className="px-5 py-3 text-slate-600">{it.picker?.name ?? '—'}</td>
                   </tr>

@@ -6,9 +6,11 @@ import { CustomersModule } from '../customers/customers.module';
 import { MrnModule } from '../mrn/mrn.module';
 import { SalesOrdersModule } from '../sales-orders/sales-orders.module';
 import { OracleSyncScheduler } from './oracle-sync.scheduler';
+import { SyncRunnerService } from './sync-runner.service';
+import { SyncLogController } from './sync-log.controller';
 
-// Background scheduler that periodically triggers an incremental Oracle sync
-// for every mirrored module. Reuses each module's existing SyncService.
+// Background scheduler + sync log (failed/partial runs) with retry.
+// Reuses each module's existing SyncService.
 @Module({
   imports: [
     MaterialsModule,
@@ -18,6 +20,7 @@ import { OracleSyncScheduler } from './oracle-sync.scheduler';
     MrnModule,
     SalesOrdersModule,
   ],
-  providers: [OracleSyncScheduler],
+  controllers: [SyncLogController],
+  providers: [OracleSyncScheduler, SyncRunnerService],
 })
 export class OracleSyncModule {}

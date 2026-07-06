@@ -1,0 +1,49 @@
+# Single-host deployment: Postgres + NestJS backend + React (nginx) frontend.
+# Frontend serves the SPA and reverse-proxies /api to the backend (same origin,
+# no CORS). Put a TLS terminator (Caddy/Traefik/Cloudflare) in front for HTTPS.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-wms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-wms}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-wms}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env.production
+    environment:
+      # Overrides the DB host to the compose service; keep other vars in the env file.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wms}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-wms}?schema=public
+      PORT: 3000
+    depends_on:
+      db:
+        condition: service_healthy
+    # No public port — only the frontend (reverse proxy) talks to it.
+    expose:
+      - '3000'
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Empty → SPA uses same-origin "/api", proxied by nginx to the backend.
+        VITE_API_URL: ''
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - '80:80'
+
+volumes:
+  pgdata:

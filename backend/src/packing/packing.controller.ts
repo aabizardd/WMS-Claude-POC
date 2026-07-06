@@ -1,6 +1,15 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Put,
+  Query,
+} from '@nestjs/common';
 import { PackingService } from './packing.service';
 import { GeneratePackingDto } from './dto/generate-packing.dto';
+import { ProgressPackingDto } from './dto/progress-packing.dto';
 import { QueryPackingDto } from './dto/query-packing.dto';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import {
@@ -35,5 +44,16 @@ export class PackingController {
   @RequirePermissions('packing:create')
   generate(@Body() dto: GeneratePackingDto, @CurrentUser() user: AuthUser) {
     return this.service.generate(dto, user);
+  }
+
+  // Record packing progress; closes the packing when all remaining reach 0.
+  @Put(':id/progress')
+  @RequirePermissions('packing:update')
+  progress(
+    @Param('id') id: string,
+    @Body() dto: ProgressPackingDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.service.progress(id, dto, user);
   }
 }

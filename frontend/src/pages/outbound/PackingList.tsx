@@ -9,6 +9,14 @@ import { useConfirm } from '../../context/ConfirmContext';
 
 const LIMIT = 10;
 
+function statusBadge(status: string) {
+  const map: Record<string, string> = {
+    Open: 'bg-amber-50 text-amber-700',
+    Closed: 'bg-emerald-50 text-emerald-700',
+  };
+  return map[status] ?? 'bg-slate-100 text-slate-600';
+}
+
 // Packing documents generated from Closed pickings.
 export default function PackingList() {
   const { has } = useAuth();
@@ -47,8 +55,10 @@ export default function PackingList() {
   }
 
   const rows = data?.rows ?? [];
+  // Only Closed packings can be delivered.
+  const selectableRows = rows.filter((r) => r.status === 'Closed');
   const allSelectedOnPage =
-    rows.length > 0 && rows.every((r) => selected.has(r.id));
+    selectableRows.length > 0 && selectableRows.every((r) => selected.has(r.id));
 
   function enterSelection() {
     setSelectionMode(true);
@@ -68,8 +78,8 @@ export default function PackingList() {
   function toggleAllOnPage() {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (allSelectedOnPage) rows.forEach((r) => next.delete(r.id));
-      else rows.forEach((r) => next.add(r.id));
+      if (allSelectedOnPage) selectableRows.forEach((r) => next.delete(r.id));
+      else selectableRows.forEach((r) => next.add(r.id));
       return next;
     });
   }
@@ -213,8 +223,10 @@ export default function PackingList() {
                       <td className="px-4 py-3">
                         <input
                           type="checkbox"
-                          className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                          className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 disabled:opacity-40"
                           checked={selected.has(p.id)}
+                          disabled={p.status !== 'Closed'}
+                          title={p.status !== 'Closed' ? 'Only Closed packings can be delivered' : undefined}
                           onChange={() => toggle(p.id)}
                         />
                       </td>
@@ -227,7 +239,7 @@ export default function PackingList() {
                     <td className="px-6 py-3 text-slate-600">{p.location ?? '—'}</td>
                     <td className="px-6 py-3 text-slate-600">{p.customer ?? '—'}</td>
                     <td className="px-6 py-3">
-                      <span className="badge bg-amber-50 text-amber-700">{p.status}</span>
+                      <span className={`badge ${statusBadge(p.status)}`}>{p.status}</span>
                     </td>
                     <td className="px-6 py-3">
                       <div className="flex justify-end">

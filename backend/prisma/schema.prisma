@@ -266,6 +266,9 @@ model Bin {
   dimensionUom   Uom?    @relation("BinDimensionUom", fields: [dimensionUomId], references: [id])
 
   isActive   Boolean   @default(true) @map("is_active")
+  // Virtual bins are auto-created per warehouse to hold Oracle-synced available
+  // quantity when no physical bin is known (adjustable later via Adjust Bins).
+  isVirtual  Boolean   @default(false) @map("is_virtual")
   createdBy  String?   @map("created_by")
   modifiedBy String?   @map("modified_by")
   createdAt  DateTime  @default(now()) @map("created_at")
@@ -433,6 +436,11 @@ model InventoryManagement {
   material     Material?  @relation(fields: [materialId], references: [id])
   warehouseId  String?    @map("warehouse_id")
   warehouse    Warehouse? @relation(fields: [warehouseId], references: [id])
+
+  // Oracle-mirrored quantities kept at header level (not tracked per bin).
+  qtyCommitted Float @default(0) @map("qty_committed")
+  qtyOnOrder   Float @default(0) @map("qty_on_order")
+  qtyBackOrder Float @default(0) @map("qty_back_order")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -658,7 +666,9 @@ model SalesOrderItem {
 
   createdAt DateTime @default(now()) @map("created_at")
 
-  pickingItems PickingItem[]
+  pickingItems  PickingItem[]
+  packingItems  PackingItem[]
+  deliveryItems DeliveryItem[]
 
   @@unique([salesOrderId, lineNumber])
   @@map("sales_order_items")
@@ -738,6 +748,7 @@ model PickingItem {
 
 enum PackingStatus {
   Open
+  Closed
 }
 
 // A Packing Document generated from a (Closed) Picking. One packing per picking.
@@ -767,12 +778,23 @@ model PackingItem {
   packingId String  @map("packing_id")
   packing   Packing @relation(fields: [packingId], references: [id], onDelete: Cascade)
 
+  // Origin Sales Order line (carried from picking) — for line_number mapping.
+  salesOrderItemId String?         @map("sales_order_item_id")
+  salesOrderItem   SalesOrderItem? @relation(fields: [salesOrderItemId], references: [id])
+
   materialId   String?   @map("material_id")
   material     Material? @relation(fields: [materialId], references: [id])
   materialCode String?   @map("material_code")
   materialName String?   @map("material_name")
 
-  qty Float @default(0) // carried from picking actual qty
+  qty Float @default(0) // base = picking actual qty (target to pack)
+
+  // Packing progress (accumulated across inputs).
+  // remaining = qty - actualQty - qtyIssue - qualityIssue.
+  actualQty    Float @default(0) @map("actual_qty")
+  qtyIssue     Float @default(0) @map("qty_issue")
+  qualityIssue Float @default(0) @map("quality_issue")
+  remainingQty Float @default(0) @map("remaining_qty")
 
   binId String? @map("bin_id")
   bin   Bin?    @relation(fields: [binId], references: [id])
@@ -799,6 +821,10 @@ model Delivery {
   deliveryCode String  @unique @map("delivery_code") // DEL-YYYYMMDD-NNN
   sdoId        String? @unique @map("sdo_id") // SDO-YYYYMMDD-NNN, set on shipment
 
+  // Oracle Item Fulfillment result (set on successful Generate Shipment).
+  oracleFulfillmentId Int? @map("oracle_fulfillment_id")
+  oracleLocalId       Int? @map("oracle_local_id")
+
   packingId String  @unique @map("packing_id")
   packing   Packing @relation(fields: [packingId], references: [id])
 
@@ -819,6 +845,10 @@ model DeliveryItem {
   id         String   @id @default(uuid())
   deliveryId String   @map("delivery_id")
   delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  // Origin Sales Order line (carried from packing) — for line_number mapping.
+  salesOrderItemId String?         @map("sales_order_item_id")
+  salesOrderItem   SalesOrderItem? @relation(fields: [salesOrderItemId], references: [id])
 
   materialId   String?   @map("material_id")
   material     Material? @relation(fields: [materialId], references: [id])
@@ -865,4 +895,31 @@ model Complaint {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("complaints")
+}
+
+// ===================== Sync Log =====================
+
+enum SyncStatus {
+  success
+  partial
+  failed
+}
+
+// Records background/retry Oracle sync runs that had problems (failed/partial),
+// so admins can review and retry them. Successful scheduler runs are not logged.
+model SyncLog {
+  id           String     @id @default(uuid())
+  module       String // materials | warehouses | vendors | customers | mrn | sales-orders
+  trigger      String // scheduler | retry
+  status       SyncStatus
+  lastModified String?    @map("last_modified") // the "since" value used
+  upserted     Int?
+  failed       Int?
+  totalRecords Int?       @map("total_records")
+  message      String?
+  durationMs   Int?       @map("duration_ms")
+  retriedAt    DateTime?  @map("retried_at")
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  @@map("sync_logs")
 }

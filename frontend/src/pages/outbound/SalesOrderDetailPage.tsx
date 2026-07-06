@@ -165,7 +165,13 @@ export default function SalesOrderDetailPage() {
     );
   }
 
-  const showGenerate = canGenerate && so.status_name === "Pending Fulfillment";
+  // SO statuses that still allow generating a picking (remaining = qty - shipped).
+  const PICKABLE_STATUSES = [
+    "Pending Fulfillment",
+    "Pending Billing/Partially Fulfilled",
+  ];
+  const showGenerate =
+    canGenerate && PICKABLE_STATUSES.includes(so.status_name ?? "");
 
   return (
     <div className="space-y-6">

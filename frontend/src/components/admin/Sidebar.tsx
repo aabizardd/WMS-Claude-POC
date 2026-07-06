@@ -96,6 +96,14 @@ const nav: NavEntry[] = [
     ),
   },
   {
+    to: '/admin/sync-logs',
+    label: 'nav.syncLogs',
+    permission: 'sync-logs:read',
+    icon: (
+      <path d="M4 4v5h5M20 20v-5h-5M5 19a9 9 0 0014.13-3M19 5A9 9 0 004.87 8" />
+    ),
+  },
+  {
     to: '/admin/settings',
     label: 'nav.settings',
     icon: (
@@ -148,23 +156,41 @@ export default function Sidebar({
           collapsed ? 'w-16' : 'w-64'
         } ${open ? 'translate-x-0' : '-translate-x-full'}`}
       >
-        <div className="flex h-16 items-center gap-2 border-b border-slate-200 px-4 dark:border-slate-700">
-          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-brand-600 font-bold text-white">
-            W
-          </div>
-          {!collapsed && (
-            <span className="text-lg font-semibold text-slate-800 dark:text-slate-100">WMS</span>
+        <div
+          className={`flex h-16 items-center border-b border-slate-200 dark:border-slate-700 ${
+            collapsed ? 'justify-center px-2' : 'gap-2 px-4'
+          }`}
+        >
+          {collapsed ? (
+            // Collapsed: a single centered button to expand the sidebar again.
+            <button
+              onClick={onToggle}
+              className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-slate-100 lg:block"
+              aria-label="Expand sidebar"
+              title="Expand"
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          ) : (
+            <>
+              <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-brand-600 font-bold text-white">
+                W
+              </div>
+              <span className="text-lg font-semibold text-slate-800 dark:text-slate-100">WMS</span>
+              <button
+                onClick={onToggle}
+                className="ml-auto hidden rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-200 lg:block"
+                aria-label="Collapse sidebar"
+                title="Collapse"
+              >
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+            </>
           )}
-          <button
-            onClick={onToggle}
-            className="ml-auto hidden rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-200 lg:block"
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            title={collapsed ? 'Expand' : 'Collapse'}
-          >
-            <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d={collapsed ? 'M9 5l7 7-7 7' : 'M15 19l-7-7 7-7'} />
-            </svg>
-          </button>
         </div>
 
         <SidebarNav onClose={onClose} collapsed={collapsed} onExpand={onToggle} />

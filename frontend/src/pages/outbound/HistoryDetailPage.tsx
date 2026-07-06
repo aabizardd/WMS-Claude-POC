@@ -104,6 +104,7 @@ export default function HistoryDetailPage() {
           <Meta label="SDO ID" value={dl.sdo_id} />
           <Meta label="Packing ID" value={dl.packing_id} />
           <Meta label="SO Number" value={dl.so_number} />
+          <Meta label="Sales Order (Oracle ID)" value={dl.so_oracle_id} />
           <Meta label="Customer" value={dl.customer} />
           <Meta label="Location" value={dl.location} />
           <Meta label="Status" value={dl.status} />
@@ -121,9 +122,11 @@ export default function HistoryDetailPage() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="table-head">
               <tr>
+                <th className="px-5 py-3 text-right">Line #</th>
                 <th className="px-5 py-3">Material Code</th>
                 <th className="px-5 py-3">Material Name</th>
                 <th className="px-5 py-3 text-right">Qty</th>
+                <th className="px-5 py-3">UOM</th>
                 <th className="px-5 py-3">Bin</th>
                 <th className="px-5 py-3">Picker</th>
               </tr>
@@ -131,18 +134,22 @@ export default function HistoryDetailPage() {
             <tbody className="divide-y divide-slate-100">
               {dl.items.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-5 py-8 text-center text-slate-400">
+                  <td colSpan={7} className="px-5 py-8 text-center text-slate-400">
                     No items.
                   </td>
                 </tr>
               ) : (
                 dl.items.map((it) => (
                   <tr key={it.id} className="hover:bg-slate-50">
+                    <td className="px-5 py-3 text-right text-slate-600">
+                      {it.line_number ?? '—'}
+                    </td>
                     <td className="px-5 py-3 font-medium text-slate-800">
                       {it.material_code ?? '—'}
                     </td>
                     <td className="px-5 py-3 text-slate-600">{it.material_name ?? '—'}</td>
                     <td className="px-5 py-3 text-right text-slate-600">{it.qty}</td>
+                    <td className="px-5 py-3 text-slate-600">{it.uom ?? '—'}</td>
                     <td className="px-5 py-3 text-slate-600">{it.bin_label ?? '—'}</td>
                     <td className="px-5 py-3 text-slate-600">{it.picker?.name ?? '—'}</td>
                   </tr>

@@ -1,6 +1,12 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { AdjustBinsDto } from './dto/adjust-bins.dto';
 
 export interface WarehouseScope {
   role: string;
@@ -121,6 +127,110 @@ export class InventoryService {
       throw new NotFoundException(`Inventory ${id} not found`);
     }
     return this.serializeDetail(inv);
+  }
+
+  // ---------- manual bin adjustment ----------
+
+  // Redistribute the available quantity across bins. The sum of the submitted
+  // avail_qty must exactly equal the current total available (only availQty is
+  // touched; reserved/in-transit/issue quantities are left untouched). Atomic.
+  async adjustBins(id: string, dto: AdjustBinsDto, scope: WarehouseScope) {
+    const inv = await this.prisma.inventoryManagement.findUnique({
+      where: { id },
+      include: { binStocks: true },
+    });
+    if (
+      !inv ||
+      (scope.role !== 'admin' && inv.warehouseId !== scope.warehouseId)
+    ) {
+      throw new NotFoundException(`Inventory ${id} not found`);
+    }
+
+    const lines = dto.bins ?? [];
+
+    // --- validate: no duplicate bins (treat null as a single "no bin" key) ---
+    const seen = new Set<string>();
+    for (const l of lines) {
+      const key = l.bin_id ?? '__null__';
+      if (seen.has(key)) {
+        throw new BadRequestException('Duplicate bin in the submitted list');
+      }
+      seen.add(key);
+      if (!(l.avail_qty >= 0)) {
+        throw new BadRequestException('Quantity must not be negative');
+      }
+    }
+
+    // --- validate: submitted bins exist and belong to this warehouse ---
+    const binIds = lines
+      .map((l) => l.bin_id)
+      .filter((b): b is string => !!b);
+    if (binIds.length > 0) {
+      const bins = await this.prisma.bin.findMany({
+        where: { id: { in: binIds } },
+        select: { id: true, warehouseId: true },
+      });
+      const found = new Map(bins.map((b) => [b.id, b.warehouseId]));
+      for (const b of binIds) {
+        const wh = found.get(b);
+        if (wh === undefined) {
+          throw new BadRequestException(`Bin ${b} not found`);
+        }
+        if (inv.warehouseId && wh !== inv.warehouseId) {
+          throw new BadRequestException(
+            'Bin does not belong to this warehouse',
+          );
+        }
+      }
+    }
+
+    // --- validate: total must match current available exactly ---
+    const currentTotal = inv.binStocks.reduce((a, b) => a + b.availQty, 0);
+    const newTotal = lines.reduce((a, l) => a + l.avail_qty, 0);
+    if (Math.abs(newTotal - currentTotal) > 1e-9) {
+      throw new BadRequestException(
+        `Total bin quantity (${newTotal}) must equal total available (${currentTotal})`,
+      );
+    }
+
+    // --- apply atomically: only availQty is modified ---
+    const existingByBin = new Map(
+      inv.binStocks.map((bs) => [bs.binId ?? '__null__', bs]),
+    );
+    await this.prisma.$transaction(async (tx) => {
+      // Update / create the submitted bins.
+      for (const l of lines) {
+        const key = l.bin_id ?? '__null__';
+        const existing = existingByBin.get(key);
+        if (existing) {
+          if (existing.availQty !== l.avail_qty) {
+            await tx.inventoryBinStock.update({
+              where: { id: existing.id },
+              data: { availQty: l.avail_qty },
+            });
+          }
+        } else {
+          await tx.inventoryBinStock.create({
+            data: {
+              inventoryId: id,
+              binId: l.bin_id ?? null,
+              availQty: l.avail_qty,
+            },
+          });
+        }
+      }
+      // Zero out availQty on existing bins that were dropped from the list.
+      for (const [key, bs] of existingByBin) {
+        if (!seen.has(key) && bs.availQty !== 0) {
+          await tx.inventoryBinStock.update({
+            where: { id: bs.id },
+            data: { availQty: 0 },
+          });
+        }
+      }
+    });
+
+    return this.findOne(id, scope);
   }
 
   // ---------- generation (called when a GR is received) ----------
@@ -280,10 +390,19 @@ export class InventoryService {
     };
   }
 
+  private oracleHeaderFields(m: InvList | InvDetail) {
+    return {
+      qty_committed: m.qtyCommitted,
+      qty_on_order: m.qtyOnOrder,
+      qty_back_order: m.qtyBackOrder,
+    };
+  }
+
   private serializeList(m: InvList) {
     return {
       id: m.id,
       ...this.materialFields(m),
+      ...this.oracleHeaderFields(m),
       ...this.sumBatches(m.binStocks),
     };
   }
@@ -292,6 +411,7 @@ export class InventoryService {
     // One row per bin location (quantities already stored per bin).
     const bins = m.binStocks
       .map((bs) => ({
+        bin_id: bs.binId ?? null,
         bin_location: bs.bin?.binLabel ?? null,
         warehouse_name: m.warehouse?.name ?? null,
         ...this.sumBatches([bs]),
@@ -311,7 +431,9 @@ export class InventoryService {
 
     return {
       id: m.id,
+      warehouse_id: m.warehouseId ?? null,
       ...this.materialFields(m),
+      ...this.oracleHeaderFields(m),
       ...this.sumBatches(m.binStocks),
       bins,
     };

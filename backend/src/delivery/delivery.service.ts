@@ -3,11 +3,24 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import type { GenerateDeliveryDto } from './dto/generate-delivery.dto';
+
+interface ErpAuthResponse {
+  success: boolean;
+  data?: { access_token: string };
+}
+
+interface ItemFulfillmentResponse {
+  success: boolean;
+  data?: { status?: string; fulfillment_id?: number; local_id?: number };
+  message?: string;
+}
 
 export interface WarehouseScope {
   role: string;
@@ -22,7 +35,9 @@ const packingSelect = {
       id: true,
       pickingCode: true,
       status: true,
-      salesOrder: { select: { id: true, tranId: true, customerName: true } },
+      salesOrder: {
+        select: { id: true, oracleId: true, tranId: true, customerName: true },
+      },
     },
   },
 } satisfies Prisma.PackingSelect;
@@ -38,7 +53,14 @@ const detailInclude = {
   packing: { select: packingSelect },
   items: {
     include: {
-      material: { select: { materialCode: true, materialName: true } },
+      material: {
+        select: {
+          materialCode: true,
+          materialName: true,
+          primaryUom: { select: { uomCode: true } },
+        },
+      },
+      salesOrderItem: { select: { lineNumber: true } },
       bin: { select: { id: true, binLabel: true } },
       picker: { select: { id: true, name: true } },
     },
@@ -56,7 +78,71 @@ export class DeliveryService {
   constructor(
     private prisma: PrismaService,
     private inventory: InventoryService,
+    private config: ConfigService,
   ) {}
+
+  // ---------- Oracle Item Fulfillment bridge ----------
+
+  private baseUrl() {
+    const url = this.config.get<string>('ERP_BASE_URL');
+    if (!url) throw new Error('ERP_BASE_URL is not configured');
+    return url.replace(/\/$/, '');
+  }
+
+  private async getAccessToken(): Promise<string> {
+    const res = await fetch(`${this.baseUrl()}/auth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'client_credentials',
+        client_id: this.config.get<string>('ERP_CLIENT_ID'),
+        client_secret: this.config.get<string>('ERP_CLIENT_SECRET'),
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`ERP auth failed: ${res.status} ${await res.text()}`);
+    }
+    const json = (await res.json()) as ErpAuthResponse;
+    const token = json?.data?.access_token;
+    if (!token) throw new Error('ERP auth: access_token missing in response');
+    return token;
+  }
+
+  // Create an Item Fulfillment in Oracle. Throws (503) on any failure so the
+  // caller can surface a retry; nothing is persisted unless this succeeds.
+  private async submitItemFulfillment(
+    salesOrderId: string,
+    items: { line: number; quantity: number }[],
+  ): Promise<ItemFulfillmentResponse['data'] & { message?: string }> {
+    let res: Response;
+    try {
+      const token = await this.getAccessToken();
+      res = await fetch(`${this.baseUrl()}/items/item-fulfillment`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          sales_order_id: salesOrderId,
+          ship_status: 'shipped',
+          items,
+        }),
+      });
+    } catch (e) {
+      throw new ServiceUnavailableException(
+        `Failed to reach Oracle Item Fulfillment: ${(e as Error).message}`,
+      );
+    }
+
+    const json = (await res.json().catch(() => null)) as ItemFulfillmentResponse | null;
+    if (!res.ok || !json?.success) {
+      throw new ServiceUnavailableException(
+        json?.message ?? `Oracle Item Fulfillment failed (HTTP ${res.status})`,
+      );
+    }
+    return { ...json.data, message: json.message };
+  }
 
   private scopeWhere(scope: WarehouseScope): Prisma.DeliveryWhereInput {
     if (scope.role === 'admin') {
@@ -142,6 +228,11 @@ export class DeliveryService {
       if (scope.role !== 'admin' && p.warehouseId !== scope.warehouseId) {
         throw new NotFoundException(`Packing ${id} not found`);
       }
+      if (p.status !== 'Closed') {
+        throw new BadRequestException(
+          `Only Closed packings can be delivered (${p.packingCode} is ${p.status})`,
+        );
+      }
       if (p.delivery) {
         throw new BadRequestException(
           `Packing ${p.packingCode} already has a delivery document`,
@@ -161,15 +252,19 @@ export class DeliveryService {
         const p = byId.get(id)!;
         seq += 1;
         const deliveryCode = `DEL-${today}-${String(seq).padStart(3, '0')}`;
-        // Carry the full packing header + detail into the delivery.
-        const items = p.items.map((it) => ({
-          materialId: it.materialId,
-          materialCode: it.materialCode,
-          materialName: it.materialName,
-          qty: it.qty,
-          binId: it.binId,
-          pickerId: it.pickerId,
-        }));
+        // Carry the actually-packed qty (per item) into the delivery. Items with
+        // nothing packed (all issue) are skipped.
+        const items = p.items
+          .filter((it) => it.actualQty > 0)
+          .map((it) => ({
+            salesOrderItemId: it.salesOrderItemId, // carry SO line reference
+            materialId: it.materialId,
+            materialCode: it.materialCode,
+            materialName: it.materialName,
+            qty: it.actualQty,
+            binId: it.binId,
+            pickerId: it.pickerId,
+          }));
         await tx.delivery.create({
           data: {
             deliveryCode,
@@ -197,7 +292,16 @@ export class DeliveryService {
   async generateShipment(id: string, scope: WarehouseScope) {
     const d = await this.prisma.delivery.findUnique({
       where: { id },
-      include: { items: true },
+      include: {
+        items: { include: { salesOrderItem: { select: { lineNumber: true } } } },
+        packing: {
+          select: {
+            picking: {
+              select: { salesOrder: { select: { oracleId: true } } },
+            },
+          },
+        },
+      },
     });
     if (!d || (scope.role !== 'admin' && d.warehouseId !== scope.warehouseId)) {
       throw new NotFoundException(`Delivery ${id} not found`);
@@ -205,6 +309,36 @@ export class DeliveryService {
     if (d.status === 'Closed' || d.sdoId) {
       throw new BadRequestException('Shipment already generated for this delivery');
     }
+
+    // Build the Oracle Item Fulfillment payload from the delivery detail. Every
+    // shippable item must map to a Sales Order line — reject otherwise.
+    const salesOrderId = d.packing?.picking?.salesOrder?.oracleId ?? null;
+    if (!salesOrderId) {
+      throw new BadRequestException(
+        'Sales Order Oracle ID not found for this delivery',
+      );
+    }
+    const fulfillItems: { line: number; quantity: number }[] = [];
+    for (const it of d.items) {
+      if (!(it.qty > 0)) continue;
+      const line = it.salesOrderItem?.lineNumber ?? null;
+      if (line == null) {
+        throw new BadRequestException(
+          `Cannot ship: item "${it.materialCode ?? it.id}" has no Sales Order line number`,
+        );
+      }
+      fulfillItems.push({ line, quantity: it.qty });
+    }
+    if (fulfillItems.length === 0) {
+      throw new BadRequestException('No shippable items on this delivery');
+    }
+
+    // Hit Oracle first — if this fails, nothing below runs (delivery stays Open
+    // and the user can retry).
+    const fulfillment = await this.submitItemFulfillment(
+      salesOrderId,
+      fulfillItems,
+    );
 
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const count = await this.prisma.delivery.count({
@@ -216,7 +350,12 @@ export class DeliveryService {
     await this.prisma.$transaction(async (tx) => {
       await tx.delivery.update({
         where: { id },
-        data: { sdoId, status: 'Closed' },
+        data: {
+          sdoId,
+          status: 'Closed',
+          oracleFulfillmentId: fulfillment?.fulfillment_id ?? null,
+          oracleLocalId: fulfillment?.local_id ?? null,
+        },
       });
 
       // Reduce Reserved Qty per (material, bin) by the delivery qty. Only reserved
@@ -239,8 +378,18 @@ export class DeliveryService {
       }
     });
 
-    this.logger.log(`Shipment generated for delivery ${d.deliveryCode}: ${sdoId}`);
-    return this.findOne(id, scope);
+    this.logger.log(
+      `Shipment generated for delivery ${d.deliveryCode}: ${sdoId} (Oracle fulfillment ${fulfillment?.fulfillment_id ?? '-'})`,
+    );
+    const detail = await this.findOne(id, scope);
+    return {
+      ...detail,
+      fulfillment: {
+        message: fulfillment?.message ?? 'Item Fulfillment created',
+        fulfillment_id: fulfillment?.fulfillment_id ?? null,
+        local_id: fulfillment?.local_id ?? null,
+      },
+    };
   }
 
   // ---------- serializers ----------
@@ -271,10 +420,13 @@ export class DeliveryService {
       sdo_id: d.sdoId,
       packing_id: packing?.packingCode ?? null,
       so_id: so?.id ?? null,
+      so_oracle_id: so?.oracleId ?? null,
       so_number: so?.tranId ?? null,
       customer: so?.customerName ?? null,
       location: d.warehouse?.name ?? null,
       status: d.status,
+      oracle_fulfillment_id: d.oracleFulfillmentId ?? null,
+      oracle_local_id: d.oracleLocalId ?? null,
       created_at: d.createdAt,
       // Full outbound tracking chain: Sales Order → Picking → Packing → Delivery.
       tracking: {
@@ -290,14 +442,24 @@ export class DeliveryService {
         sdo_id: d.sdoId,
         delivery_status: d.status,
       },
-      items: d.items.map((it) => ({
-        id: it.id,
-        material_code: it.materialCode ?? it.material?.materialCode ?? null,
-        material_name: it.materialName ?? it.material?.materialName ?? null,
-        qty: it.qty,
-        bin_label: it.bin?.binLabel ?? null,
-        picker: it.picker ? { id: it.picker.id, name: it.picker.name } : null,
-      })),
+      items: d.items
+        .map((it) => ({
+          id: it.id,
+          line_number: it.salesOrderItem?.lineNumber ?? null,
+          material_code: it.materialCode ?? it.material?.materialCode ?? null,
+          material_name: it.materialName ?? it.material?.materialName ?? null,
+          qty: it.qty,
+          uom: it.material?.primaryUom?.uomCode ?? null,
+          bin_label: it.bin?.binLabel ?? null,
+          picker: it.picker ? { id: it.picker.id, name: it.picker.name } : null,
+        }))
+        // Sort by Sales Order line number ASC; items without a line last.
+        .sort((a, b) => {
+          if (a.line_number == null && b.line_number == null) return 0;
+          if (a.line_number == null) return 1;
+          if (b.line_number == null) return -1;
+          return a.line_number - b.line_number;
+        }),
     };
   }
 }

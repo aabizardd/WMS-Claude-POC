@@ -251,10 +251,15 @@ export interface InventoryRow {
   quality_issue: number;
   qty_issue: number;
   on_hand: number;
+  // Oracle-mirrored header quantities (not tracked per bin).
+  qty_committed: number;
+  qty_on_order: number;
+  qty_back_order: number;
 }
 
 // Inventory detail is grouped by bin location (quantities summed per bin).
 export interface InventoryBinGroup {
+  bin_id: string | null;
   bin_location: string | null;
   warehouse_name: string | null;
   on_hand: number;
@@ -266,7 +271,30 @@ export interface InventoryBinGroup {
 }
 
 export interface InventoryDetail extends InventoryRow {
+  warehouse_id: string | null;
   bins: InventoryBinGroup[];
+}
+
+export interface BinOption {
+  id: string;
+  binLabel: string;
+  binCode: string;
+  warehouseId: string;
+}
+
+export interface SyncLogRow {
+  id: string;
+  module: string;
+  trigger: string;
+  status: string; // success | partial | failed
+  last_modified: string | null;
+  upserted: number | null;
+  failed: number | null;
+  total_records: number | null;
+  message: string | null;
+  duration_ms: number | null;
+  retried_at: string | null;
+  created_at: string;
 }
 
 export interface Paginated<T> {
@@ -600,9 +628,21 @@ export interface PackingItemRow {
   id: string;
   material_code: string | null;
   material_name: string | null;
-  qty: number;
+  qty: number; // base (target to pack)
+  actual_qty: number;
+  qty_issue: number;
+  quality_issue: number;
+  remaining_qty: number;
   bin_label: string | null;
   picker: { id: number; name: string } | null;
+}
+
+export interface PackingTotals {
+  request: number;
+  actual: number;
+  qty_issue: number;
+  quality_issue: number;
+  remaining: number;
 }
 
 export interface PackingDetail {
@@ -615,6 +655,7 @@ export interface PackingDetail {
   location: string | null;
   status: string;
   created_at: string;
+  totals: PackingTotals;
   items: PackingItemRow[];
 }
 
@@ -649,9 +690,11 @@ export interface DeliveryTracking {
 
 export interface DeliveryItemRow {
   id: string;
+  line_number: number | null;
   material_code: string | null;
   material_name: string | null;
   qty: number;
+  uom: string | null;
   bin_label: string | null;
   picker: { id: number; name: string } | null;
 }
@@ -662,13 +705,25 @@ export interface DeliveryDetail {
   sdo_id: string | null;
   packing_id: string | null;
   so_id: string | null;
+  so_oracle_id: string | null;
   so_number: string | null;
   customer: string | null;
   location: string | null;
   status: string;
+  oracle_fulfillment_id: number | null;
+  oracle_local_id: number | null;
   created_at: string;
   tracking: DeliveryTracking;
   items: DeliveryItemRow[];
+}
+
+// Response of PUT /delivery/:id/generate-shipment — detail + Oracle result.
+export interface ShipmentResult extends DeliveryDetail {
+  fulfillment: {
+    message: string;
+    fulfillment_id: number | null;
+    local_id: number | null;
+  };
 }
 
 // Data for the Generate Picking form.
