@@ -4,6 +4,8 @@ import axios from 'axios';
 import api from '../../lib/api';
 import type { Role, User, WarehouseOption } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import SearchableSelect from '../../components/SearchableSelect';
+import FormField, { requiredErrors } from '../../components/form/FormField';
 
 interface FormState {
   firstName: string;
@@ -44,6 +46,7 @@ export default function UserFormPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [loadError, setLoadError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let active = true;
@@ -83,11 +86,32 @@ export default function UserFormPage() {
     };
   }, [id, isNew]);
 
-  const set = (patch: Partial<FormState>) => setForm({ ...form, ...patch });
+  const set = (patch: Partial<FormState>) => {
+    setForm({ ...form, ...patch });
+    setFieldErrors((p) => {
+      const next = { ...p };
+      for (const k of Object.keys(patch)) delete next[k];
+      return next;
+    });
+  };
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
+
+    const errs = requiredErrors([
+      ['firstName', form.firstName, 'First name is required'],
+      ['username', form.username, 'Username is required'],
+      ['email', form.email, 'Email is required'],
+      ['roleId', form.roleId, 'Role is required'],
+      ['warehouseId', form.warehouseId, 'Warehouse is required'],
+    ]);
+    if (isNew && !form.password) errs.password = 'Password is required';
+    if (form.password && form.password.length < 6)
+      errs.password = 'Password must be at least 6 characters';
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) return;
+
     setSaving(true);
 
     const base = {
@@ -129,7 +153,7 @@ export default function UserFormPage() {
   }
   if (loadError) {
     return (
-      <div className="mx-auto max-w-3xl space-y-4">
+      <div className="space-y-4">
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {loadError}
         </div>
@@ -141,7 +165,7 @@ export default function UserFormPage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="space-y-6">
       <div className="flex items-start gap-3">
         <Link
           to="/admin/users"
@@ -177,13 +201,12 @@ export default function UserFormPage() {
 
         <Section title="Profile">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="First Name">
+            <Field label="First Name" required error={fieldErrors.firstName}>
               <input
                 className="input"
                 value={form.firstName}
                 onChange={(e) => set({ firstName: e.target.value })}
                 disabled={viewOnly}
-                required
               />
             </Field>
             <Field label="Last Name">
@@ -194,23 +217,21 @@ export default function UserFormPage() {
                 disabled={viewOnly}
               />
             </Field>
-            <Field label="Username">
+            <Field label="Username" required error={fieldErrors.username}>
               <input
                 className="input"
                 value={form.username}
                 onChange={(e) => set({ username: e.target.value })}
                 disabled={viewOnly}
-                required
               />
             </Field>
-            <Field label="Email">
+            <Field label="Email" required error={fieldErrors.email}>
               <input
                 type="email"
                 className="input"
                 value={form.email}
                 onChange={(e) => set({ email: e.target.value })}
                 disabled={viewOnly}
-                required
               />
             </Field>
           </div>
@@ -218,41 +239,24 @@ export default function UserFormPage() {
 
         <Section title="Access">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Role">
-              <select
-                className="input"
-                value={form.roleId}
-                onChange={(e) => set({ roleId: Number(e.target.value) })}
+            <Field label="Role" required error={fieldErrors.roleId}>
+              <SearchableSelect
+                value={form.roleId ? String(form.roleId) : ''}
+                onChange={(v) => set({ roleId: Number(v) })}
                 disabled={viewOnly}
-                required
-              >
-                <option value="" disabled>
-                  Select role
-                </option>
-                {roles.map((r) => (
-                  <option key={r.id} value={r.id} className="capitalize">
-                    {r.name}
-                  </option>
-                ))}
-              </select>
+                placeholder="Select role"
+                options={roles.map((r) => ({ value: String(r.id), label: r.name }))}
+              />
             </Field>
-            <Field label="Warehouse">
-              <select
-                className="input"
+            <Field label="Warehouse" required error={fieldErrors.warehouseId}>
+              <SearchableSelect
                 value={form.warehouseId}
-                onChange={(e) => set({ warehouseId: e.target.value })}
+                onChange={(v) => set({ warehouseId: v })}
                 disabled={viewOnly}
-                required
-              >
-                <option value="" disabled>
-                  Select warehouse
-                </option>
-                {warehouses.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.name}
-                  </option>
-                ))}
-              </select>
+                placeholder="Select warehouse"
+                searchPlaceholder="Search warehouse…"
+                options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
+              />
             </Field>
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input
@@ -272,6 +276,8 @@ export default function UserFormPage() {
             label={
               isNew ? 'Password' : 'New password (leave blank to keep current)'
             }
+            required={isNew}
+            error={fieldErrors.password}
           >
             <input
               type="password"
@@ -279,8 +285,6 @@ export default function UserFormPage() {
               value={form.password}
               onChange={(e) => set({ password: e.target.value })}
               disabled={viewOnly}
-              required={isNew}
-              minLength={6}
               placeholder={isNew ? '' : '••••••'}
             />
           </Field>
@@ -312,11 +316,20 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({
+  label,
+  required,
+  error,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  error?: string;
+  children: ReactNode;
+}) {
   return (
-    <div>
-      <label className="label">{label}</label>
+    <FormField label={label} required={required} error={error}>
       {children}
-    </div>
+    </FormField>
   );
 }

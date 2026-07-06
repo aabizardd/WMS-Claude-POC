@@ -18,7 +18,16 @@ import { VendorsModule } from './vendors/vendors.module';
 import { CustomersModule } from './customers/customers.module';
 import { MrnModule } from './mrn/mrn.module';
 import { GoodsReceiveModule } from './goods-receive/goods-receive.module';
+import { InventoryModule } from './inventory/inventory.module';
+import { DiscrepancyModule } from './discrepancy/discrepancy.module';
 import { PermissionsModule } from './permissions/permissions.module';
+import { PutawayModule } from './putaway/putaway.module';
+import { SalesOrdersModule } from './sales-orders/sales-orders.module';
+import { PickingModule } from './picking/picking.module';
+import { PackingModule } from './packing/packing.module';
+import { DeliveryModule } from './delivery/delivery.module';
+import { ComplaintsModule } from './complaints/complaints.module';
+import { OracleSyncModule } from './sync/oracle-sync.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from './auth/guards/permissions.guard';
 
@@ -42,7 +51,16 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
     CustomersModule,
     MrnModule,
     GoodsReceiveModule,
+    InventoryModule,
+    DiscrepancyModule,
     PermissionsModule,
+    PutawayModule,
+    SalesOrdersModule,
+    PickingModule,
+    PackingModule,
+    DeliveryModule,
+    ComplaintsModule,
+    OracleSyncModule,
   ],
   providers: [
     // 1) Authenticate (JWT). Routes opt out with @Public().

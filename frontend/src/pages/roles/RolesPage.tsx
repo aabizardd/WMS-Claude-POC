@@ -4,9 +4,13 @@ import axios from 'axios';
 import api from '../../lib/api';
 import type { Role } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
+import { useConfirm } from '../../context/ConfirmContext';
 
 export default function RolesPage() {
   const { has } = useAuth();
+  const toast = useToast();
+  const confirm = useConfirm();
   const canCreate = has('roles:create');
   const canUpdate = has('roles:update');
   const canDelete = has('roles:delete');
@@ -25,14 +29,21 @@ export default function RolesPage() {
   }, []);
 
   async function handleDelete(role: Role) {
-    if (!confirm(`Delete role "${role.name}"?`)) return;
+    const ok = await confirm({
+      title: 'Delete role?',
+      description: `"${role.name}" will be permanently deleted.`,
+      type: 'danger',
+      confirmText: 'Delete',
+    });
+    if (!ok) return;
     try {
       await api.delete(`/roles/${role.id}`);
+      toast.success('Role deleted');
       await load();
     } catch (err) {
       if (axios.isAxiosError(err)) {
-        alert(err.response?.data?.message ?? 'Delete failed');
-      }
+        toast.error(err.response?.data?.message ?? 'Delete failed');
+      } else toast.error('Delete failed');
     }
   }
 

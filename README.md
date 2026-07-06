@@ -108,6 +108,21 @@ empty for a full sync, or pick a "modified since" date for an incremental sync
 (sent as `filters.lastmodified`). Endpoint: `POST /api/materials/sync-erp`
 with body `{ "lastModified"?: ISO-datetime, "pageSize"?: number }`.
 
+### Background sync scheduler
+
+Besides the CLI inject and the manual *Sync from ERP* buttons, a background
+scheduler periodically runs an **incremental** (Last Modified based) sync for
+every mirrored module (materials, warehouses, vendors, customers, MRN). It
+reuses each module's existing `SyncService` — no business logic changes.
+
+- Runs every `ERP_SYNC_INTERVAL_MS` ms (default `300000` = 5 minutes).
+- Turn off with `ERP_SYNC_SCHEDULER_ENABLED=false`.
+- Modules run sequentially with an `ERP_SYNC_PAGE_DELAY_MS` (1.5s) gap to
+  respect the ERP rate limit; overlapping runs are skipped.
+- The `since` watermark per module is the latest stored `created_at` (the same
+  basis as the manual button). Modules with no data yet are skipped (never a
+  full sync). Upserts keep it idempotent across repeated runs.
+
 Passwords are hashed with bcrypt and never returned by the API.
 
 ## RBAC (Role-Based Access Control)
@@ -186,3 +201,24 @@ npm run sync:customers -- 2026-06-18T18:20:00+07:00   # incremental
 ```
 
 From the UI (admin): *Customers → Sync from ERP*. Endpoint: `POST /api/customers/sync-erp`.
+
+## Outbound — Sales Orders
+
+`sales_orders` (header) + `sales_order_items` (detail) mirror the Oracle
+`sales-orders/get` endpoint. **All statuses** are pulled (no `filters.status`);
+status filtering happens in WMS on stored data. The request sends `is_sync: false`
+and `sort_by: lastmodifieddate`. Header is upserted
+by `oracle_id`; details are rebuilt per sync keyed by `(sales_order_id, line_number)`
+so there are never duplicate lines and the header–detail relation is preserved. A
+header is only rewritten when its `last_modified` changed (idempotent).
+
+Mapping: `item_id → materials.erp_doc_id` (detail), `location → warehouses.oracle_id`
+(header, used for warehouse scoping).
+
+- Manual sync (admin): *Outbound → List Outbound → Sync from ERP*. Endpoint:
+  `POST /api/sales-orders/sync-erp`. List `GET /api/sales-orders` (supports
+  `?status=` — WMS-side filter), distinct statuses `GET /api/sales-orders/statuses`,
+  detail `GET /api/sales-orders/:id`, last-sync `GET /api/sales-orders/erp-last-sync`.
+- Permissions: `sales-orders:read`, `sales-orders:sync`.
+- Also picked up by the background sync scheduler (incremental, every interval).
+- CLI: `npm run sync:sales-orders [-- <since>]`; empty tables with `npm run so:reset`.

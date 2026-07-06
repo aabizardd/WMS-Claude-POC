@@ -2,8 +2,11 @@ import { useEffect, useState, type FormEvent } from 'react';
 import axios from 'axios';
 import api from '../../lib/api';
 import Modal from '../../components/Modal';
+import FormField, { requiredErrors } from '../../components/form/FormField';
 import type { Uom } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
+import { useConfirm } from '../../context/ConfirmContext';
 
 interface FormState {
   uomName: string;
@@ -15,6 +18,8 @@ const emptyForm: FormState = { uomName: '', uomCode: '', isActive: true };
 
 export default function UomsPage() {
   const { has } = useAuth();
+  const toast = useToast();
+  const confirm = useConfirm();
   const canCreate = has('uoms:create');
   const canUpdate = has('uoms:update');
   const canDelete = has('uoms:delete');
@@ -25,6 +30,7 @@ export default function UomsPage() {
   const [editing, setEditing] = useState<Uom | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   async function load() {
@@ -41,18 +47,26 @@ export default function UomsPage() {
     setEditing(null);
     setForm(emptyForm);
     setError('');
+    setFieldErrors({});
     setModalOpen(true);
   }
   function openEdit(it: Uom) {
     setEditing(it);
     setForm({ uomName: it.uomName, uomCode: it.uomCode, isActive: it.isActive });
     setError('');
+    setFieldErrors({});
     setModalOpen(true);
   }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
+    const errs = requiredErrors([
+      ['uomCode', form.uomCode, 'Code is required'],
+      ['uomName', form.uomName, 'Name is required'],
+    ]);
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) return;
     setSaving(true);
     try {
       if (editing) {
@@ -73,13 +87,21 @@ export default function UomsPage() {
   }
 
   async function handleDelete(it: Uom) {
-    if (!confirm(`Delete UOM "${it.uomName}"?`)) return;
+    const ok = await confirm({
+      title: 'Delete UOM?',
+      description: `"${it.uomName}" will be permanently deleted.`,
+      type: 'danger',
+      confirmText: 'Delete',
+    });
+    if (!ok) return;
     try {
       await api.delete(`/uoms/${it.id}`);
+      toast.success('UOM deleted');
       await load();
     } catch (err) {
       if (axios.isAxiosError(err))
-        alert(err.response?.data?.message ?? 'Delete failed');
+        toast.error(err.response?.data?.message ?? 'Delete failed');
+      else toast.error('Delete failed');
     }
   }
 
@@ -186,26 +208,28 @@ export default function UomsPage() {
             </div>
           )}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="label">Code</label>
+            <FormField label="Code" required error={fieldErrors.uomCode}>
               <input
                 className="input"
                 value={form.uomCode}
-                onChange={(e) => setForm({ ...form, uomCode: e.target.value })}
+                onChange={(e) => {
+                  setForm({ ...form, uomCode: e.target.value });
+                  setFieldErrors((p) => ({ ...p, uomCode: '' }));
+                }}
                 placeholder="pcs"
-                required
               />
-            </div>
-            <div>
-              <label className="label">Name</label>
+            </FormField>
+            <FormField label="Name" required error={fieldErrors.uomName}>
               <input
                 className="input"
                 value={form.uomName}
-                onChange={(e) => setForm({ ...form, uomName: e.target.value })}
+                onChange={(e) => {
+                  setForm({ ...form, uomName: e.target.value });
+                  setFieldErrors((p) => ({ ...p, uomName: '' }));
+                }}
                 placeholder="Pieces"
-                required
               />
-            </div>
+            </FormField>
           </div>
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input

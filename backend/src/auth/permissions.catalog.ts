@@ -41,6 +41,24 @@ const RESOURCES: { resource: string; label: string; actions: string[] }[] = [
   // Inbound — MRN mirrors Oracle PIB (read/sync); Goods Receive is editable.
   { resource: 'mrn', label: 'MRN', actions: ['read', 'sync'] },
   { resource: 'goods-receive', label: 'Goods Receive', actions: ['read', 'update'] },
+  // Inventory is generated automatically on receive; manual bin adjustment adds update.
+  { resource: 'inventory', label: 'Inventory', actions: ['read', 'update'] },
+  // Discrepancy is recorded automatically (quantity gap on receive) — read only.
+  { resource: 'discrepancy', label: 'Discrepancy', actions: ['read'] },
+  // Putaway generated from Goods Receive — read, create, update.
+  { resource: 'putaway', label: 'Putaway', actions: ['read', 'create', 'update'] },
+  // Outbound — Sales Orders mirror Oracle — read/sync only.
+  { resource: 'sales-orders', label: 'Sales Orders', actions: ['read', 'sync'] },
+  // Outbound — Picking generated from Sales Order — read, create (generate).
+  { resource: 'picking', label: 'Picking', actions: ['read', 'create', 'update', 'delete'] },
+  // Outbound — Packing generated from (Closed) Picking — read, create, update (progress).
+  { resource: 'packing', label: 'Packing', actions: ['read', 'create', 'update'] },
+  // Outbound — Delivery generated from Packing — read, create.
+  { resource: 'delivery', label: 'Delivery', actions: ['read', 'create', 'update'] },
+  // Complaint — users create & see their own; admin manages (update status).
+  { resource: 'complaints', label: 'Complaints', actions: ['read', 'create', 'update'] },
+  // Sync Log — view failed Oracle syncs and retry them (admin/ops).
+  { resource: 'sync-logs', label: 'Sync Logs', actions: ['read', 'update'] },
 ];
 
 export const PERMISSIONS: PermissionDef[] = RESOURCES.flatMap((r) =>
@@ -69,4 +87,20 @@ export const STAFF_PERMISSION_KEYS = [
   'customers:read',
   'mrn:read',
   'goods-receive:read',
+  'inventory:read',
+  'discrepancy:read',
+  'putaway:read',
+  'sales-orders:read',
+  'picking:read',
+  'packing:read',
+  'delivery:read',
+  'complaints:read',
+  'complaints:create',
+];
+
+// Putaway-specific permissions for the picker role.
+export const PICKER_PERMISSION_KEYS = [
+  'putaway:read',
+  'putaway:create',
+  'putaway:update',
 ];

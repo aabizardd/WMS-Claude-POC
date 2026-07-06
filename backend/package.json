@@ -16,6 +16,9 @@
     "sync:vendors": "ts-node src/scripts/sync-vendors.ts",
     "sync:customers": "ts-node src/scripts/sync-customers.ts",
     "sync:mrn": "ts-node src/scripts/sync-mrn.ts",
+    "sync:sales-orders": "ts-node src/scripts/sync-sales-orders.ts",
+    "so:reset": "ts-node src/scripts/reset-sales-orders.ts",
+    "seed:outbound-test": "ts-node src/scripts/seed-outbound-test.ts",
     "db:reset": "prisma migrate reset --force"
   },
   "prisma": {

@@ -60,6 +60,13 @@ model User {
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
+  discrepancies Discrepancy[]
+  pickAssignments PutawayItem[]
+  pickingAssignments PickingItem[]
+  packingAssignments PackingItem[]
+  deliveryAssignments DeliveryItem[]
+  complaints Complaint[]
+
   @@map("users")
 }
 
@@ -152,6 +159,12 @@ model Material {
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("modified_at")
 
+  inventories     InventoryManagement[]
+  salesOrderItems SalesOrderItem[]
+  pickingItems    PickingItem[]
+  packingItems    PackingItem[]
+  deliveryItems   DeliveryItem[]
+
   @@map("materials")
 }
 
@@ -180,6 +193,14 @@ model Warehouse {
   users         User[]
   mrns          Mrn[]
   goodsReceives GoodsReceive[]
+  putaways      Putaway[]
+  inventories   InventoryManagement[]
+  discrepancies Discrepancy[]
+  salesOrders   SalesOrder[]
+  pickings      Picking[]
+  packings      Packing[]
+  deliveries    Delivery[]
+  complaints    Complaint[]
 
   @@map("warehouses")
 }
@@ -245,12 +266,20 @@ model Bin {
   dimensionUom   Uom?    @relation("BinDimensionUom", fields: [dimensionUomId], references: [id])
 
   isActive   Boolean   @default(true) @map("is_active")
+  // Virtual bins are auto-created per warehouse to hold Oracle-synced available
+  // quantity when no physical bin is known (adjustable later via Adjust Bins).
+  isVirtual  Boolean   @default(false) @map("is_virtual")
   createdBy  String?   @map("created_by")
   modifiedBy String?   @map("modified_by")
   createdAt  DateTime  @default(now()) @map("created_at")
   modifiedAt DateTime? @map("modified_at")
 
   mrnItems MrnItem[] // bins chosen as receive destination
+  putawayItems PutawayItem[]
+  inventoryBinStocks InventoryBinStock[]
+  pickingItems PickingItem[]
+  packingItems PackingItem[]
+  deliveryItems DeliveryItem[]
 
   @@map("bins")
 }
@@ -362,21 +391,535 @@ model MrnItem {
   receivingLocationId   String? @map("receiving_location_id")
   receivingLocationName String? @map("receiving_location_name")
 
+  putawayItems PutawayItem[]
+
+  // Set when the item's received qty has been taken into inventory (idempotency guard).
+  inventoriedAt DateTime? @map("inventoried_at")
+
   @@unique([mrnId, lineId])
   @@map("mrn_items")
 }
 
+enum GoodsReceiveStatus {
+  Open
+  Syncing
+  OnProgress
+  SyncFailed
+  Closed
+}
+
 model GoodsReceive {
+  id          String             @id @default(uuid())
+  mrnId       String             @unique @map("mrn_id")
+  mrn         Mrn                @relation(fields: [mrnId], references: [id], onDelete: Cascade)
+  grNumber    String             @unique @map("gr_number")
+  status      GoodsReceiveStatus @default(Open)
+  warehouseId String?            @map("warehouse_id")
+  warehouse   Warehouse?         @relation(fields: [warehouseId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  discrepancies Discrepancy[]
+  putaways      Putaway[]
+
+  @@map("goods_receives")
+}
+
+// ===================== Inventory Management =====================
+
+// One row per material code per warehouse; quantities = sum of its bin stocks.
+model InventoryManagement {
+  id           String     @id @default(uuid())
+  materialCode String     @map("material_code")
+  materialId   String?    @map("material_id")
+  material     Material?  @relation(fields: [materialId], references: [id])
+  warehouseId  String?    @map("warehouse_id")
+  warehouse    Warehouse? @relation(fields: [warehouseId], references: [id])
+
+  // Oracle-mirrored quantities kept at header level (not tracked per bin).
+  qtyCommitted Float @default(0) @map("qty_committed")
+  qtyOnOrder   Float @default(0) @map("qty_on_order")
+  qtyBackOrder Float @default(0) @map("qty_back_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  binStocks InventoryBinStock[]
+
+  @@unique([materialCode, warehouseId])
+  @@map("inventory_management")
+}
+
+// Inventory quantities tracked per bin location (source of truth for detail/list).
+model InventoryBinStock {
+  id          String              @id @default(uuid())
+  inventoryId String              @map("inventory_id")
+  inventory   InventoryManagement @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+
+  binId String? @map("bin_id")
+  bin   Bin?    @relation(fields: [binId], references: [id])
+
+  reservedQty  Float @default(0) @map("reserved_qty")
+  availQty     Float @default(0) @map("avail_qty")
+  inTransitQty Float @default(0) @map("in_transit_qty")
+  qualityIssue Float @default(0) @map("quality_issue")
+  qtyIssue     Float @default(0) @map("qty_issue")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([inventoryId, binId])
+  @@map("inventory_bin_stocks")
+}
+
+// ===================== Discrepancy =====================
+
+enum DiscrepancyType {
+  quantity
+  quality
+}
+
+enum DiscrepancyFrom {
+  inbound
+  outbound
+}
+
+enum DiscrepancySource {
+  GR
+  Putaway
+  Picking
+  Packing
+}
+
+enum QtyDiscrepancyType {
+  shortage
+  overage
+  quarantine
+}
+
+// One discrepancy header per (GR, type). Grouped by GR number + type.
+model Discrepancy {
+  id              String          @id @default(uuid())
+  discrepancyId   String          @unique @map("discrepancy_id") // business code, e.g. DSC-<gr>-QTY
+  grId            String?         @map("gr_id")
+  goodsReceive    GoodsReceive?   @relation(fields: [grId], references: [id])
+  pickingId       String?         @map("picking_id")
+  picking         Picking?        @relation(fields: [pickingId], references: [id])
+  reportedById    Int?            @map("reported_by")
+  reportedBy      User?           @relation(fields: [reportedById], references: [id])
+  discrepancyType DiscrepancyType @map("discrepancy_type")
+  discrepancyFrom DiscrepancyFrom @map("discrepancy_from")
+  warehouseId     String?         @map("warehouse_id")
+  warehouse       Warehouse?      @relation(fields: [warehouseId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  details DiscrepancyDetail[]
+
+  @@map("discrepancies")
+}
+
+model DiscrepancyDetail {
+  id            String      @id @default(uuid())
+  discrepancyId String      @map("discrepancy_id")
+  discrepancy   Discrepancy @relation(fields: [discrepancyId], references: [id], onDelete: Cascade)
+
+  poNumber  String            @map("po_number")
+  itemName  String?           @map("item_name")
+  mrnItemId String?           @map("mrn_item_id")
+  sourceFrom DiscrepancySource @map("source_from")
+
+  qtyDiscrepancy     Int                @map("qty_discrepancy")
+  qtyDiscrepancyType QtyDiscrepancyType @map("qty_discrepancy_type")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("r_discrepancy_detail")
+}
+
+// ===================== Putaway =====================
+
+enum PutawayStatus {
+  Open
+  OnProgress
+  Closed
+}
+
+model Putaway {
+  id           String        @id @default(uuid())
+  putawayCode  String        @unique @map("putaway_code")
+  grId         String?       @map("gr_id")
+  goodsReceive GoodsReceive? @relation(fields: [grId], references: [id])
+  warehouseId  String?       @map("warehouse_id")
+  warehouse    Warehouse?    @relation(fields: [warehouseId], references: [id])
+  status       PutawayStatus @default(Open)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  items PutawayItem[]
+
+  @@map("putaways")
+}
+
+model PutawayItem {
+  id           String  @id @default(uuid())
+  putawayId    String  @map("putaway_id")
+  putaway      Putaway @relation(fields: [putawayId], references: [id], onDelete: Cascade)
+
+  mrnItemId    String  @map("mrn_item_id")
+  mrnItem      MrnItem @relation(fields: [mrnItemId], references: [id])
+
+  itemName     String? @map("item_name")
+  poNumber     String? @map("po_number")
+  materialCode String? @map("material_code")
+  vendorName   String? @map("vendor_name")
+  plannedQty   Float   @default(0) @map("planned_qty")
+
+  pickerId  Int?  @map("picker_id")
+  picker    User? @relation(fields: [pickerId], references: [id])
+
+  actualQty    Float   @default(0) @map("actual_qty")
+  qualityIssue Float   @default(0) @map("quality_issue")
+  qtyIssue     Float   @default(0) @map("qty_issue") // inbound qty shortfall
+  remainingQty Float   @default(0) @map("remaining_qty")
+  binId        String? @map("bin_id")
+  bin          Bin?    @relation(fields: [binId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("putaway_items")
+}
+
+// ===================== Outbound: Sales Order =====================
+
+// Synced from the Oracle "sales-orders" endpoint (status = Pending Fulfillment).
+// Read-only mirror in WMS. Header/detail; upserted by oracle_id / (so, line).
+model SalesOrder {
+  id       String  @id @default(uuid())
+  oracleId String  @unique @map("oracle_id") // Oracle sales order id
+  tranId   String? @map("tran_id")
+  tranDate String? @map("tran_date")
+
+  statusCode String? @map("status_code")
+  statusName String? @map("status_name")
+
+  customerId   String? @map("customer_id")
+  customerName String? @map("customer_name")
+
+  memo String?
+
+  // location -> WMS warehouse (by Oracle id) for scoping.
+  locationOracleId String?    @map("location_oracle_id")
+  locationName     String?    @map("location_name")
+  warehouseId      String?    @map("warehouse_id")
+  warehouse        Warehouse? @relation(fields: [warehouseId], references: [id])
+
+  subsidiaryId   String? @map("subsidiary_id")
+  subsidiaryName String? @map("subsidiary_name")
+  currencyId     String? @map("currency_id")
+  currencyName   String? @map("currency_name")
+
+  totalAmount  Float     @default(0) @map("total_amount")
+  lastModified DateTime? @map("last_modified")
+  dateCreated  String?   @map("date_created")
+
+  // WMS outbound fulfillment status (independent of Oracle status).
+  deliveryStatus DeliveryStatus @default(Open) @map("delivery_status")
+
+  createdBy String?  @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  items    SalesOrderItem[]
+  pickings Picking[]
+
+  @@map("sales_orders")
+}
+
+model SalesOrderItem {
+  id           String     @id @default(uuid())
+  salesOrderId String     @map("sales_order_id")
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+
+  lineNumber Int @map("line_number")
+
+  // item_id -> materials.erp_doc_id
+  itemOracleId String?   @map("item_oracle_id")
+  itemName     String?   @map("item_name")
+  materialId   String?   @map("material_id")
+  material     Material? @relation(fields: [materialId], references: [id])
+
+  quantity Float @default(0)
+  rate     Float @default(0)
+  amount   Float @default(0)
+  shipped  Float @default(0)
+
+  // WMS-managed: qty still to be picked. Initialised to quantity on sync,
+  // decremented on Generate Picking. Preserved across incremental syncs.
+  remainingQty Float @default(0) @map("remaining_qty")
+
+  description String?
+  locationId  String? @map("location_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  pickingItems  PickingItem[]
+  packingItems  PackingItem[]
+  deliveryItems DeliveryItem[]
+
+  @@unique([salesOrderId, lineNumber])
+  @@map("sales_order_items")
+}
+
+// ===================== Outbound: Picking =====================
+
+enum DeliveryStatus {
+  Open
+  ProgressPicking
+}
+
+enum PickingStatus {
+  Open
+  OnProgress
+  Closed
+}
+
+// A Picking Document generated from a Sales Order (supports partial item/qty).
+model Picking {
   id          String  @id @default(uuid())
-  mrnId       String  @unique @map("mrn_id")
-  mrn         Mrn     @relation(fields: [mrnId], references: [id], onDelete: Cascade)
-  grNumber    String  @unique @map("gr_number")
-  status      String  @default("Open")
-  warehouseId String? @map("warehouse_id")
+  pickingCode String  @unique @map("picking_code") // PICK-YYYYMMDD-NNN
+
+  salesOrderId String     @map("sales_order_id")
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id])
+
+  warehouseId String?    @map("warehouse_id")
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
+
+  status PickingStatus @default(Open)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  items         PickingItem[]
+  discrepancies Discrepancy[]
+  packing       Packing?
+
+  @@map("pickings")
+}
+
+model PickingItem {
+  id        String  @id @default(uuid())
+  pickingId String  @map("picking_id")
+  picking   Picking @relation(fields: [pickingId], references: [id], onDelete: Cascade)
+
+  salesOrderItemId String         @map("sales_order_item_id")
+  salesOrderItem   SalesOrderItem @relation(fields: [salesOrderItemId], references: [id])
+
+  materialId   String?   @map("material_id")
+  material     Material? @relation(fields: [materialId], references: [id])
+  materialCode String?   @map("material_code")
+  materialName String?   @map("material_name")
+
+  requestQty Float @default(0) @map("request_qty")
+
+  // Picking progress (accumulated across inputs). remaining = request - actual - qtyIssue - qualityIssue.
+  actualQty    Float @default(0) @map("actual_qty")
+  qtyIssue     Float @default(0) @map("qty_issue")
+  qualityIssue Float @default(0) @map("quality_issue")
+  remainingQty Float @default(0) @map("remaining_qty")
+
+  binId String? @map("bin_id")
+  bin   Bin?    @relation(fields: [binId], references: [id])
+
+  pickerId Int?  @map("picker_id")
+  picker   User? @relation(fields: [pickerId], references: [id])
+
+  status PickingStatus @default(Open)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("picking_items")
+}
+
+// ===================== Outbound: Packing =====================
+
+enum PackingStatus {
+  Open
+  Closed
+}
+
+// A Packing Document generated from a (Closed) Picking. One packing per picking.
+model Packing {
+  id          String @id @default(uuid())
+  packingCode String @unique @map("packing_code") // PACK-YYYYMMDD-NNN
+
+  pickingId String  @unique @map("picking_id")
+  picking   Picking @relation(fields: [pickingId], references: [id])
+
+  warehouseId String?    @map("warehouse_id")
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
+
+  status PackingStatus @default(Open)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  items    PackingItem[]
+  delivery Delivery?
+
+  @@map("packings")
+}
+
+model PackingItem {
+  id        String  @id @default(uuid())
+  packingId String  @map("packing_id")
+  packing   Packing @relation(fields: [packingId], references: [id], onDelete: Cascade)
+
+  // Origin Sales Order line (carried from picking) — for line_number mapping.
+  salesOrderItemId String?         @map("sales_order_item_id")
+  salesOrderItem   SalesOrderItem? @relation(fields: [salesOrderItemId], references: [id])
+
+  materialId   String?   @map("material_id")
+  material     Material? @relation(fields: [materialId], references: [id])
+  materialCode String?   @map("material_code")
+  materialName String?   @map("material_name")
+
+  qty Float @default(0) // base = picking actual qty (target to pack)
+
+  // Packing progress (accumulated across inputs).
+  // remaining = qty - actualQty - qtyIssue - qualityIssue.
+  actualQty    Float @default(0) @map("actual_qty")
+  qtyIssue     Float @default(0) @map("qty_issue")
+  qualityIssue Float @default(0) @map("quality_issue")
+  remainingQty Float @default(0) @map("remaining_qty")
+
+  binId String? @map("bin_id")
+  bin   Bin?    @relation(fields: [binId], references: [id])
+
+  pickerId Int?  @map("picker_id")
+  picker   User? @relation(fields: [pickerId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("packing_items")
+}
+
+// ===================== Outbound: Delivery =====================
+
+enum DeliveryDocStatus {
+  Open
+  Closed
+}
+
+// A Delivery Document generated from a Packing. One delivery per packing.
+// Carries the packing's header + detail. SDO ID is generated at Generate Shipment.
+model Delivery {
+  id           String  @id @default(uuid())
+  deliveryCode String  @unique @map("delivery_code") // DEL-YYYYMMDD-NNN
+  sdoId        String? @unique @map("sdo_id") // SDO-YYYYMMDD-NNN, set on shipment
+
+  // Oracle Item Fulfillment result (set on successful Generate Shipment).
+  oracleFulfillmentId Int? @map("oracle_fulfillment_id")
+  oracleLocalId       Int? @map("oracle_local_id")
+
+  packingId String  @unique @map("packing_id")
+  packing   Packing @relation(fields: [packingId], references: [id])
+
+  warehouseId String?    @map("warehouse_id")
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
+
+  status DeliveryDocStatus @default(Open)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  items DeliveryItem[]
+
+  @@map("deliveries")
+}
+
+model DeliveryItem {
+  id         String   @id @default(uuid())
+  deliveryId String   @map("delivery_id")
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  // Origin Sales Order line (carried from packing) — for line_number mapping.
+  salesOrderItemId String?         @map("sales_order_item_id")
+  salesOrderItem   SalesOrderItem? @relation(fields: [salesOrderItemId], references: [id])
+
+  materialId   String?   @map("material_id")
+  material     Material? @relation(fields: [materialId], references: [id])
+  materialCode String?   @map("material_code")
+  materialName String?   @map("material_name")
+
+  qty Float @default(0)
+
+  binId String? @map("bin_id")
+  bin   Bin?    @relation(fields: [binId], references: [id])
+
+  pickerId Int?  @map("picker_id")
+  picker   User? @relation(fields: [pickerId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("delivery_items")
+}
+
+// ===================== Complaint =====================
+
+enum ComplaintStatus {
+  Open
+  Solved
+}
+
+model Complaint {
+  id              String          @id @default(uuid())
+  complaintNumber String          @unique @map("complaint_number") // CMP-YYYYMMDD-NNN
+  menuFeature     String          @map("menu_feature")
+  title           String
+  email           String
+  description     String
+  evidences       String[]        @default([]) // base64 data URLs, max 2
+  status          ComplaintStatus @default(Open)
+
+  userId Int  @map("user_id")
+  user   User @relation(fields: [userId], references: [id])
+
+  warehouseId String?    @map("warehouse_id")
   warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  @@map("goods_receives")
+  @@map("complaints")
+}
+
+// ===================== Sync Log =====================
+
+enum SyncStatus {
+  success
+  partial
+  failed
+}
+
+// Records background/retry Oracle sync runs that had problems (failed/partial),
+// so admins can review and retry them. Successful scheduler runs are not logged.
+model SyncLog {
+  id           String     @id @default(uuid())
+  module       String // materials | warehouses | vendors | customers | mrn | sales-orders
+  trigger      String // scheduler | retry
+  status       SyncStatus
+  lastModified String?    @map("last_modified") // the "since" value used
+  upserted     Int?
+  failed       Int?
+  totalRecords Int?       @map("total_records")
+  message      String?
+  durationMs   Int?       @map("duration_ms")
+  retriedAt    DateTime?  @map("retried_at")
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  @@map("sync_logs")
 }

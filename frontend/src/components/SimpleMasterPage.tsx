@@ -2,7 +2,10 @@ import { useEffect, useState, type FormEvent } from 'react';
 import axios from 'axios';
 import api from '../lib/api';
 import Modal from './Modal';
+import FormField, { requiredErrors } from './form/FormField';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
+import { useConfirm } from '../context/ConfirmContext';
 
 // Minimal code+name+active master CRUD (Area Types / Aisles / Shelves).
 export interface MasterConfig {
@@ -25,6 +28,8 @@ type Item = Record<string, unknown> & {
 
 export default function SimpleMasterPage({ config }: { config: MasterConfig }) {
   const { has } = useAuth();
+  const toast = useToast();
+  const confirm = useConfirm();
   const canCreate = has(`${config.permission}:create`);
   const canUpdate = has(`${config.permission}:update`);
   const canDelete = has(`${config.permission}:delete`);
@@ -37,6 +42,7 @@ export default function SimpleMasterPage({ config }: { config: MasterConfig }) {
   const [name, setName] = useState('');
   const [isActive, setIsActive] = useState(true);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   async function load() {
@@ -56,6 +62,7 @@ export default function SimpleMasterPage({ config }: { config: MasterConfig }) {
     setName('');
     setIsActive(true);
     setError('');
+    setFieldErrors({});
     setModalOpen(true);
   }
   function openEdit(it: Item) {
@@ -64,12 +71,19 @@ export default function SimpleMasterPage({ config }: { config: MasterConfig }) {
     setName(String(it[config.nameKey] ?? ''));
     setIsActive(it.isActive);
     setError('');
+    setFieldErrors({});
     setModalOpen(true);
   }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
+    const errs = requiredErrors([
+      ['code', code, `${config.codeLabel} is required`],
+      ['name', name, `${config.nameLabel} is required`],
+    ]);
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) return;
     setSaving(true);
     const payload = {
       [config.codeKey]: code,
@@ -80,6 +94,7 @@ export default function SimpleMasterPage({ config }: { config: MasterConfig }) {
       if (editing) await api.put(`${config.endpoint}/${editing.id}`, payload);
       else await api.post(config.endpoint, payload);
       setModalOpen(false);
+      toast.success(editing ? 'Saved' : 'Created');
       await load();
     } catch (err) {
       if (axios.isAxiosError(err)) {
@@ -92,13 +107,21 @@ export default function SimpleMasterPage({ config }: { config: MasterConfig }) {
   }
 
   async function handleDelete(it: Item) {
-    if (!confirm(`Delete "${it[config.nameKey]}"?`)) return;
+    const ok = await confirm({
+      title: `Delete ${config.title}?`,
+      description: `"${String(it[config.nameKey] ?? '')}" will be permanently deleted.`,
+      type: 'danger',
+      confirmText: 'Delete',
+    });
+    if (!ok) return;
     try {
       await api.delete(`${config.endpoint}/${it.id}`);
+      toast.success('Deleted');
       await load();
     } catch (err) {
       if (axios.isAxiosError(err))
-        alert(err.response?.data?.message ?? 'Delete failed');
+        toast.error(err.response?.data?.message ?? 'Delete failed');
+      else toast.error('Delete failed');
     }
   }
 
@@ -209,24 +232,26 @@ export default function SimpleMasterPage({ config }: { config: MasterConfig }) {
             </div>
           )}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="label">{config.codeLabel}</label>
+            <FormField label={config.codeLabel} required error={fieldErrors.code}>
               <input
                 className="input"
                 value={code}
-                onChange={(e) => setCode(e.target.value)}
-                required
+                onChange={(e) => {
+                  setCode(e.target.value);
+                  setFieldErrors((p) => ({ ...p, code: '' }));
+                }}
               />
-            </div>
-            <div>
-              <label className="label">{config.nameLabel}</label>
+            </FormField>
+            <FormField label={config.nameLabel} required error={fieldErrors.name}>
               <input
                 className="input"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
-                required
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setFieldErrors((p) => ({ ...p, name: '' }));
+                }}
               />
-            </div>
+            </FormField>
           </div>
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input

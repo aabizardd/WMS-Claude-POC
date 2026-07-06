@@ -1,0 +1,29 @@
+# Netlify configuration — hosts the React (Vite) frontend from the monorepo.
+[build]
+  base = "frontend"          # run the build inside the frontend/ package
+  command = "npm run build"  # tsc -b && vite build
+  publish = "dist"           # → frontend/dist
+
+[build.environment]
+  NODE_VERSION = "20"
+  # VITE_API_URL is set in the Netlify UI (Site settings → Environment) so it is
+  # baked into the build, e.g. https://<your-backend>.up.railway.app/api
+  # (Split-origin: the backend must allow this site via FRONTEND_ORIGIN.)
+
+# SPA fallback — let React Router handle client-side routes.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# ── Optional: same-origin API proxy (no CORS) ──────────────────────────────
+# Instead of setting VITE_API_URL, forward /api to the backend here and leave
+# VITE_API_URL empty (frontend defaults to "/api"). Note: Netlify proxies have
+# body-size limits — for the 10 MB complaint evidence uploads prefer the direct
+# split-origin approach above.
+#
+# [[redirects]]
+#   from = "/api/*"
+#   to = "https://<your-backend>.up.railway.app/api/:splat"
+#   status = 200
+#   force = true

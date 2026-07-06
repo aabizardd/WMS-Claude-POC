@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import FormField, { requiredErrors } from '../components/form/FormField';
 import axios from 'axios';
 
 export default function Login() {
@@ -11,11 +12,18 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
+    const errs = requiredErrors([
+      ['username', username, 'Username is required'],
+      ['password', password, 'Password is required'],
+    ]);
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) return;
     setLoading(true);
     try {
       await login(username, password);
@@ -53,26 +61,32 @@ export default function Login() {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="label" htmlFor="username">
-                Username
-              </label>
+            <FormField
+              label="Username"
+              required
+              htmlFor="username"
+              error={fieldErrors.username}
+            >
               <input
                 id="username"
                 className="input"
                 type="text"
                 autoComplete="username"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                onChange={(e) => {
+                  setUsername(e.target.value);
+                  setFieldErrors((p) => ({ ...p, username: '' }));
+                }}
                 placeholder="admin"
-                required
               />
-            </div>
+            </FormField>
 
-            <div>
-              <label className="label" htmlFor="password">
-                Password
-              </label>
+            <FormField
+              label="Password"
+              required
+              htmlFor="password"
+              error={fieldErrors.password}
+            >
               <div className="relative">
                 <input
                   id="password"
@@ -80,9 +94,11 @@ export default function Login() {
                   type={showPassword ? 'text' : 'password'}
                   autoComplete="current-password"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    setFieldErrors((p) => ({ ...p, password: '' }));
+                  }}
                   placeholder="••••••••"
-                  required
                 />
                 <button
                   type="button"
@@ -92,7 +108,7 @@ export default function Login() {
                   {showPassword ? 'Hide' : 'Show'}
                 </button>
               </div>
-            </div>
+            </FormField>
 
             <button
               type="submit"

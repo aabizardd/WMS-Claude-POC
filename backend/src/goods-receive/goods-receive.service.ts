@@ -30,7 +30,9 @@ export class GoodsReceiveService {
   constructor(private prisma: PrismaService) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.GoodsReceiveWhereInput {
-    if (scope.role === 'admin') return {};
+    if (scope.role === 'admin') {
+      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
+    }
     return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
   }
 
@@ -58,7 +60,7 @@ export class GoodsReceiveService {
       this.prisma.goodsReceive.findMany({
         where,
         include: grInclude,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { mrn: { shipmentNumber: 'desc' } },
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -67,7 +69,7 @@ export class GoodsReceiveService {
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
-      attributes: { page, limit, order_by: 'created_at desc' },
+      attributes: { page, limit, order_by: 'shipment_number desc' },
       rows: rows.map((r) => this.serializeList(r)),
     };
   }
@@ -81,10 +83,18 @@ export class GoodsReceiveService {
   async updateActuals(id: string, dto: UpdateActualsDto, scope: WarehouseScope) {
     const gr = await this.getScoped(id, scope);
 
-    const validIds = new Set(gr.mrn.items.map((it) => it.id));
+    const itemById = new Map(gr.mrn.items.map((it) => [it.id, it]));
     for (const row of dto.items) {
-      if (!validIds.has(row.id)) {
+      const item = itemById.get(row.id);
+      if (!item) {
         throw new BadRequestException(`Item ${row.id} is not part of this GR`);
+      }
+      // Actual cannot exceed expected. (Shortage — actual < expected — is allowed
+      // and recorded as a discrepancy when the GR is received.)
+      if (row.qtyActual > item.qtyExpected) {
+        throw new BadRequestException(
+          `Actual (${row.qtyActual}) cannot exceed expected (${item.qtyExpected}) for "${item.itemName ?? row.id}"`,
+        );
       }
     }
 
@@ -151,6 +161,7 @@ export class GoodsReceiveService {
       // MRN information shown on the Goods Receive screen.
       mrn: {
         id: m.id,
+        oracle_id: m.oracleId,
         shipment_number: m.shipmentNumber,
         oracle_status: m.oracleStatus,
         status: m.status,

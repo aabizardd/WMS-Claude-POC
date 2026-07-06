@@ -4,6 +4,7 @@ import {
   PERMISSIONS,
   ALL_PERMISSION_KEYS,
   STAFF_PERMISSION_KEYS,
+  PICKER_PERMISSION_KEYS,
 } from '../src/auth/permissions.catalog';
 
 const prisma = new PrismaClient();
@@ -46,9 +47,16 @@ async function main() {
     create: { name: 'staff', description: 'Warehouse operator / staff' },
   });
 
-  // admin -> all permissions; staff -> read-only baseline
+  const pickerRole = await prisma.role.upsert({
+    where: { name: 'picker' },
+    update: {},
+    create: { name: 'picker', description: 'Pick & putaway operator' },
+  });
+
+  // admin -> all permissions; staff -> read-only baseline; picker -> putaway only
   await assignPermissions(adminRole.id, ALL_PERMISSION_KEYS);
   await assignPermissions(staffRole.id, STAFF_PERMISSION_KEYS);
+  await assignPermissions(pickerRole.id, PICKER_PERMISSION_KEYS);
 
   // --- Default admin user ---
   const passwordHash = await bcrypt.hash('admin123', 10);

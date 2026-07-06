@@ -179,6 +179,25 @@ export interface GoodsReceiveItem {
   item_description: string | null;
   qty_expected: number;
   qty_actual: number;
+  qty_remaining: number;
+  bin_id: string | null;
+  bin_label: string | null;
+  receiving_location_name: string | null;
+}
+
+export interface GoodsReceiveDetailMrn {
+  id: string;
+  oracle_id: string | null;
+  shipment_number: string | null;
+  oracle_status: string | null;
+  status: string;
+  expected_delivery_date: string | null;
+  actual_delivery_date: string | null;
+  vessel_number: string | null;
+  bill_of_lading: string | null;
+  port: string | null;
+  memo: string | null;
+  date_created: string | null;
   receiving_location_name: string | null;
 }
 
@@ -189,7 +208,92 @@ export interface GoodsReceiveDetail {
   shipment_number: string | null;
   receiving_location_name: string | null;
   warehouse: { id: string; name: string } | null;
+  mrn: GoodsReceiveDetailMrn;
   items: GoodsReceiveItem[];
+  created_at: string;
+}
+
+export interface GoodsReceiptResultItem {
+  item_id: string;
+  item_name: string;
+}
+
+export interface GoodsReceiptResult {
+  id: string;
+  tranid: string;
+  trandate: string;
+  po_id: string;
+  po_number: string;
+  items: GoodsReceiptResultItem[];
+}
+
+export interface ReceiveResult {
+  inboundShipmentId: number;
+  inboundShipmentStatus: string;
+  goodsReceipts: GoodsReceiptResult[];
+  pollingAttempts: number;
+  durationMs: number;
+}
+
+// ===== Inventory Management =====
+
+export interface InventoryRow {
+  id: string;
+  material_name: string | null;
+  material_code: string;
+  material_type: string | null;
+  material_category: string | null;
+  primary_uom: string | null;
+  warehouse_name: string | null;
+  reserved_qty: number;
+  avail_qty: number;
+  in_transit_qty: number;
+  quality_issue: number;
+  qty_issue: number;
+  on_hand: number;
+  // Oracle-mirrored header quantities (not tracked per bin).
+  qty_committed: number;
+  qty_on_order: number;
+  qty_back_order: number;
+}
+
+// Inventory detail is grouped by bin location (quantities summed per bin).
+export interface InventoryBinGroup {
+  bin_id: string | null;
+  bin_location: string | null;
+  warehouse_name: string | null;
+  on_hand: number;
+  reserved_qty: number;
+  avail_qty: number;
+  in_transit_qty: number;
+  quality_issue: number;
+  qty_issue: number;
+}
+
+export interface InventoryDetail extends InventoryRow {
+  warehouse_id: string | null;
+  bins: InventoryBinGroup[];
+}
+
+export interface BinOption {
+  id: string;
+  binLabel: string;
+  binCode: string;
+  warehouseId: string;
+}
+
+export interface SyncLogRow {
+  id: string;
+  module: string;
+  trigger: string;
+  status: string; // success | partial | failed
+  last_modified: string | null;
+  upserted: number | null;
+  failed: number | null;
+  total_records: number | null;
+  message: string | null;
+  duration_ms: number | null;
+  retried_at: string | null;
   created_at: string;
 }
 
@@ -309,4 +413,364 @@ export interface Bin {
   created_by: string | null;
   modified_by: string | null;
   modified_at: string | null;
+}
+
+export interface DiscrepancyRow {
+  id: string;
+  discrepancy_id: string;
+  source_number: string | null;
+  source: string | null;
+  discrepancy_type: string;
+  discrepancy_from: string;
+  reported_by: string | null;
+  warehouse_name: string | null;
+  detail_count: number;
+  created_at: string;
+}
+
+export interface DiscrepancyDetailItem {
+  id: string;
+  po_number: string;
+  item_name: string | null;
+  source_from: string;
+  qty_discrepancy: number;
+  qty_discrepancy_type: string;
+}
+
+export interface DiscrepancyDetail {
+  id: string;
+  discrepancy_id: string;
+  source_number: string | null;
+  source: string | null;
+  discrepancy_type: string;
+  discrepancy_from: string;
+  reported_by: string | null;
+  warehouse_name: string | null;
+  created_at: string;
+  details: DiscrepancyDetailItem[];
+}
+
+export interface PutawayRow {
+  id: string;
+  putaway_code: string;
+  gr_number: string | null;
+  warehouse_name: string | null;
+  status: string;
+  item_count: number;
+  created_at: string;
+}
+
+export interface PutawayItemDetail {
+  id: string;
+  mrn_item_id: string;
+  item_name: string | null;
+  po_number: string | null;
+  material_code: string | null;
+  vendor_name: string | null;
+  planned_qty: number;
+  actual_qty: number;
+  quality_issue: number;
+  qty_issue: number;
+  remaining_qty: number;
+  bin_id: string | null;
+  bin_label: string | null;
+  qty_remaining: number;
+  picker: { id: number; name: string } | null;
+}
+
+export interface PutawayDetail {
+  id: string;
+  putaway_code: string;
+  gr_number: string | null;
+  warehouse_name: string | null;
+  warehouse_id: string | null;
+  status: string;
+  created_at: string;
+  items: PutawayItemDetail[];
+}
+
+// ===== Outbound: Sales Order =====
+
+export interface SalesOrderRow {
+  id: string;
+  oracle_id: string;
+  tran_id: string | null;
+  tran_date: string | null;
+  status_name: string | null;
+  delivery_status: string;
+  customer_name: string | null;
+  location_name: string | null;
+  warehouse: { id: string; name: string } | null;
+  total_amount: number;
+  item_count: number;
+  last_modified: string | null;
+  created_at: string;
+}
+
+export interface SalesOrderItemRow {
+  id: string;
+  line_number: number;
+  item_oracle_id: string | null;
+  item_name: string | null;
+  material_code: string | null;
+  material_name: string | null;
+  quantity: number;
+  remaining_qty: number;
+  rate: number;
+  amount: number;
+  shipped: number;
+  description: string | null;
+  location_id: string | null;
+}
+
+export interface SalesOrderDetail {
+  id: string;
+  oracle_id: string;
+  tran_id: string | null;
+  tran_date: string | null;
+  status_code: string | null;
+  status_name: string | null;
+  delivery_status: string;
+  customer_id: string | null;
+  customer_name: string | null;
+  memo: string | null;
+  location_name: string | null;
+  warehouse: { id: string; name: string } | null;
+  subsidiary_name: string | null;
+  currency_name: string | null;
+  total_amount: number;
+  last_modified: string | null;
+  date_created: string | null;
+  created_at: string;
+  items: SalesOrderItemRow[];
+}
+
+export interface SalesOrderSyncResult extends ErpSyncResult {
+  unchanged: number;
+}
+
+// ===== Outbound: Picking =====
+
+export interface PickingRow {
+  id: string;
+  picking_id: string;
+  so_id: string | null;
+  so_number: string | null;
+  location: string | null;
+  customer: string | null;
+  status: string;
+  item_count: number;
+  created_at: string;
+}
+
+export interface PickingItemRow {
+  id: string;
+  status: string;
+  material_code: string | null;
+  material_name: string | null;
+  bin_available_qty: number;
+  request_qty: number;
+  actual_qty: number;
+  qty_issue: number;
+  quality_issue: number;
+  remaining_qty: number;
+  bin_id: string | null;
+  bin_label: string | null;
+  picker: { id: number; name: string } | null;
+}
+
+export interface PickingTotals {
+  request: number;
+  actual: number;
+  qty_issue: number;
+  quality_issue: number;
+  remaining: number;
+}
+
+export interface PickingDetail {
+  id: string;
+  picking_id: string;
+  so_id: string | null;
+  so_number: string | null;
+  location: string | null;
+  customer: string | null;
+  status: string;
+  created_at: string;
+  totals: PickingTotals;
+  items: PickingItemRow[];
+}
+
+// ===== Outbound: Packing =====
+
+export interface AvailablePickingRow {
+  id: string;
+  picking_id: string;
+  so_number: string | null;
+  customer: string | null;
+  location: string | null;
+  item_count: number;
+  created_at: string;
+}
+
+export interface PackingRow {
+  id: string;
+  packing_id: string;
+  picking_id: string | null;
+  so_number: string | null;
+  customer: string | null;
+  location: string | null;
+  status: string;
+  item_count: number;
+  created_at: string;
+}
+
+export interface PackingItemRow {
+  id: string;
+  material_code: string | null;
+  material_name: string | null;
+  qty: number; // base (target to pack)
+  actual_qty: number;
+  qty_issue: number;
+  quality_issue: number;
+  remaining_qty: number;
+  bin_label: string | null;
+  picker: { id: number; name: string } | null;
+}
+
+export interface PackingTotals {
+  request: number;
+  actual: number;
+  qty_issue: number;
+  quality_issue: number;
+  remaining: number;
+}
+
+export interface PackingDetail {
+  id: string;
+  packing_id: string;
+  picking_id: string | null;
+  so_id: string | null;
+  so_number: string | null;
+  customer: string | null;
+  location: string | null;
+  status: string;
+  created_at: string;
+  totals: PackingTotals;
+  items: PackingItemRow[];
+}
+
+// ===== Outbound: Delivery =====
+
+export interface DeliveryRow {
+  id: string;
+  delivery_id: string;
+  sdo_id: string | null;
+  packing_id: string | null;
+  so_number: string | null;
+  customer: string | null;
+  location: string | null;
+  status: string;
+  item_count: number;
+  created_at: string;
+}
+
+export interface DeliveryTracking {
+  so_id: string | null;
+  so_number: string | null;
+  customer: string | null;
+  picking_id: string | null;
+  picking_code: string | null;
+  picking_status: string | null;
+  packing_id: string | null;
+  packing_code: string | null;
+  delivery_code: string;
+  sdo_id: string | null;
+  delivery_status: string;
+}
+
+export interface DeliveryItemRow {
+  id: string;
+  line_number: number | null;
+  material_code: string | null;
+  material_name: string | null;
+  qty: number;
+  uom: string | null;
+  bin_label: string | null;
+  picker: { id: number; name: string } | null;
+}
+
+export interface DeliveryDetail {
+  id: string;
+  delivery_id: string;
+  sdo_id: string | null;
+  packing_id: string | null;
+  so_id: string | null;
+  so_oracle_id: string | null;
+  so_number: string | null;
+  customer: string | null;
+  location: string | null;
+  status: string;
+  oracle_fulfillment_id: number | null;
+  oracle_local_id: number | null;
+  created_at: string;
+  tracking: DeliveryTracking;
+  items: DeliveryItemRow[];
+}
+
+// Response of PUT /delivery/:id/generate-shipment — detail + Oracle result.
+export interface ShipmentResult extends DeliveryDetail {
+  fulfillment: {
+    message: string;
+    fulfillment_id: number | null;
+    local_id: number | null;
+  };
+}
+
+// Data for the Generate Picking form.
+export interface PickableBin {
+  bin_id: string | null;
+  bin_label: string | null;
+  avail_qty: number;
+}
+
+export interface PickableItem {
+  id: string;
+  line_number: number;
+  item_name: string | null;
+  material_code: string | null;
+  material_name: string | null;
+  quantity: number;
+  remaining_qty: number;
+  available_bins: PickableBin[];
+}
+
+export interface Pickable {
+  id: string;
+  tran_id: string | null;
+  status_name: string | null;
+  delivery_status: string;
+  customer_name: string | null;
+  warehouse: { id: string; name: string } | null;
+  can_generate: boolean;
+  items: PickableItem[];
+}
+
+// ===== Complaint =====
+
+export interface ComplaintRow {
+  id: string;
+  complaint_number: string;
+  menu_feature: string;
+  title: string;
+  email: string;
+  description: string;
+  status: string;
+  evidence_count: number;
+  reported_by: string | null;
+  warehouse: { id: string; name: string } | null;
+  created_at: string;
+}
+
+export interface ComplaintDetail extends ComplaintRow {
+  evidences: string[];
 }

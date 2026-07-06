@@ -50,9 +50,13 @@ export class BinsService {
           ],
         }
       : {};
-    // Non-admins only see bins in their warehouse.
+    // Non-admins only see bins in their warehouse (unchanged).
+    // Admins follow the active warehouse from the header selector when one is
+    // selected; otherwise they see all.
     if (scope.role !== 'admin') {
       where.warehouseId = scope.warehouseId ?? '__no_warehouse__';
+    } else if (scope.warehouseId) {
+      where.warehouseId = scope.warehouseId;
     }
 
     const [total, rows] = await this.prisma.$transaction([
