@@ -7,6 +7,17 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateComplaintDto } from './dto/create-complaint.dto';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
+
+type ComplaintOrder = Prisma.ComplaintOrderByWithRelationInput;
+const COMPLAINT_SORTABLE: Record<string, (d: SortDir) => ComplaintOrder> = {
+  complaint_number: (d) => ({ complaintNumber: d }),
+  menu_feature: (d) => ({ menuFeature: d }),
+  title: (d) => ({ title: d }),
+  reported_by: (d) => ({ user: { name: d } }),
+  status: (d) => ({ status: d }),
+  created_at: (d) => ({ createdAt: d }),
+};
 
 // Actor derived from the JWT (+ active warehouse header for admin).
 export interface ComplaintActor {
@@ -79,11 +90,24 @@ export class ComplaintsService {
   }
 
   async findAll(
-    query: { page?: number; limit?: number; search?: string; status?: string },
+    query: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: string;
+      sort_by?: string;
+      sort_order?: string;
+    },
     actor: ComplaintActor,
   ) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
+    const orderBy = buildOrderBy(
+      query.sort_by,
+      query.sort_order,
+      COMPLAINT_SORTABLE,
+      { createdAt: 'desc' },
+    );
 
     const where: Prisma.ComplaintWhereInput = { ...this.scopeWhere(actor) };
     if (query.status === 'Open' || query.status === 'Solved') {
@@ -102,7 +126,7 @@ export class ComplaintsService {
       this.prisma.complaint.findMany({
         where,
         include: listInclude,
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -111,7 +135,12 @@ export class ComplaintsService {
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
-      attributes: { page, limit, order_by: 'created_at desc' },
+      attributes: {
+        page,
+        limit,
+        sort_by: query.sort_by ?? null,
+        sort_order: query.sort_order ?? null,
+      },
       rows: rows.map((r) => this.serialize(r, false)),
     };
   }

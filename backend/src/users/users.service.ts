@@ -22,6 +22,10 @@ const userSelect = {
   role: { select: { id: true, name: true } },
   warehouseId: true,
   warehouse: { select: { id: true, name: true } },
+  departmentId: true,
+  department: { select: { id: true, name: true } },
+  subsidiaryId: true,
+  subsidiary: { select: { id: true, name: true, fullName: true } },
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.UserSelect;
@@ -89,6 +93,7 @@ export class UsersService {
   async create(dto: CreateUserDto) {
     await this.ensureRoleExists(dto.roleId);
     await this.ensureWarehouseExists(dto.warehouseId);
+    const org = await this.resolveOrg(dto.departmentId, dto.subsidiaryId);
     const password = await bcrypt.hash(dto.password, 10);
     try {
       return await this.prisma.user.create({
@@ -101,6 +106,8 @@ export class UsersService {
           password,
           roleId: dto.roleId,
           warehouseId: dto.warehouseId,
+          departmentId: org.departmentId,
+          subsidiaryId: org.subsidiaryId,
           isActive: dto.isActive ?? true,
         },
         select: userSelect,
@@ -108,6 +115,55 @@ export class UsersService {
     } catch (e) {
       throw this.handlePrismaError(e);
     }
+  }
+
+  // Validate the department/subsidiary combination and return the ids to store.
+  // Rules: subsidiary requires a department; subsidiary must belong to the
+  // department (department.subsidiaryId is a comma-joined list of subsidiary
+  // oracle ids). Clearing the department also clears the subsidiary.
+  private async resolveOrg(
+    departmentId?: string | null,
+    subsidiaryId?: string | null,
+  ): Promise<{ departmentId: string | null; subsidiaryId: string | null }> {
+    const dept = departmentId ?? null;
+    const sub = subsidiaryId ?? null;
+
+    if (!dept) {
+      // No department -> subsidiary must be empty too.
+      if (sub) {
+        throw new BadRequestException(
+          'Select a department before choosing a subsidiary',
+        );
+      }
+      return { departmentId: null, subsidiaryId: null };
+    }
+
+    const department = await this.prisma.department.findUnique({
+      where: { id: dept },
+      select: { subsidiaryId: true },
+    });
+    if (!department) {
+      throw new BadRequestException('Selected department does not exist');
+    }
+    if (!sub) return { departmentId: dept, subsidiaryId: null };
+
+    const subsidiary = await this.prisma.subsidiary.findUnique({
+      where: { id: sub },
+      select: { oracleId: true },
+    });
+    if (!subsidiary) {
+      throw new BadRequestException('Selected subsidiary does not exist');
+    }
+    const allowed = (department.subsidiaryId ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!allowed.includes(subsidiary.oracleId)) {
+      throw new BadRequestException(
+        'Subsidiary does not belong to the selected department',
+      );
+    }
+    return { departmentId: dept, subsidiaryId: sub };
   }
 
   async update(id: number, dto: UpdateUserDto, scope?: WarehouseScope) {
@@ -149,6 +205,27 @@ export class UsersService {
     if (dto.warehouseId) {
       data.warehouse = { connect: { id: dto.warehouseId } };
     }
+
+    // Department / subsidiary — validated together as a combination. When a
+    // department changes, the (reset) subsidiary is re-validated against it.
+    if (dto.departmentId !== undefined || dto.subsidiaryId !== undefined) {
+      const finalDept =
+        dto.departmentId !== undefined
+          ? dto.departmentId
+          : existing.departmentId;
+      const finalSub =
+        dto.subsidiaryId !== undefined
+          ? dto.subsidiaryId
+          : existing.subsidiaryId;
+      const org = await this.resolveOrg(finalDept, finalSub);
+      data.department = org.departmentId
+        ? { connect: { id: org.departmentId } }
+        : { disconnect: true };
+      data.subsidiary = org.subsidiaryId
+        ? { connect: { id: org.subsidiaryId } }
+        : { disconnect: true };
+    }
+
     if (dto.password) {
       data.password = await bcrypt.hash(dto.password, 10);
     }

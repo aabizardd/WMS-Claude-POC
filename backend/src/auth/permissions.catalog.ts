@@ -30,6 +30,9 @@ const RESOURCES: { resource: string; label: string; actions: string[] }[] = [
   { resource: 'vendors', label: 'Vendors', actions: ['read', 'sync'] },
   // Customers are synced from Oracle (read-only mirror) — read/sync only.
   { resource: 'customers', label: 'Customers', actions: ['read', 'sync'] },
+  { resource: 'departments', label: 'Departments', actions: ['read', 'sync'] },
+  { resource: 'classes', label: 'Classes', actions: ['read', 'sync'] },
+  { resource: 'subsidiaries', label: 'Subsidiaries', actions: ['read', 'sync'] },
   {
     resource: 'area-types',
     label: 'Area Types',
@@ -43,6 +46,8 @@ const RESOURCES: { resource: string; label: string; actions: string[] }[] = [
   { resource: 'goods-receive', label: 'Goods Receive', actions: ['read', 'update'] },
   // Inventory is generated automatically on receive; manual bin adjustment adds update.
   { resource: 'inventory', label: 'Inventory', actions: ['read', 'update'] },
+  // Inventory Adjustment — manual qty/quality issue adjustment (create + view).
+  { resource: 'inventory-adjustments', label: 'Inventory Adjustments', actions: ['read', 'create', 'approve'] },
   // Discrepancy is recorded automatically (quantity gap on receive) — read only.
   { resource: 'discrepancy', label: 'Discrepancy', actions: ['read'] },
   // Putaway generated from Goods Receive — read, create, update.
@@ -85,9 +90,13 @@ export const STAFF_PERMISSION_KEYS = [
   'bins:read',
   'vendors:read',
   'customers:read',
+  'departments:read',
+  'classes:read',
+  'subsidiaries:read',
   'mrn:read',
   'goods-receive:read',
   'inventory:read',
+  'inventory-adjustments:read',
   'discrepancy:read',
   'putaway:read',
   'sales-orders:read',

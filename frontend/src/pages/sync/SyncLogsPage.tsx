@@ -5,6 +5,8 @@ import type { Paginated, SyncLogRow } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
+import { useSort } from '../../hooks/useSort';
+import SortableTh from '../../components/SortableTh';
 
 const LIMIT = 10;
 
@@ -28,11 +30,16 @@ export default function SyncLogsPage() {
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState('failed'); // default: show failures
   const [retrying, setRetrying] = useState<string | null>(null);
+  const { sort, toggle, params } = useSort();
+  const onSort = (col: string) => {
+    setPage(1);
+    toggle(col);
+  };
 
   async function load() {
     setLoading(true);
     const r = await api.get<Paginated<SyncLogRow>>('/sync-logs', {
-      params: { page, limit: LIMIT, status: status || undefined },
+      params: { page, limit: LIMIT, status: status || undefined, ...params() },
     });
     setData(r.data);
     setLoading(false);
@@ -40,7 +47,7 @@ export default function SyncLogsPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, status]);
+  }, [page, status, sort.sortBy, sort.order]);
 
   async function handleRetry(row: SyncLogRow) {
     const ok = await confirm({
@@ -110,13 +117,13 @@ export default function SyncLogsPage() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="table-head">
               <tr>
-                <th className="px-5 py-3">Module</th>
-                <th className="px-5 py-3">Trigger</th>
-                <th className="px-5 py-3">Status</th>
-                <th className="px-5 py-3 text-right">Upserted</th>
-                <th className="px-5 py-3 text-right">Failed</th>
-                <th className="px-5 py-3">Message</th>
-                <th className="px-5 py-3">When</th>
+                <SortableTh label="Module" col="module" sort={sort} onSort={onSort} pad="px-5" />
+                <SortableTh label="Trigger" col="trigger" sort={sort} onSort={onSort} pad="px-5" />
+                <SortableTh label="Status" col="status" sort={sort} onSort={onSort} pad="px-5" />
+                <SortableTh label="Upserted" col="upserted" sort={sort} onSort={onSort} align="right" pad="px-5" />
+                <SortableTh label="Failed" col="failed" sort={sort} onSort={onSort} align="right" pad="px-5" />
+                <SortableTh label="Message" col="message" sort={sort} onSort={onSort} pad="px-5" />
+                <SortableTh label="When" col="created_at" sort={sort} onSort={onSort} pad="px-5" />
                 <th className="px-5 py-3 text-right">Action</th>
               </tr>
             </thead>

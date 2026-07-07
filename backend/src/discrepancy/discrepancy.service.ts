@@ -1,11 +1,21 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
 
 export interface WarehouseScope {
   role: string;
   warehouseId: string | null;
 }
+
+type DiscrepancyOrder = Prisma.DiscrepancyOrderByWithRelationInput;
+const DISCREPANCY_SORTABLE: Record<string, (d: SortDir) => DiscrepancyOrder> = {
+  discrepancy_id: (d) => ({ discrepancyId: d }),
+  type: (d) => ({ discrepancyType: d }),
+  from: (d) => ({ discrepancyFrom: d }),
+  reported_by: (d) => ({ reportedBy: { name: d } }),
+  created_at: (d) => ({ createdAt: d }),
+};
 
 const listInclude = {
   goodsReceive: { select: { grNumber: true } },
@@ -56,11 +66,24 @@ export class DiscrepancyService {
   // ---------- read ----------
 
   async findAll(
-    query: { page?: number; limit?: number; search?: string; type?: string },
+    query: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      type?: string;
+      sort_by?: string;
+      sort_order?: string;
+    },
     scope: WarehouseScope,
   ) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
+    const orderBy = buildOrderBy(
+      query.sort_by,
+      query.sort_order,
+      DISCREPANCY_SORTABLE,
+      { createdAt: 'desc' },
+    );
 
     const where: Prisma.DiscrepancyWhereInput = { ...this.scopeWhere(scope) };
     if (query.type === 'quantity' || query.type === 'quality') {
@@ -87,7 +110,7 @@ export class DiscrepancyService {
       this.prisma.discrepancy.findMany({
         where,
         include: listInclude,
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -96,7 +119,13 @@ export class DiscrepancyService {
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
-      attributes: { page, limit, order_by: 'created_at desc', type: query.type ?? null },
+      attributes: {
+        page,
+        limit,
+        type: query.type ?? null,
+        sort_by: query.sort_by ?? null,
+        sort_order: query.sort_order ?? null,
+      },
       rows: rows.map((r) => this.serializeList(r)),
     };
   }

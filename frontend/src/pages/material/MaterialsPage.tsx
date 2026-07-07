@@ -5,6 +5,8 @@ import api from '../../lib/api';
 import Modal from '../../components/Modal';
 import type { ErpSyncResult, Material, Paginated } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { useSort } from '../../hooks/useSort';
+import SortableTh from '../../components/SortableTh';
 
 const LIMIT = 10;
 
@@ -14,6 +16,11 @@ export default function MaterialsPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const { sort, toggle, params } = useSort();
+  const onSort = (col: string) => {
+    setPage(1);
+    toggle(col);
+  };
 
   // RBAC
   const { has } = useAuth();
@@ -29,7 +36,7 @@ export default function MaterialsPage() {
   async function load() {
     setLoading(true);
     const r = await api.get<Paginated<Material>>('/materials', {
-      params: { page, limit: LIMIT, search: search || undefined },
+      params: { page, limit: LIMIT, search: search || undefined, ...params() },
     });
     setData(r.data);
     setLoading(false);
@@ -38,7 +45,7 @@ export default function MaterialsPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search]);
+  }, [page, search, sort.sortBy, sort.order]);
 
   async function openSync() {
     setSyncError('');
@@ -148,12 +155,12 @@ export default function MaterialsPage() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-6 py-3">ERP ID</th>
-                <th className="px-6 py-3">Code</th>
-                <th className="px-6 py-3">Name</th>
-                <th className="px-6 py-3">Category</th>
-                <th className="px-6 py-3">Type</th>
-                <th className="px-6 py-3">Primary UOM</th>
+                <SortableTh label="ERP ID" col="erp_id" sort={sort} onSort={onSort} />
+                <SortableTh label="Code" col="material_code" sort={sort} onSort={onSort} />
+                <SortableTh label="Name" col="material_name" sort={sort} onSort={onSort} />
+                <SortableTh label="Category" col="material_category" sort={sort} onSort={onSort} />
+                <SortableTh label="Type" col="material_type" sort={sort} onSort={onSort} />
+                <SortableTh label="Primary UOM" col="primary_uom" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3">Qty</th>
                 <th className="px-6 py-3">Source</th>
                 <th className="px-6 py-3 text-right">Actions</th>

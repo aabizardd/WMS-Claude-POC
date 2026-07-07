@@ -55,7 +55,14 @@
       "Bash(tail -4 install.log)",
       "Bash(node -e \"const s=require\\('child_process'\\).execSync; for\\(const n of ['1-business','2-system','3-integration']\\){const {width,height}=require\\('image-size'\\)\\(require\\('fs'\\).readFileSync\\('diagrams/'+n+'.png'\\)\\); console.log\\(n, width, height\\);}\")",
       "Bash(node -e 'require\\('\\\\''dotenv'\\\\''\\).config\\(\\); const {PrismaClient}=require\\('\\\\''@prisma/client'\\\\''\\); const p=new PrismaClient\\(\\); p.$queryRawUnsafe\\('\\\\''show server_version'\\\\''\\).then\\(r=>{console.log\\('\\\\''PG'\\\\'', r[0].server_version\\); return p.$disconnect\\(\\);}\\)')",
-      "Bash(npx ts-node -e ' *)"
+      "Bash(npx ts-node -e ' *)",
+      "Bash(grep -aE \"error TS|\\\\.ts\\\\\\(\" /tmp/depsync.log | head)",
+      "Bash(grep -nA4 \"sync-erp\\\\|syncErp\")",
+      "Bash(grep -n \"useState\\\\|api.get\\\\|useEffect\\\\|}, \\\\[\\\\|<th\\\\|import { useAuth\" /c/WMS/frontend/src/pages/vendor/VendorsPage.tsx)",
+      "Bash(grep -n \"api.get<Paginated\\\\|}, \\\\[page\\\\|import { useAuth\\\\|const \\\\[search\" /c/WMS/frontend/src/pages/warehouse/WarehousesPage.tsx)",
+      "Bash(grep -n \"api.get<Paginated\\\\|}, \\\\[page\\\\|import { useAuth\\\\|const \\\\[search\\\\|useSort\" /c/WMS/frontend/src/pages/complaint/ComplaintsPage.tsx)",
+      "Bash(grep -n \"api.get<Paginated\\\\|}, \\\\[page\\\\|import { useAuth\\\\|const \\\\[search\\\\|params:\" /c/WMS/frontend/src/pages/discrepancy/DiscrepancyPage.tsx)",
+      "Bash(perl -0pi -e \"s/\\(    inventory: 'Inventory',\\\\n\\)/\\\\$1    inventoryAdjustment: 'Inventory Adjustment',\\\\n/; s/\\(    inventory: 'Inventaris',\\\\n\\)/\\\\$1    inventoryAdjustment: 'Penyesuaian Inventaris',\\\\n/; s/\\(    inventory: '库存',\\\\n\\)/\\\\$1    inventoryAdjustment: '库存调整',\\\\n/\" src/i18n/resources.ts)"
     ]
   }
 }

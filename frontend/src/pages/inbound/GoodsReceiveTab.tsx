@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../lib/api';
 import type { GoodsReceiveRow, Paginated } from '../../types';
+import { useSort } from '../../hooks/useSort';
+import SortableTh from '../../components/SortableTh';
 import { useAuth } from '../../context/AuthContext';
 import { grStatusBadgeClass, grStatusLabel } from '../../lib/grStatus';
 
@@ -21,11 +23,16 @@ export default function GoodsReceiveTab() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const { sort, toggle, params } = useSort();
+  const onSort = (col: string) => {
+    setPage(1);
+    toggle(col);
+  };
 
   async function load() {
     setLoading(true);
     const r = await api.get<Paginated<GoodsReceiveRow>>('/goods-receive', {
-      params: { page, limit: LIMIT, search: search || undefined },
+      params: { page, limit: LIMIT, search: search || undefined, ...params() },
     });
     setData(r.data);
     setLoading(false);
@@ -34,7 +41,7 @@ export default function GoodsReceiveTab() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search]);
+  }, [page, search, sort.sortBy, sort.order]);
 
   useEffect(() => {
     const onStatusChanged = () => load();
@@ -97,11 +104,11 @@ export default function GoodsReceiveTab() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-6 py-3">GR Number</th>
-                <th className="px-6 py-3">Shipment No.</th>
-                <th className="px-6 py-3">Receiving Location</th>
+                <SortableTh label="GR Number" col="gr_number" sort={sort} onSort={onSort} />
+                <SortableTh label="Shipment No." col="shipment_number" sort={sort} onSort={onSort} />
+                <SortableTh label="Receiving Location" col="receiving_location" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3">Items</th>
-                <th className="px-6 py-3">Status</th>
+                <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
             </thead>

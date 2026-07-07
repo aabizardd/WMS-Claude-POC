@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../lib/api';
 import type { InventoryRow, Paginated } from '../../types';
+import { useSort } from '../../hooks/useSort';
+import SortableTh from '../../components/SortableTh';
 
 const LIMIT = 10;
 
@@ -11,11 +13,16 @@ export default function InventoryPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const { sort, toggle, params } = useSort();
+  const onSort = (col: string) => {
+    setPage(1);
+    toggle(col);
+  };
 
   async function load() {
     setLoading(true);
     const r = await api.get<Paginated<InventoryRow>>('/inventory', {
-      params: { page, limit: LIMIT, search: search || undefined },
+      params: { page, limit: LIMIT, search: search || undefined, ...params() },
     });
     setData(r.data);
     setLoading(false);
@@ -23,7 +30,7 @@ export default function InventoryPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search]);
+  }, [page, search, sort.sortBy, sort.order]);
 
   function onSearch(e: FormEvent) {
     e.preventDefault();
@@ -75,11 +82,11 @@ export default function InventoryPage() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-5 py-3">Material</th>
-                <th className="px-5 py-3">Type</th>
-                <th className="px-5 py-3">Category</th>
-                <th className="px-5 py-3">UoM</th>
-                <th className="px-5 py-3">Warehouse</th>
+                <SortableTh label="Material" col="material_code" sort={sort} onSort={onSort} pad="px-5" />
+                <SortableTh label="Type" col="material_type" sort={sort} onSort={onSort} pad="px-5" />
+                <SortableTh label="Category" col="material_category" sort={sort} onSort={onSort} pad="px-5" />
+                <SortableTh label="UoM" col="primary_uom" sort={sort} onSort={onSort} pad="px-5" />
+                <SortableTh label="Warehouse" col="warehouse_name" sort={sort} onSort={onSort} pad="px-5" />
                 <th className="px-5 py-3 text-right">On Hand</th>
                 <th className="px-5 py-3 text-right">Reserved</th>
                 <th className="px-5 py-3 text-right">Avail</th>

@@ -7,6 +7,20 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdjustBinsDto } from './dto/adjust-bins.dto';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
+
+type InvOrder = Prisma.InventoryManagementOrderByWithRelationInput;
+// Only real columns are server-sortable; the quantity columns are aggregates
+// computed from bin stocks and cannot be ordered by Prisma.
+const INVENTORY_SORTABLE: Record<string, (d: SortDir) => InvOrder> = {
+  material_code: (d) => ({ materialCode: d }),
+  material_type: (d) => ({ material: { materialType: { materialTypeName: d } } }),
+  material_category: (d) => ({
+    material: { materialCategory: { materialCategoryName: d } },
+  }),
+  primary_uom: (d) => ({ material: { primaryUom: { uomCode: d } } }),
+  warehouse_name: (d) => ({ warehouse: { name: d } }),
+};
 
 export interface WarehouseScope {
   role: string;
@@ -76,11 +90,23 @@ export class InventoryService {
   // ---------- read ----------
 
   async findAll(
-    query: { page?: number; limit?: number; search?: string },
+    query: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      sort_by?: string;
+      sort_order?: string;
+    },
     scope: WarehouseScope,
   ) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
+    const orderBy = buildOrderBy(
+      query.sort_by,
+      query.sort_order,
+      INVENTORY_SORTABLE,
+      { materialCode: 'asc' },
+    );
 
     const where: Prisma.InventoryManagementWhereInput = {
       ...this.scopeWhere(scope),
@@ -101,7 +127,7 @@ export class InventoryService {
       this.prisma.inventoryManagement.findMany({
         where,
         include: listInclude,
-        orderBy: { materialCode: 'asc' },
+        orderBy,
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -110,7 +136,12 @@ export class InventoryService {
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
-      attributes: { page, limit, order_by: 'material_code asc' },
+      attributes: {
+        page,
+        limit,
+        sort_by: query.sort_by ?? null,
+        sort_order: query.sort_order ?? null,
+      },
       rows: rows.map((r) => this.serializeList(r)),
     };
   }

@@ -1,7 +1,8 @@
 import { Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { SortableQueryDto } from '../../common/dto/sortable-query.dto';
 
-export class QueryMrnDto {
+export class QueryMrnDto extends SortableQueryDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()

@@ -36,6 +36,16 @@ export class CreateUserDto {
   @IsUUID()
   warehouseId!: string;
 
+  // Optional org assignment. Subsidiary requires a department and must belong
+  // to it (validated in the service).
+  @IsOptional()
+  @IsUUID()
+  departmentId?: string | null;
+
+  @IsOptional()
+  @IsUUID()
+  subsidiaryId?: string | null;
+
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;

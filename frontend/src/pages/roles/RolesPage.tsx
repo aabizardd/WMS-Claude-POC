@@ -6,6 +6,8 @@ import type { Role } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
+import { useSort, sortRows } from '../../hooks/useSort';
+import SortableTh from '../../components/SortableTh';
 
 export default function RolesPage() {
   const { has } = useAuth();
@@ -17,6 +19,18 @@ export default function RolesPage() {
 
   const [roles, setRoles] = useState<Role[]>([]);
   const [loading, setLoading] = useState(true);
+  const { sort, toggle } = useSort();
+
+  // Client-side sorting (this list is not paginated).
+  const rows = sortRows(roles, sort, (role, col) => {
+    switch (col) {
+      case 'name': return role.name;
+      case 'description': return role.description ?? null;
+      case 'permissions': return role.permissions?.length ?? 0;
+      case 'users': return role.userCount ?? 0;
+      default: return null;
+    }
+  });
 
   async function load() {
     setLoading(true);
@@ -68,10 +82,10 @@ export default function RolesPage() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-6 py-3">Name</th>
-                <th className="px-6 py-3">Description</th>
-                <th className="px-6 py-3">Permissions</th>
-                <th className="px-6 py-3">Users</th>
+                <SortableTh label="Name" col="name" sort={sort} onSort={toggle} />
+                <SortableTh label="Description" col="description" sort={sort} onSort={toggle} />
+                <SortableTh label="Permissions" col="permissions" sort={sort} onSort={toggle} />
+                <SortableTh label="Users" col="users" sort={sort} onSort={toggle} />
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
             </thead>
@@ -89,7 +103,7 @@ export default function RolesPage() {
                   </td>
                 </tr>
               ) : (
-                roles.map((role) => (
+                rows.map((role) => (
                   <tr key={role.id} className="hover:bg-slate-50">
                     <td className="px-6 py-3">
                       <span className="rounded-full bg-brand-50 px-2.5 py-1 text-xs font-medium capitalize text-brand-700">

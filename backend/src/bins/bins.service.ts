@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateBinDto } from './dto/create-bin.dto';
 import { UpdateBinDto } from './dto/update-bin.dto';
 import { QueryBinDto } from './dto/query-bin.dto';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
 
 const binInclude = {
   warehouse: true,
@@ -25,13 +26,18 @@ export interface WarehouseScope {
   warehouseId: string | null;
 }
 
-const ORDER_FIELD_MAP: Record<string, keyof Prisma.BinOrderByWithRelationInput> =
-  {
-    created_at: 'createdAt',
-    modified_at: 'modifiedAt',
-    bin_label: 'binLabel',
-    bin_code: 'binCode',
-  };
+type BinOrder = Prisma.BinOrderByWithRelationInput;
+const SORTABLE: Record<string, (d: SortDir) => BinOrder> = {
+  bin_label: (d) => ({ binLabel: d }),
+  bin_code: (d) => ({ binCode: d }),
+  warehouse: (d) => ({ warehouse: { name: d } }),
+  aisle: (d) => ({ aisle: { aisleName: d } }),
+  shelf: (d) => ({ shelf: { shelfLabel: d } }),
+  area_type: (d) => ({ areaType: { areaTypeName: d } }),
+  status: (d) => ({ isActive: d }),
+  created_at: (d) => ({ createdAt: d }),
+};
+const DEFAULT_ORDER: BinOrder = { binLabel: 'desc' };
 
 @Injectable()
 export class BinsService {
@@ -40,7 +46,12 @@ export class BinsService {
   async findAll(query: QueryBinDto, scope: WarehouseScope) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
-    const orderBy = this.parseOrderBy(query.order_by ?? 'bin_label desc');
+    const orderBy = buildOrderBy(
+      query.sort_by,
+      query.sort_order,
+      SORTABLE,
+      DEFAULT_ORDER,
+    );
 
     const where: Prisma.BinWhereInput = query.search
       ? {
@@ -73,7 +84,12 @@ export class BinsService {
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
-      attributes: { page, limit, order_by: query.order_by ?? 'bin_label desc' },
+      attributes: {
+        page,
+        limit,
+        sort_by: query.sort_by ?? null,
+        sort_order: query.sort_order ?? null,
+      },
       rows: rows.map((r) => this.serialize(r)),
     };
   }
@@ -204,12 +220,6 @@ export class BinsService {
     }
   }
 
-  private parseOrderBy(orderByStr: string): Prisma.BinOrderByWithRelationInput {
-    const [rawField, rawDir] = orderByStr.trim().split(/\s+/);
-    const field = ORDER_FIELD_MAP[rawField] ?? 'binLabel';
-    const dir: Prisma.SortOrder = rawDir === 'asc' ? 'asc' : 'desc';
-    return { [field]: dir };
-  }
 
   // Shape the entity into the reference API response format.
   private serialize(b: BinWithRelations) {

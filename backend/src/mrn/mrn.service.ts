@@ -1,11 +1,20 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
 
 export interface WarehouseScope {
   role: string;
   warehouseId: string | null;
 }
+
+type MrnOrder = Prisma.MrnOrderByWithRelationInput;
+const MRN_SORTABLE: Record<string, (d: SortDir) => MrnOrder> = {
+  shipment_number: (d) => ({ shipmentNumber: d }),
+  receiving_location: (d) => ({ receivingLocationName: d }),
+  status: (d) => ({ status: d }),
+  created_at: (d) => ({ createdAt: d }),
+};
 
 const mrnInclude = {
   items: true,
@@ -27,11 +36,20 @@ export class MrnService {
   }
 
   async findAll(
-    query: { page?: number; limit?: number; search?: string },
+    query: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      sort_by?: string;
+      sort_order?: string;
+    },
     scope: WarehouseScope,
   ) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
+    const orderBy = buildOrderBy(query.sort_by, query.sort_order, MRN_SORTABLE, {
+      shipmentNumber: 'desc',
+    });
 
     const where: Prisma.MrnWhereInput = { ...this.scopeWhere(scope) };
     if (query.search) {
@@ -46,7 +64,7 @@ export class MrnService {
       this.prisma.mrn.findMany({
         where,
         include: mrnInclude,
-        orderBy: { shipmentNumber: 'desc' },
+        orderBy,
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -55,7 +73,12 @@ export class MrnService {
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
-      attributes: { page, limit, order_by: 'shipment_number desc' },
+      attributes: {
+        page,
+        limit,
+        sort_by: query.sort_by ?? null,
+        sort_order: query.sort_order ?? null,
+      },
       rows: rows.map((r) => this.serialize(r)),
     };
   }

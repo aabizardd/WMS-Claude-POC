@@ -8,6 +8,16 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import type { GeneratePutawayDto } from './dto/generate-putaway.dto';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
+
+type PutawayOrder = Prisma.PutawayOrderByWithRelationInput;
+const PUTAWAY_SORTABLE: Record<string, (d: SortDir) => PutawayOrder> = {
+  putaway_code: (d) => ({ putawayCode: d }),
+  gr_number: (d) => ({ goodsReceive: { grNumber: d } }),
+  warehouse: (d) => ({ warehouse: { name: d } }),
+  status: (d) => ({ status: d }),
+  created_at: (d) => ({ createdAt: d }),
+};
 
 export interface WarehouseScope {
   role: string;
@@ -58,11 +68,16 @@ export class PutawayService {
       limit?: number;
       search?: string;
       history?: string | boolean;
+      sort_by?: string;
+      sort_order?: string;
     },
     scope: WarehouseScope,
   ) {
     const page = Number(query.page) || 1;
     const limit = Number(query.limit) || 10;
+    const orderBy = buildOrderBy(query.sort_by, query.sort_order, PUTAWAY_SORTABLE, {
+      createdAt: 'desc',
+    });
 
     const where: Prisma.PutawayWhereInput = { ...this.scopeWhere(scope) };
     // History tab = Closed only; Putaway tab = active (Open / OnProgress).
@@ -84,7 +99,7 @@ export class PutawayService {
       this.prisma.putaway.findMany({
         where,
         include: listInclude,
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -93,7 +108,12 @@ export class PutawayService {
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
-      attributes: { page, limit, order_by: 'created_at desc' },
+      attributes: {
+        page,
+        limit,
+        sort_by: query.sort_by ?? null,
+        sort_order: query.sort_order ?? null,
+      },
       rows: rows.map((r) => this.serializeList(r)),
     };
   }

@@ -1,7 +1,8 @@
 import { Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { SortableQueryDto } from '../../common/dto/sortable-query.dto';
 
-export class QueryBinDto {
+export class QueryBinDto extends SortableQueryDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -18,8 +19,4 @@ export class QueryBinDto {
   @IsOptional()
   @IsString()
   search?: string;
-
-  @IsOptional()
-  @IsString()
-  order_by?: string = 'bin_label desc';
 }

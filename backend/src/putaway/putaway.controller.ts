@@ -15,7 +15,14 @@ export class PutawayController {
   @RequirePermissions('putaway:read')
   findAll(
     @Query()
-    query: { page?: number; limit?: number; search?: string; history?: string },
+    query: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      history?: string;
+      sort_by?: string;
+      sort_order?: string;
+    },
     @CurrentUser() user: AuthUser,
   ) {
     return this.service.findAll(query, user);

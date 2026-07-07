@@ -1,7 +1,8 @@
 import { Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { SortableQueryDto } from '../../common/dto/sortable-query.dto';
 
-export class QueryWarehouseDto {
+export class QueryWarehouseDto extends SortableQueryDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -18,8 +19,4 @@ export class QueryWarehouseDto {
   @IsOptional()
   @IsString()
   search?: string;
-
-  @IsOptional()
-  @IsString()
-  order_by?: string = 'created_at desc';
 }

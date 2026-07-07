@@ -5,6 +5,8 @@ import api from '../../lib/api';
 import Modal from '../../components/Modal';
 import SearchableSelect from '../../components/SearchableSelect';
 import { useAuth } from '../../context/AuthContext';
+import { useSort } from '../../hooks/useSort';
+import SortableTh from '../../components/SortableTh';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import type { ComplaintRow, Paginated } from '../../types';
@@ -41,6 +43,11 @@ export default function ComplaintsPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const { sort, toggle, params } = useSort();
+  const onSort = (col: string) => {
+    setPage(1);
+    toggle(col);
+  };
   const [status, setStatus] = useState('');
 
   const [open, setOpen] = useState(false);
@@ -59,6 +66,7 @@ export default function ComplaintsPage() {
         limit: LIMIT,
         search: search || undefined,
         status: status || undefined,
+        ...params(),
       },
     });
     setData(r.data);
@@ -67,7 +75,7 @@ export default function ComplaintsPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, status]);
+  }, [page, search, status, sort.sortBy, sort.order]);
 
   function openCreate() {
     setMenuFeature('');
@@ -195,12 +203,12 @@ export default function ComplaintsPage() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-6 py-3">Number</th>
-                <th className="px-6 py-3">Menu / Feature</th>
-                <th className="px-6 py-3">Title</th>
-                {isAdmin && <th className="px-6 py-3">Reported By</th>}
-                <th className="px-6 py-3">Status</th>
-                <th className="px-6 py-3">Created</th>
+                <SortableTh label="Number" col="complaint_number" sort={sort} onSort={onSort} />
+                <SortableTh label="Menu / Feature" col="menu_feature" sort={sort} onSort={onSort} />
+                <SortableTh label="Title" col="title" sort={sort} onSort={onSort} />
+                {isAdmin && <SortableTh label="Reported By" col="reported_by" sort={sort} onSort={onSort} />}
+                <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
+                <SortableTh label="Created" col="created_at" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Action</th>
               </tr>
             </thead>

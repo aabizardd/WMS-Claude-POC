@@ -2,7 +2,13 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import api from '../../lib/api';
-import type { Role, User, WarehouseOption } from '../../types';
+import type {
+  DepartmentOption,
+  Role,
+  SubsidiaryOption,
+  User,
+  WarehouseOption,
+} from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import SearchableSelect from '../../components/SearchableSelect';
 import FormField, { requiredErrors } from '../../components/form/FormField';
@@ -15,6 +21,8 @@ interface FormState {
   password: string;
   roleId: number | '';
   warehouseId: string;
+  departmentId: string;
+  subsidiaryId: string;
   isActive: boolean;
 }
 
@@ -26,6 +34,8 @@ const emptyForm: FormState = {
   password: '',
   roleId: '',
   warehouseId: '',
+  departmentId: '',
+  subsidiaryId: '',
   isActive: true,
 };
 
@@ -40,6 +50,9 @@ export default function UserFormPage() {
 
   const [roles, setRoles] = useState<Role[]>([]);
   const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
+  const [departments, setDepartments] = useState<DepartmentOption[]>([]);
+  const [subsidiaries, setSubsidiaries] = useState<SubsidiaryOption[]>([]);
+  const [subsLoading, setSubsLoading] = useState(false);
   const [form, setForm] = useState<FormState>(emptyForm);
 
   const [loading, setLoading] = useState(true);
@@ -54,6 +67,7 @@ export default function UserFormPage() {
     const reqs: Promise<unknown>[] = [
       api.get<Role[]>('/roles/options'),
       api.get<WarehouseOption[]>('/warehouses/options'),
+      api.get<DepartmentOption[]>('/departments/options'),
     ];
     if (!isNew) reqs.push(api.get<User>(`/users/${id}`));
 
@@ -63,8 +77,9 @@ export default function UserFormPage() {
         const roleList = (res[0] as { data: Role[] }).data;
         setRoles(roleList);
         setWarehouses((res[1] as { data: WarehouseOption[] }).data);
+        setDepartments((res[2] as { data: DepartmentOption[] }).data);
         if (!isNew) {
-          const u = (res[2] as { data: User }).data;
+          const u = (res[3] as { data: User }).data;
           setForm({
             firstName: u.firstName ?? '',
             lastName: u.lastName ?? '',
@@ -73,8 +88,12 @@ export default function UserFormPage() {
             password: '',
             roleId: u.roleId,
             warehouseId: u.warehouseId ?? '',
+            departmentId: u.departmentId ?? '',
+            subsidiaryId: u.subsidiaryId ?? '',
             isActive: u.isActive,
           });
+          // Populate the subsidiary dropdown for the user's existing department.
+          if (u.departmentId) loadSubsidiaries(u.departmentId);
         } else {
           setForm((f) => ({ ...f, roleId: roleList[0]?.id ?? '' }));
         }
@@ -85,6 +104,32 @@ export default function UserFormPage() {
       active = false;
     };
   }, [id, isNew]);
+
+  // Load the subsidiaries that belong to a department (dependent dropdown).
+  async function loadSubsidiaries(departmentId: string) {
+    if (!departmentId) {
+      setSubsidiaries([]);
+      return;
+    }
+    setSubsLoading(true);
+    try {
+      const r = await api.get<SubsidiaryOption[]>(
+        `/departments/${departmentId}/subsidiaries`,
+      );
+      setSubsidiaries(r.data);
+    } catch {
+      setSubsidiaries([]);
+    } finally {
+      setSubsLoading(false);
+    }
+  }
+
+  // Changing department always resets the subsidiary (must be re-picked).
+  function onDepartmentChange(departmentId: string) {
+    set({ departmentId, subsidiaryId: '' });
+    setSubsidiaries([]);
+    loadSubsidiaries(departmentId);
+  }
 
   const set = (patch: Partial<FormState>) => {
     setForm({ ...form, ...patch });
@@ -121,6 +166,10 @@ export default function UserFormPage() {
       email: form.email,
       roleId: Number(form.roleId),
       warehouseId: form.warehouseId, // required
+      // Optional org assignment; null clears it. Subsidiary only sent with a
+      // department (enforced by the dependent dropdown + backend validation).
+      departmentId: form.departmentId || null,
+      subsidiaryId: form.departmentId ? form.subsidiaryId || null : null,
       isActive: form.isActive,
     };
 
@@ -256,6 +305,38 @@ export default function UserFormPage() {
                 placeholder="Select warehouse"
                 searchPlaceholder="Search warehouse…"
                 options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
+              />
+            </Field>
+            <Field label="Department">
+              <SearchableSelect
+                value={form.departmentId}
+                onChange={onDepartmentChange}
+                disabled={viewOnly}
+                placeholder="Select department (optional)"
+                searchPlaceholder="Search department…"
+                options={departments.map((d) => ({
+                  value: d.id,
+                  label: d.name ?? d.oracleId,
+                }))}
+              />
+            </Field>
+            <Field label="Subsidiary">
+              <SearchableSelect
+                value={form.subsidiaryId}
+                onChange={(v) => set({ subsidiaryId: v })}
+                disabled={viewOnly || !form.departmentId || subsLoading}
+                placeholder={
+                  !form.departmentId
+                    ? 'Select a department first'
+                    : subsLoading
+                      ? 'Loading…'
+                      : 'Select subsidiary'
+                }
+                searchPlaceholder="Search subsidiary…"
+                options={subsidiaries.map((s) => ({
+                  value: s.id,
+                  label: s.fullName ? `${s.name} — ${s.fullName}` : s.name ?? s.oracleId,
+                }))}
               />
             </Field>
             <label className="flex items-center gap-2 text-sm text-slate-700">

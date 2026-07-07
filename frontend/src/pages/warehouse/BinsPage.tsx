@@ -6,6 +6,8 @@ import type { Bin, Paginated } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
+import { useSort } from '../../hooks/useSort';
+import SortableTh from '../../components/SortableTh';
 
 const LIMIT = 10;
 
@@ -22,11 +24,16 @@ export default function BinsPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const { sort, toggle, params } = useSort();
+  const onSort = (col: string) => {
+    setPage(1);
+    toggle(col);
+  };
 
   async function load() {
     setLoading(true);
     const r = await api.get<Paginated<Bin>>('/bins', {
-      params: { page, limit: LIMIT, search: search || undefined },
+      params: { page, limit: LIMIT, search: search || undefined, ...params() },
     });
     setData(r.data);
     setLoading(false);
@@ -34,7 +41,7 @@ export default function BinsPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search]);
+  }, [page, search, sort.sortBy, sort.order]);
 
   async function handleDelete(b: Bin) {
     const ok = await confirm({
@@ -109,13 +116,13 @@ export default function BinsPage() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-6 py-3">Bin Label</th>
-                <th className="px-6 py-3">Warehouse</th>
-                <th className="px-6 py-3">Aisle</th>
-                <th className="px-6 py-3">Shelf</th>
-                <th className="px-6 py-3">Area Type</th>
+                <SortableTh label="Bin Label" col="bin_label" sort={sort} onSort={onSort} />
+                <SortableTh label="Warehouse" col="warehouse" sort={sort} onSort={onSort} />
+                <SortableTh label="Aisle" col="aisle" sort={sort} onSort={onSort} />
+                <SortableTh label="Shelf" col="shelf" sort={sort} onSort={onSort} />
+                <SortableTh label="Area Type" col="area_type" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3">L×W×H</th>
-                <th className="px-6 py-3">Status</th>
+                <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
             </thead>

@@ -130,6 +130,57 @@ const DOMAINS: MasterDomain[] = [
     ],
   },
   {
+    key: 'department',
+    title: 'Departments',
+    description: 'Departments synced from Oracle.',
+    accent: 'bg-teal-600',
+    icon: (
+      <path d="M3 21h18M6 21V8l6-4 6 4v13M10 12h4M10 16h4" />
+    ),
+    items: [
+      {
+        to: '/admin/departments',
+        label: 'Departments',
+        description: 'Department master (read-only).',
+        permission: 'departments:read',
+      },
+    ],
+  },
+  {
+    key: 'class',
+    title: 'Classes',
+    description: 'Classes synced from Oracle.',
+    accent: 'bg-cyan-600',
+    icon: (
+      <path d="M4 7l8-4 8 4-8 4-8-4zM4 12l8 4 8-4M4 17l8 4 8-4" />
+    ),
+    items: [
+      {
+        to: '/admin/classes',
+        label: 'Classes',
+        description: 'Class master (read-only).',
+        permission: 'classes:read',
+      },
+    ],
+  },
+  {
+    key: 'subsidiary',
+    title: 'Subsidiaries',
+    description: 'Subsidiaries synced from Oracle.',
+    accent: 'bg-indigo-600',
+    icon: (
+      <path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M9 13h.01M9 17h.01M15 9h.01M15 13h.01M15 17h.01" />
+    ),
+    items: [
+      {
+        to: '/admin/subsidiaries',
+        label: 'Subsidiaries',
+        description: 'Subsidiary master (read-only).',
+        permission: 'subsidiaries:read',
+      },
+    ],
+  },
+  {
     key: 'user-management',
     title: 'User Management',
     description: 'Application users and their roles.',

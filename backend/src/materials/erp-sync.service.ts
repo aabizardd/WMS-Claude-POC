@@ -40,6 +40,12 @@ export interface SyncOptions {
   // When omitted -> full sync of all items.
   lastModified?: string;
   pageSize?: number;
+  // Write per-location qty_available into inventory (virtual bin availQty).
+  // Only the INITIAL inject should do this — the scheduler and the manual
+  // "Sync from ERP" button must NOT touch qty_available (Oracle stays the
+  // source of truth but availability is not re-synced on every run). The rest
+  // (materials + header qtyCommitted/qtyOnOrder/qtyBackOrder) is always synced.
+  syncAvailability?: boolean;
 }
 
 export interface SyncResult {
@@ -167,11 +173,14 @@ export class ErpSyncService {
       200,
     );
     const lastModified = options.lastModified;
+    const writeAvailability = options.syncAvailability ?? false;
 
     this.logger.log(
-      lastModified
-        ? `Starting incremental ERP sync (lastModified=${lastModified}, pageSize=${pageSize})`
-        : `Starting FULL ERP sync (pageSize=${pageSize})`,
+      `${
+        lastModified
+          ? `Starting incremental ERP sync (lastModified=${lastModified}, pageSize=${pageSize})`
+          : `Starting FULL ERP sync (pageSize=${pageSize})`
+      }${writeAvailability ? ' [with qty_available]' : ' [no qty_available]'}`,
     );
 
     // Reset per-run caches (warehouses / virtual bins may change between runs).
@@ -213,7 +222,11 @@ export class ErpSyncService {
           // Mirror per-location inventory quantities (best-effort; a location
           // failure must not fail the whole item upsert).
           if (material && item.locations?.length) {
-            await this.syncItemInventory(material, item.locations);
+            await this.syncItemInventory(
+              material,
+              item.locations,
+              writeAvailability,
+            );
           }
           upserted++;
         } catch (e) {
@@ -301,13 +314,16 @@ export class ErpSyncService {
    *  - header (inventory_management): qtyCommitted / qtyOnOrder / qtyBackOrder
    *    are always refreshed from Oracle.
    *  - virtual bin available = Oracle available − (qty_issue + quality_issue),
-   *    written ONLY while the material has not been manually adjusted into a
-   *    physical (non-virtual) bin. Locations without a matching warehouse
-   *    (oracle_id) are skipped.
+   *    written ONLY when `writeAvailability` is set (initial inject) AND the
+   *    material has not been manually adjusted into a physical (non-virtual)
+   *    bin. The scheduler / manual button pass writeAvailability = false so
+   *    qty_available is never re-synced there. Locations without a matching
+   *    warehouse (oracle_id) are skipped.
    */
   private async syncItemInventory(
     material: { id: string; materialCode: string },
     locations: ErpLocation[],
+    writeAvailability: boolean,
   ) {
     for (const loc of locations) {
       const oracleId =
@@ -317,7 +333,6 @@ export class ErpSyncService {
       const warehouseId = await this.resolveWarehouse(oracleId);
       if (!warehouseId) continue; // unknown location -> skip
 
-      const available = this.num(loc.qtyAvailable);
       const committed = this.num(loc.qtyCommitted);
       const onOrder = this.num(loc.qtyOnOrder);
       const backOrder = this.num(loc.qtyBackOrder);
@@ -351,6 +366,13 @@ export class ErpSyncService {
         });
       }
 
+      // qty_available is only written by the initial inject. The scheduler and
+      // the manual "Sync from ERP" button skip it — header qtys above are still
+      // refreshed. (Oracle stays the source of truth; availability is set once
+      // at inject and thereafter only WMS issue/reserved adjustments apply.)
+      if (!writeAvailability) continue;
+
+      const available = this.num(loc.qtyAvailable);
       const virtualBinId = await this.resolveVirtualBin(warehouseId, oracleId);
 
       // Respect manual adjustments: if stock has been distributed to any

@@ -57,6 +57,14 @@ model User {
   role        Role       @relation(fields: [roleId], references: [id])
   warehouseId String?    @map("warehouse_id")
   warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
+
+  // Optional org assignment. Subsidiary must belong to the chosen department
+  // (department.subsidiaryId is a comma-joined list of subsidiary oracle ids).
+  departmentId String?     @map("department_id")
+  department   Department? @relation(fields: [departmentId], references: [id])
+  subsidiaryId String?     @map("subsidiary_id")
+  subsidiary   Subsidiary? @relation(fields: [subsidiaryId], references: [id])
+
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
@@ -66,6 +74,8 @@ model User {
   packingAssignments PackingItem[]
   deliveryAssignments DeliveryItem[]
   complaints Complaint[]
+  inventoryAdjustments InventoryAdjustment[] @relation("AdjustmentCreator")
+  approvedAdjustments  InventoryAdjustment[] @relation("AdjustmentApprover")
 
   @@map("users")
 }
@@ -164,6 +174,7 @@ model Material {
   pickingItems    PickingItem[]
   packingItems    PackingItem[]
   deliveryItems   DeliveryItem[]
+  adjustmentItems InventoryAdjustmentItem[]
 
   @@map("materials")
 }
@@ -201,6 +212,7 @@ model Warehouse {
   packings      Packing[]
   deliveries    Delivery[]
   complaints    Complaint[]
+  inventoryAdjustments InventoryAdjustment[]
 
   @@map("warehouses")
 }
@@ -280,6 +292,7 @@ model Bin {
   pickingItems PickingItem[]
   packingItems PackingItem[]
   deliveryItems DeliveryItem[]
+  adjustmentItems InventoryAdjustmentItem[]
 
   @@map("bins")
 }
@@ -322,6 +335,61 @@ model Customer {
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
   @@map("customers")
+}
+
+// Synced from the Oracle "department" endpoint. Read-only mirror in WMS.
+model Department {
+  id             String    @id @default(uuid())
+  oracleId       String    @unique @map("oracle_id") // Oracle internalId
+  name           String?
+  isInactive     Boolean   @default(false) @map("is_inactive")
+  parentId       String?   @map("parent_id")
+  parentName     String?   @map("parent_name")
+  subsidiaryId   String?   @map("subsidiary_id") // comma-joined Oracle ids
+  subsidiaryName String?   @map("subsidiary_name")
+  lastModified   DateTime? @map("last_modified")
+  createdBy      String?   @map("created_by")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  users User[]
+
+  @@map("departments")
+}
+
+// Synced from the Oracle "class" endpoint. Read-only mirror in WMS.
+model Class {
+  id             String    @id @default(uuid())
+  oracleId       String    @unique @map("oracle_id") // Oracle internalId
+  name           String?
+  isInactive     Boolean   @default(false) @map("is_inactive")
+  parentId       String?   @map("parent_id")
+  parentName     String?   @map("parent_name")
+  subsidiaryId   String?   @map("subsidiary_id") // comma-joined Oracle ids
+  subsidiaryName String?   @map("subsidiary_name")
+  lastModified   DateTime? @map("last_modified")
+  createdBy      String?   @map("created_by")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@map("classes")
+}
+
+// Synced from the Oracle "subsidiary" endpoint. Read-only mirror in WMS.
+model Subsidiary {
+  id           String    @id @default(uuid())
+  oracleId     String    @unique @map("oracle_id") // Oracle subsidiary_id
+  name         String? // subsidiary_name (short, e.g. "IEL")
+  fullName     String?   @map("full_name") // subsidiary_fullname
+  isDelete     Boolean   @default(false) @map("is_delete")
+  lastModified DateTime? @map("last_modified") // from Oracle updated_at
+  createdBy    String?   @map("created_by")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  users User[]
+
+  @@map("subsidiaries")
 }
 
 // ===================== Inbound: MRN & Goods Receive =====================
@@ -473,6 +541,91 @@ model InventoryBinStock {
   @@map("inventory_bin_stocks")
 }
 
+// ===================== Inventory Adjustment =====================
+
+enum InventoryAdjustmentType {
+  qty_issue
+  quality_issue
+}
+
+enum InventoryAdjustmentStatus {
+  PendingApproval
+  Approved
+  Rejected
+}
+
+// Manual inventory adjustment. Created as Pending Approval (WH Manager); the
+// inventory effect is applied later at approval (out of scope here). Groups
+// multiple (material, bin) lines and optionally references discrepancy docs.
+model InventoryAdjustment {
+  id               String                    @id @default(uuid())
+  adjustmentNumber String                    @unique @map("adjustment_number") // ADJ-YYYYMMDD-NNN
+  warehouseId      String                    @map("warehouse_id")
+  warehouse        Warehouse                 @relation(fields: [warehouseId], references: [id])
+  adjustmentType   InventoryAdjustmentType   @map("adjustment_type")
+  status           InventoryAdjustmentStatus @default(PendingApproval)
+  note             String?
+  createdById      Int?                      @map("created_by")
+  createdBy        User?                     @relation("AdjustmentCreator", fields: [createdById], references: [id])
+
+  // Approval (WH Manager). Set once when status leaves PendingApproval.
+  approvedById         Int?      @map("approved_by")
+  approvedBy           User?     @relation("AdjustmentApprover", fields: [approvedById], references: [id])
+  approvedAt           DateTime? @map("approved_at")
+  approvalReason       String?   @map("approval_reason")
+  // Oracle-side approval status; "-" until WMS-approved, then "Pending Approval Oracle".
+  oracleApprovalStatus String    @default("-") @map("oracle_approval_status")
+
+  createdAt        DateTime                  @default(now()) @map("created_at")
+  updatedAt        DateTime                  @updatedAt @map("updated_at")
+
+  items         InventoryAdjustmentItem[]
+  discrepancies InventoryAdjustmentDiscrepancy[]
+
+  @@map("inventory_adjustments")
+}
+
+model InventoryAdjustmentItem {
+  id           String              @id @default(uuid())
+  adjustmentId String              @map("adjustment_id")
+  adjustment   InventoryAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
+
+  materialId   String?   @map("material_id")
+  material     Material? @relation(fields: [materialId], references: [id])
+  materialCode String?   @map("material_code")
+  materialName String?   @map("material_name")
+
+  binId    String? @map("bin_id")
+  bin      Bin?    @relation(fields: [binId], references: [id])
+  binLabel String? @map("bin_label")
+
+  // qty_issue type
+  qtyAdjustment Float @default(0) @map("qty_adjustment")
+  // quality_issue type
+  qtyScrapped Float @default(0) @map("qty_scrapped")
+  qtyPassed   Float @default(0) @map("qty_passed")
+
+  // Snapshot of the bin's quantities at create time (informational context).
+  availAtCreate        Float @default(0) @map("avail_at_create")
+  qtyIssueAtCreate     Float @default(0) @map("qty_issue_at_create")
+  qualityIssueAtCreate Float @default(0) @map("quality_issue_at_create")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("inventory_adjustment_items")
+}
+
+// Discrepancy documents attached to an adjustment as a memo (many-to-many).
+model InventoryAdjustmentDiscrepancy {
+  adjustmentId  String              @map("adjustment_id")
+  adjustment    InventoryAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
+  discrepancyId String              @map("discrepancy_id")
+  discrepancy   Discrepancy         @relation(fields: [discrepancyId], references: [id], onDelete: Cascade)
+
+  @@id([adjustmentId, discrepancyId])
+  @@map("inventory_adjustment_discrepancies")
+}
+
 // ===================== Discrepancy =====================
 
 enum DiscrepancyType {
@@ -517,6 +670,7 @@ model Discrepancy {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   details DiscrepancyDetail[]
+  adjustmentLinks InventoryAdjustmentDiscrepancy[]
 
   @@map("discrepancies")
 }

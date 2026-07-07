@@ -6,6 +6,8 @@ import type { User } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
+import { useSort, sortRows } from '../../hooks/useSort';
+import SortableTh from '../../components/SortableTh';
 
 export default function UsersPage() {
   const { has } = useAuth();
@@ -17,6 +19,20 @@ export default function UsersPage() {
 
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
+  const { sort, toggle } = useSort();
+
+  // Client-side sorting (this list is not paginated).
+  const rows = sortRows(users, sort, (u, col) => {
+    switch (col) {
+      case 'name': return u.name;
+      case 'username': return u.username;
+      case 'email': return u.email;
+      case 'role': return u.role.name;
+      case 'warehouse': return u.warehouse?.name ?? null;
+      case 'status': return u.isActive ? 1 : 0;
+      default: return null;
+    }
+  });
 
   async function load() {
     setLoading(true);
@@ -68,12 +84,12 @@ export default function UsersPage() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-6 py-3">Name</th>
-                <th className="px-6 py-3">Username</th>
-                <th className="px-6 py-3">Email</th>
-                <th className="px-6 py-3">Role</th>
-                <th className="px-6 py-3">Warehouse</th>
-                <th className="px-6 py-3">Status</th>
+                <SortableTh label="Name" col="name" sort={sort} onSort={toggle} />
+                <SortableTh label="Username" col="username" sort={sort} onSort={toggle} />
+                <SortableTh label="Email" col="email" sort={sort} onSort={toggle} />
+                <SortableTh label="Role" col="role" sort={sort} onSort={toggle} />
+                <SortableTh label="Warehouse" col="warehouse" sort={sort} onSort={toggle} />
+                <SortableTh label="Status" col="status" sort={sort} onSort={toggle} />
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
             </thead>
@@ -91,7 +107,7 @@ export default function UsersPage() {
                   </td>
                 </tr>
               ) : (
-                users.map((u) => (
+                rows.map((u) => (
                   <tr key={u.id} className="hover:bg-slate-50">
                     <td className="px-6 py-3 font-medium text-slate-800">
                       {u.name}

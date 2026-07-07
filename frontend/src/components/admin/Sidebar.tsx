@@ -80,6 +80,14 @@ const nav: NavEntry[] = [
     ),
   },
   {
+    to: '/admin/inventory-adjustments',
+    label: 'nav.inventoryAdjustment',
+    permission: 'inventory-adjustments:read',
+    icon: (
+      <path d="M12 6v6l4 2m5-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+    ),
+  },
+  {
     to: '/admin/discrepancy',
     label: 'nav.discrepancy',
     permission: 'discrepancy:read',

@@ -1,15 +1,23 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
 
 type WarehouseRow = Prisma.WarehouseGetPayload<object>;
 
-const ORDER_FIELD_MAP: Record<string, keyof Prisma.WarehouseOrderByWithRelationInput> =
-  {
-    created_at: 'createdAt',
-    name: 'name',
-    last_modified: 'lastModified',
-  };
+type WarehouseOrder = Prisma.WarehouseOrderByWithRelationInput;
+const SORTABLE: Record<string, (d: SortDir) => WarehouseOrder> = {
+  oracle_id: (d) => ({ oracleId: d }),
+  name: (d) => ({ name: d }),
+  type: (d) => ({ locationTypeName: d }),
+  parent: (d) => ({ parentName: d }),
+  subsidiary: (d) => ({ subsidiaryName: d }),
+  timezone: (d) => ({ timezone: d }),
+  status: (d) => ({ isInactive: d }),
+  last_modified: (d) => ({ lastModified: d }),
+  created_at: (d) => ({ createdAt: d }),
+};
+const DEFAULT_ORDER: WarehouseOrder = { createdAt: 'desc' };
 
 @Injectable()
 export class WarehousesService {
@@ -19,11 +27,17 @@ export class WarehousesService {
     page?: number;
     limit?: number;
     search?: string;
-    order_by?: string;
+    sort_by?: string;
+    sort_order?: string;
   }) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
-    const orderBy = this.parseOrderBy(query.order_by ?? 'created_at desc');
+    const orderBy = buildOrderBy(
+      query.sort_by,
+      query.sort_order,
+      SORTABLE,
+      DEFAULT_ORDER,
+    );
 
     const where: Prisma.WarehouseWhereInput = query.search
       ? {
@@ -50,7 +64,12 @@ export class WarehousesService {
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
-      attributes: { page, limit, order_by: query.order_by ?? 'created_at desc' },
+      attributes: {
+        page,
+        limit,
+        sort_by: query.sort_by ?? null,
+        sort_order: query.sort_order ?? null,
+      },
       rows: rows.map((r) => this.serialize(r)),
     };
   }
@@ -71,15 +90,6 @@ export class WarehousesService {
       select: { createdAt: true },
     });
     return { lastSyncAt: latest?.createdAt ?? null };
-  }
-
-  private parseOrderBy(
-    orderByStr: string,
-  ): Prisma.WarehouseOrderByWithRelationInput {
-    const [rawField, rawDir] = orderByStr.trim().split(/\s+/);
-    const field = ORDER_FIELD_MAP[rawField] ?? 'createdAt';
-    const dir: Prisma.SortOrder = rawDir === 'asc' ? 'asc' : 'desc';
-    return { [field]: dir };
   }
 
   private serialize(w: WarehouseRow) {

@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../lib/api';
 import type { DeliveryRow, Paginated } from '../../types';
+import { useSort } from '../../hooks/useSort';
+import SortableTh from '../../components/SortableTh';
 
 const LIMIT = 10;
 
@@ -12,11 +14,16 @@ export default function DeliveryList() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const { sort, toggle, params } = useSort();
+  const onSort = (col: string) => {
+    setPage(1);
+    toggle(col);
+  };
 
   async function load() {
     setLoading(true);
     const r = await api.get<Paginated<DeliveryRow>>('/delivery', {
-      params: { page, limit: LIMIT, search: search || undefined },
+      params: { page, limit: LIMIT, search: search || undefined, ...params() },
     });
     setData(r.data);
     setLoading(false);
@@ -24,7 +31,7 @@ export default function DeliveryList() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search]);
+  }, [page, search, sort.sortBy, sort.order]);
 
   function onSearch(e: FormEvent) {
     e.preventDefault();
@@ -66,13 +73,13 @@ export default function DeliveryList() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="table-head">
               <tr>
-                <th className="px-6 py-3">Delivery ID</th>
-                <th className="px-6 py-3">SDO ID</th>
-                <th className="px-6 py-3">Packing ID</th>
-                <th className="px-6 py-3">SO Number</th>
-                <th className="px-6 py-3">Customer</th>
-                <th className="px-6 py-3">Location</th>
-                <th className="px-6 py-3">Status</th>
+                <SortableTh label="Delivery ID" col="delivery_code" sort={sort} onSort={onSort} />
+                <SortableTh label="SDO ID" col="sdo_id" sort={sort} onSort={onSort} />
+                <SortableTh label="Packing ID" col="packing_id" sort={sort} onSort={onSort} />
+                <SortableTh label="SO Number" col="so_number" sort={sort} onSort={onSort} />
+                <SortableTh label="Customer" col="customer" sort={sort} onSort={onSort} />
+                <SortableTh label="Location" col="location" sort={sort} onSort={onSort} />
+                <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Action</th>
               </tr>
             </thead>

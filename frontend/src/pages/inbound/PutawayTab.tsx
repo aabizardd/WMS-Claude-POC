@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../lib/api';
 import type { PutawayRow, Paginated } from '../../types';
+import { useSort } from '../../hooks/useSort';
+import SortableTh from '../../components/SortableTh';
 
 const LIMIT = 10;
 
@@ -20,6 +22,11 @@ export default function PutawayTab({ history = false }: { history?: boolean }) {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const { sort, toggle, params } = useSort();
+  const onSort = (col: string) => {
+    setPage(1);
+    toggle(col);
+  };
 
   async function load() {
     setLoading(true);
@@ -29,6 +36,7 @@ export default function PutawayTab({ history = false }: { history?: boolean }) {
         limit: LIMIT,
         search: search || undefined,
         history: history || undefined,
+        ...params(),
       },
     });
     setData(r.data);
@@ -41,7 +49,7 @@ export default function PutawayTab({ history = false }: { history?: boolean }) {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, history]);
+  }, [page, search, history, sort.sortBy, sort.order]);
 
   function onSearch(e: FormEvent) {
     e.preventDefault();
@@ -90,12 +98,12 @@ export default function PutawayTab({ history = false }: { history?: boolean }) {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-6 py-3">Putaway Code</th>
-                <th className="px-6 py-3">GR Number</th>
-                <th className="px-6 py-3">Warehouse</th>
-                <th className="px-6 py-3">Status</th>
+                <SortableTh label="Putaway Code" col="putaway_code" sort={sort} onSort={onSort} />
+                <SortableTh label="GR Number" col="gr_number" sort={sort} onSort={onSort} />
+                <SortableTh label="Warehouse" col="warehouse" sort={sort} onSort={onSort} />
+                <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3">Items</th>
-                <th className="px-6 py-3">Created</th>
+                <SortableTh label="Created" col="created_at" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
             </thead>

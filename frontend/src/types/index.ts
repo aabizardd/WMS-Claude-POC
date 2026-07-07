@@ -21,8 +21,25 @@ export interface User {
   role: { id: number; name: string };
   warehouseId: string | null;
   warehouse: { id: string; name: string } | null;
+  departmentId: string | null;
+  department: { id: string; name: string | null } | null;
+  subsidiaryId: string | null;
+  subsidiary: { id: string; name: string | null; fullName: string | null } | null;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface DepartmentOption {
+  id: string;
+  name: string | null;
+  oracleId: string;
+}
+
+export interface SubsidiaryOption {
+  id: string;
+  name: string | null;
+  fullName: string | null;
+  oracleId: string;
 }
 
 export interface AuthUser {
@@ -388,6 +405,105 @@ export interface Customer {
   phone: string | null;
   last_modified: string | null;
   created_at: string;
+}
+
+export interface Department {
+  id: string;
+  oracle_id: string;
+  name: string | null;
+  is_inactive: boolean;
+  parent_id: string | null;
+  parent_name: string | null;
+  subsidiary_id: string | null;
+  subsidiary_name: string | null;
+  last_modified: string | null;
+  created_at: string;
+}
+
+export interface ClassMaster {
+  id: string;
+  oracle_id: string;
+  name: string | null;
+  is_inactive: boolean;
+  parent_id: string | null;
+  parent_name: string | null;
+  subsidiary_id: string | null;
+  subsidiary_name: string | null;
+  last_modified: string | null;
+  created_at: string;
+}
+
+export interface Subsidiary {
+  id: string;
+  oracle_id: string;
+  name: string | null;
+  full_name: string | null;
+  is_delete: boolean;
+  last_modified: string | null;
+  created_at: string;
+}
+
+// ===== Inventory Adjustment =====
+export interface InventoryAdjustmentRow {
+  id: string;
+  adjustment_number: string;
+  warehouse: string | null;
+  adjustment_type: 'qty_issue' | 'quality_issue';
+  status: string;
+  material_count: number;
+  bin_count: number;
+  total_qty: number;
+  discrepancy_count: number;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface AdjMaterialOption {
+  material_id: string | null;
+  material_code: string | null;
+  material_name: string | null;
+}
+
+export interface AdjBinOption {
+  bin_id: string | null;
+  bin_label: string | null;
+  qty_available: number;
+  qty_issue: number;
+  quality_issue: number;
+}
+
+export interface InventoryAdjustmentItemRow {
+  id: string;
+  material_id: string | null;
+  material_code: string | null;
+  material_name: string | null;
+  bin_id: string | null;
+  bin_label: string | null;
+  qty_adjustment: number;
+  qty_scrapped: number;
+  qty_passed: number;
+  avail_at_create: number;
+  qty_issue_at_create: number;
+  quality_issue_at_create: number;
+}
+
+export interface InventoryAdjustmentDetail {
+  id: string;
+  adjustment_number: string;
+  warehouse: string | null;
+  warehouse_id: string | null;
+  adjustment_type: 'qty_issue' | 'quality_issue';
+  status: string;
+  note: string | null;
+  created_by: string | null;
+  created_at: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  approval_reason: string | null;
+  oracle_approval_status: string;
+  total_qty: number;
+  items: InventoryAdjustmentItemRow[];
+  discrepancies: { id: string; discrepancy_id: string; type: string; from: string }[];
 }
 
 export interface Bin {

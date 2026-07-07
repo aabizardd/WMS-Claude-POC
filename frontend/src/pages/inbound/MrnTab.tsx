@@ -4,6 +4,8 @@ import axios from 'axios';
 import api from '../../lib/api';
 import Modal from '../../components/Modal';
 import type { ErpSyncResult, Mrn, Paginated } from '../../types';
+import { useSort } from '../../hooks/useSort';
+import SortableTh from '../../components/SortableTh';
 import { grStatusLabel } from '../../lib/grStatus';
 import { useAuth } from '../../context/AuthContext';
 
@@ -22,6 +24,11 @@ export default function MrnTab() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const { sort, toggle, params } = useSort();
+  const onSort = (col: string) => {
+    setPage(1);
+    toggle(col);
+  };
 
   const [syncOpen, setSyncOpen] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
@@ -33,7 +40,7 @@ export default function MrnTab() {
   async function load() {
     setLoading(true);
     const r = await api.get<Paginated<Mrn>>('/mrn', {
-      params: { page, limit: LIMIT, search: search || undefined },
+      params: { page, limit: LIMIT, search: search || undefined, ...params() },
     });
     setData(r.data);
     setLoading(false);
@@ -41,7 +48,7 @@ export default function MrnTab() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search]);
+  }, [page, search, sort.sortBy, sort.order]);
 
   async function openSync() {
     setSyncError('');
@@ -147,12 +154,12 @@ export default function MrnTab() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-6 py-3">Shipment No.</th>
-                <th className="px-6 py-3">Receiving Location</th>
+                <SortableTh label="Shipment No." col="shipment_number" sort={sort} onSort={onSort} />
+                <SortableTh label="Receiving Location" col="receiving_location" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3">Items</th>
-                <th className="px-6 py-3">MRN Status</th>
+                <SortableTh label="MRN Status" col="status" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3">GR Status</th>
-                <th className="px-6 py-3">Created</th>
+                <SortableTh label="Created" col="created_at" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
             </thead>

@@ -4,6 +4,8 @@ import api from '../../lib/api';
 import Modal from '../../components/Modal';
 import type { Customer, ErpSyncResult, Paginated } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { useSort } from '../../hooks/useSort';
+import SortableTh from '../../components/SortableTh';
 
 const LIMIT = 10;
 
@@ -16,6 +18,11 @@ export default function CustomersPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const { sort, toggle, params } = useSort();
+  const onSort = (col: string) => {
+    setPage(1);
+    toggle(col);
+  };
 
   const [syncOpen, setSyncOpen] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
@@ -27,7 +34,7 @@ export default function CustomersPage() {
   async function load() {
     setLoading(true);
     const r = await api.get<Paginated<Customer>>('/customers', {
-      params: { page, limit: LIMIT, search: search || undefined },
+      params: { page, limit: LIMIT, search: search || undefined, ...params() },
     });
     setData(r.data);
     setLoading(false);
@@ -35,7 +42,7 @@ export default function CustomersPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search]);
+  }, [page, search, sort.sortBy, sort.order]);
 
   async function openSync() {
     setSyncError('');
@@ -144,12 +151,12 @@ export default function CustomersPage() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-6 py-3">Oracle ID</th>
-                <th className="px-6 py-3">Entity</th>
-                <th className="px-6 py-3">Company</th>
-                <th className="px-6 py-3">Email</th>
-                <th className="px-6 py-3">Phone</th>
-                <th className="px-6 py-3">Last Modified</th>
+                <SortableTh label="Oracle ID" col="oracle_id" sort={sort} onSort={onSort} />
+                <SortableTh label="Entity" col="entity_id" sort={sort} onSort={onSort} />
+                <SortableTh label="Company" col="company_name" sort={sort} onSort={onSort} />
+                <SortableTh label="Email" col="email" sort={sort} onSort={onSort} />
+                <SortableTh label="Phone" col="phone" sort={sort} onSort={onSort} />
+                <SortableTh label="Last Modified" col="last_modified" sort={sort} onSort={onSort} />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">

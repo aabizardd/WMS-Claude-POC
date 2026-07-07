@@ -16,6 +16,10 @@ import { ShelvesModule } from './shelves/shelves.module';
 import { BinsModule } from './bins/bins.module';
 import { VendorsModule } from './vendors/vendors.module';
 import { CustomersModule } from './customers/customers.module';
+import { DepartmentsModule } from './departments/departments.module';
+import { ClassesModule } from './classes/classes.module';
+import { SubsidiariesModule } from './subsidiaries/subsidiaries.module';
+import { InventoryAdjustmentsModule } from './inventory-adjustments/inventory-adjustments.module';
 import { MrnModule } from './mrn/mrn.module';
 import { GoodsReceiveModule } from './goods-receive/goods-receive.module';
 import { InventoryModule } from './inventory/inventory.module';
@@ -49,9 +53,13 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
     BinsModule,
     VendorsModule,
     CustomersModule,
+    DepartmentsModule,
+    ClassesModule,
+    SubsidiariesModule,
     MrnModule,
     GoodsReceiveModule,
     InventoryModule,
+    InventoryAdjustmentsModule,
     DiscrepancyModule,
     PermissionsModule,
     PutawayModule,

@@ -1,11 +1,23 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
 
 export interface WarehouseScope {
   role: string;
   warehouseId: string | null;
 }
+
+type SalesOrderOrder = Prisma.SalesOrderOrderByWithRelationInput;
+const SALES_ORDER_SORTABLE: Record<string, (d: SortDir) => SalesOrderOrder> = {
+  tran_id: (d) => ({ tranId: d }),
+  customer_name: (d) => ({ customerName: d }),
+  location: (d) => ({ warehouse: { name: d } }),
+  status_name: (d) => ({ statusName: d }),
+  delivery_status: (d) => ({ deliveryStatus: d }),
+  total_amount: (d) => ({ totalAmount: d }),
+  last_modified: (d) => ({ lastModified: d }),
+};
 
 const listInclude = {
   warehouse: { select: { id: true, name: true } },
@@ -35,11 +47,24 @@ export class SalesOrdersService {
   }
 
   async findAll(
-    query: { page?: number; limit?: number; search?: string; status?: string },
+    query: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: string;
+      sort_by?: string;
+      sort_order?: string;
+    },
     scope: WarehouseScope,
   ) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
+    const orderBy = buildOrderBy(
+      query.sort_by,
+      query.sort_order,
+      SALES_ORDER_SORTABLE,
+      { lastModified: 'desc' },
+    );
 
     const where: Prisma.SalesOrderWhereInput = { ...this.scopeWhere(scope) };
     // Status filtering is done here in WMS (on stored data), not sent to Oracle.
@@ -59,7 +84,7 @@ export class SalesOrdersService {
       this.prisma.salesOrder.findMany({
         where,
         include: listInclude,
-        orderBy: { lastModified: 'desc' },
+        orderBy,
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -68,7 +93,12 @@ export class SalesOrdersService {
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
-      attributes: { page, limit, order_by: 'last_modified desc' },
+      attributes: {
+        page,
+        limit,
+        sort_by: query.sort_by ?? null,
+        sort_order: query.sort_order ?? null,
+      },
       rows: rows.map((r) => this.serializeList(r)),
     };
   }

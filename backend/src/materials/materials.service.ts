@@ -7,6 +7,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateMaterialDto } from './dto/update-material.dto';
 import { QueryMaterialDto } from './dto/query-material.dto';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
 
 // Pull in the relations needed to build the API response
 const materialInclude = {
@@ -22,14 +23,18 @@ type MaterialWithRelations = Prisma.MaterialGetPayload<{
   include: typeof materialInclude;
 }>;
 
-// Map "<field> <dir>" (snake_case) to a Prisma orderBy clause
-const ORDER_FIELD_MAP: Record<string, keyof Prisma.MaterialOrderByWithRelationInput> =
-  {
-    created_at: 'createdAt',
-    modified_at: 'updatedAt',
-    material_name: 'materialName',
-    material_code: 'materialCode',
-  };
+type MaterialOrder = Prisma.MaterialOrderByWithRelationInput;
+const SORTABLE: Record<string, (d: SortDir) => MaterialOrder> = {
+  erp_id: (d) => ({ erpDocId: d }),
+  material_code: (d) => ({ materialCode: d }),
+  material_name: (d) => ({ materialName: d }),
+  material_type: (d) => ({ materialType: { materialTypeName: d } }),
+  material_category: (d) => ({ materialCategory: { materialCategoryName: d } }),
+  primary_uom: (d) => ({ primaryUom: { uomCode: d } }),
+  created_at: (d) => ({ createdAt: d }),
+  modified_at: (d) => ({ updatedAt: d }),
+};
+const DEFAULT_ORDER: MaterialOrder = { createdAt: 'desc' };
 
 @Injectable()
 export class MaterialsService {
@@ -38,7 +43,12 @@ export class MaterialsService {
   async findAll(query: QueryMaterialDto) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
-    const orderBy = this.parseOrderBy(query.order_by ?? 'created_at desc');
+    const orderBy = buildOrderBy(
+      query.sort_by,
+      query.sort_order,
+      SORTABLE,
+      DEFAULT_ORDER,
+    );
 
     const where: Prisma.MaterialWhereInput = query.search
       ? {
@@ -66,7 +76,8 @@ export class MaterialsService {
       attributes: {
         page,
         limit,
-        order_by: query.order_by ?? 'created_at desc',
+        sort_by: query.sort_by ?? null,
+        sort_order: query.sort_order ?? null,
       },
       rows: rows.map((r) => this.serialize(r)),
     };
@@ -170,15 +181,6 @@ export class MaterialsService {
         throw new BadRequestException('One or more UOM references are invalid');
       }
     }
-  }
-
-  private parseOrderBy(
-    orderByStr: string,
-  ): Prisma.MaterialOrderByWithRelationInput {
-    const [rawField, rawDir] = orderByStr.trim().split(/\s+/);
-    const field = ORDER_FIELD_MAP[rawField] ?? 'createdAt';
-    const dir: Prisma.SortOrder = rawDir === 'asc' ? 'asc' : 'desc';
-    return { [field]: dir };
   }
 
   // Shape the entity into the original API response format

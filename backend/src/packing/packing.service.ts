@@ -9,6 +9,18 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import type { GeneratePackingDto } from './dto/generate-packing.dto';
 import type { ProgressPackingDto } from './dto/progress-packing.dto';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
+
+type PackingOrder = Prisma.PackingOrderByWithRelationInput;
+const PACKING_SORTABLE: Record<string, (d: SortDir) => PackingOrder> = {
+  packing_code: (d) => ({ packingCode: d }),
+  picking_id: (d) => ({ picking: { pickingCode: d } }),
+  so_number: (d) => ({ picking: { salesOrder: { tranId: d } } }),
+  location: (d) => ({ warehouse: { name: d } }),
+  customer: (d) => ({ picking: { salesOrder: { customerName: d } } }),
+  status: (d) => ({ status: d }),
+  created_at: (d) => ({ createdAt: d }),
+};
 
 export interface WarehouseScope {
   role: string;
@@ -66,11 +78,20 @@ export class PackingService {
   // ---------- read ----------
 
   async findAll(
-    query: { page?: number; limit?: number; search?: string },
+    query: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      sort_by?: string;
+      sort_order?: string;
+    },
     scope: WarehouseScope,
   ) {
     const page = Number(query.page) || 1;
     const limit = Number(query.limit) || 10;
+    const orderBy = buildOrderBy(query.sort_by, query.sort_order, PACKING_SORTABLE, {
+      createdAt: 'desc',
+    });
 
     // Packings that already have a Delivery document are hidden (they move to
     // the Delivery List tab).
@@ -95,7 +116,7 @@ export class PackingService {
       this.prisma.packing.findMany({
         where,
         include: listInclude,
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -104,7 +125,12 @@ export class PackingService {
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
-      attributes: { page, limit, order_by: 'created_at desc' },
+      attributes: {
+        page,
+        limit,
+        sort_by: query.sort_by ?? null,
+        sort_order: query.sort_order ?? null,
+      },
       rows: rows.map((r) => this.serializeList(r)),
     };
   }

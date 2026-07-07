@@ -6,11 +6,21 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateActualsDto } from './dto/update-actuals.dto';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
 
 export interface WarehouseScope {
   role: string;
   warehouseId: string | null;
 }
+
+type GrOrder = Prisma.GoodsReceiveOrderByWithRelationInput;
+const GR_SORTABLE: Record<string, (d: SortDir) => GrOrder> = {
+  gr_number: (d) => ({ grNumber: d }),
+  shipment_number: (d) => ({ mrn: { shipmentNumber: d } }),
+  receiving_location: (d) => ({ warehouse: { name: d } }),
+  status: (d) => ({ status: d }),
+  created_at: (d) => ({ createdAt: d }),
+};
 
 const grInclude = {
   warehouse: { select: { id: true, name: true } },
@@ -37,11 +47,20 @@ export class GoodsReceiveService {
   }
 
   async findAll(
-    query: { page?: number; limit?: number; search?: string },
+    query: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      sort_by?: string;
+      sort_order?: string;
+    },
     scope: WarehouseScope,
   ) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
+    const orderBy = buildOrderBy(query.sort_by, query.sort_order, GR_SORTABLE, {
+      mrn: { shipmentNumber: 'desc' },
+    });
 
     const where: Prisma.GoodsReceiveWhereInput = { ...this.scopeWhere(scope) };
     if (query.search) {
@@ -60,7 +79,7 @@ export class GoodsReceiveService {
       this.prisma.goodsReceive.findMany({
         where,
         include: grInclude,
-        orderBy: { mrn: { shipmentNumber: 'desc' } },
+        orderBy,
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -69,7 +88,12 @@ export class GoodsReceiveService {
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
-      attributes: { page, limit, order_by: 'shipment_number desc' },
+      attributes: {
+        page,
+        limit,
+        sort_by: query.sort_by ?? null,
+        sort_order: query.sort_order ?? null,
+      },
       rows: rows.map((r) => this.serializeList(r)),
     };
   }

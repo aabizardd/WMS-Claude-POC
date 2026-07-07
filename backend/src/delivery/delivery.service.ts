@@ -10,6 +10,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import type { GenerateDeliveryDto } from './dto/generate-delivery.dto';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
 
 interface ErpAuthResponse {
   success: boolean;
@@ -70,6 +71,20 @@ const detailInclude = {
 
 type DeliveryList = Prisma.DeliveryGetPayload<{ include: typeof listInclude }>;
 type DeliveryDetail = Prisma.DeliveryGetPayload<{ include: typeof detailInclude }>;
+
+type DeliveryOrder = Prisma.DeliveryOrderByWithRelationInput;
+const DELIVERY_SORTABLE: Record<string, (d: SortDir) => DeliveryOrder> = {
+  delivery_code: (d) => ({ deliveryCode: d }),
+  sdo_id: (d) => ({ sdoId: d }),
+  packing_id: (d) => ({ packing: { packingCode: d } }),
+  so_number: (d) => ({ packing: { picking: { salesOrder: { tranId: d } } } }),
+  customer: (d) => ({
+    packing: { picking: { salesOrder: { customerName: d } } },
+  }),
+  location: (d) => ({ warehouse: { name: d } }),
+  status: (d) => ({ status: d }),
+  created_at: (d) => ({ createdAt: d }),
+};
 
 @Injectable()
 export class DeliveryService {
@@ -152,11 +167,21 @@ export class DeliveryService {
   }
 
   async findAll(
-    query: { page?: number; limit?: number; search?: string; history?: string | boolean },
+    query: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      history?: string | boolean;
+      sort_by?: string;
+      sort_order?: string;
+    },
     scope: WarehouseScope,
   ) {
     const page = Number(query.page) || 1;
     const limit = Number(query.limit) || 10;
+    const orderBy = buildOrderBy(query.sort_by, query.sort_order, DELIVERY_SORTABLE, {
+      createdAt: 'desc',
+    });
 
     // History tab = Closed (shipped) deliveries; Delivery List = active (Open).
     const isHistory = query.history === true || query.history === 'true';
@@ -184,7 +209,7 @@ export class DeliveryService {
       this.prisma.delivery.findMany({
         where,
         include: listInclude,
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -193,7 +218,12 @@ export class DeliveryService {
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
-      attributes: { page, limit, order_by: 'created_at desc' },
+      attributes: {
+        page,
+        limit,
+        sort_by: query.sort_by ?? null,
+        sort_order: query.sort_order ?? null,
+      },
       rows: rows.map((r) => this.serializeList(r)),
     };
   }

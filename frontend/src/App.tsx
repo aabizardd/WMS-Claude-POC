@@ -24,6 +24,9 @@ import BinsPage from './pages/warehouse/BinsPage';
 import BinFormPage from './pages/warehouse/BinFormPage';
 import VendorsPage from './pages/vendor/VendorsPage';
 import CustomersPage from './pages/customer/CustomersPage';
+import DepartmentsPage from './pages/department/DepartmentsPage';
+import ClassesPage from './pages/class/ClassesPage';
+import SubsidiariesPage from './pages/subsidiary/SubsidiariesPage';
 import InboundLayout from './pages/inbound/InboundLayout';
 import InboundLandingPage from './pages/inbound/InboundLandingPage';
 import MrnTab from './pages/inbound/MrnTab';
@@ -34,6 +37,9 @@ import PutawayTab from './pages/inbound/PutawayTab';
 import PutawayDetailPage from './pages/inbound/PutawayDetailPage';
 import InventoryPage from './pages/inventory/InventoryPage';
 import InventoryDetailPage from './pages/inventory/InventoryDetailPage';
+import InventoryAdjustmentsPage from './pages/inventory-adjustment/InventoryAdjustmentsPage';
+import InventoryAdjustmentCreatePage from './pages/inventory-adjustment/InventoryAdjustmentCreatePage';
+import InventoryAdjustmentDetailPage from './pages/inventory-adjustment/InventoryAdjustmentDetailPage';
 import DiscrepancyPage from './pages/discrepancy/DiscrepancyPage';
 import DiscrepancyDetailPage from './pages/discrepancy/DiscrepancyDetailPage';
 import OutboundLandingPage from './pages/outbound/OutboundLandingPage';
@@ -240,6 +246,36 @@ export default function App() {
             }
           />
 
+          {/* Department Management */}
+          <Route
+            path="departments"
+            element={
+              <RequirePermission permission="departments:read">
+                <DepartmentsPage />
+              </RequirePermission>
+            }
+          />
+
+          {/* Class Management */}
+          <Route
+            path="classes"
+            element={
+              <RequirePermission permission="classes:read">
+                <ClassesPage />
+              </RequirePermission>
+            }
+          />
+
+          {/* Subsidiary Management */}
+          <Route
+            path="subsidiaries"
+            element={
+              <RequirePermission permission="subsidiaries:read">
+                <SubsidiariesPage />
+              </RequirePermission>
+            }
+          />
+
           {/* Inbound — landing page (type selection) */}
           <Route path="inbound" element={<InboundLandingPage />} />
 
@@ -318,6 +354,32 @@ export default function App() {
             element={
               <RequirePermission permission="inventory:read">
                 <InventoryDetailPage />
+              </RequirePermission>
+            }
+          />
+
+          {/* Inventory Adjustment */}
+          <Route
+            path="inventory-adjustments"
+            element={
+              <RequirePermission permission="inventory-adjustments:read">
+                <InventoryAdjustmentsPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="inventory-adjustments/new"
+            element={
+              <RequirePermission permission="inventory-adjustments:create">
+                <InventoryAdjustmentCreatePage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="inventory-adjustments/:id"
+            element={
+              <RequirePermission permission="inventory-adjustments:read">
+                <InventoryAdjustmentDetailPage />
               </RequirePermission>
             }
           />

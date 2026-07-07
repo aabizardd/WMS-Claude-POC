@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../lib/api';
 import type { DiscrepancyRow, Paginated } from '../../types';
+import { useSort } from '../../hooks/useSort';
+import SortableTh from '../../components/SortableTh';
 
 const LIMIT = 10;
 
@@ -28,6 +30,11 @@ export default function DiscrepancyPage() {
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('quantity');
+  const { sort, toggle, params } = useSort();
+  const onSort = (col: string) => {
+    setPage(1);
+    toggle(col);
+  };
 
   async function load() {
     setLoading(true);
@@ -37,6 +44,7 @@ export default function DiscrepancyPage() {
         limit: LIMIT,
         search: search || undefined,
         type: typeFilter || undefined,
+        ...params(),
       },
     });
     setData(r.data);
@@ -46,7 +54,7 @@ export default function DiscrepancyPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, typeFilter]);
+  }, [page, search, typeFilter, sort.sortBy, sort.order]);
 
   function onSearch(e: FormEvent) {
     e.preventDefault();
@@ -120,14 +128,14 @@ export default function DiscrepancyPage() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-6 py-3">Discrepancy ID</th>
+                <SortableTh label="Discrepancy ID" col="discrepancy_id" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3">Source Number</th>
                 <th className="px-6 py-3">Source</th>
-                <th className="px-6 py-3">Type</th>
-                <th className="px-6 py-3">From</th>
-                <th className="px-6 py-3">Reported By</th>
+                <SortableTh label="Type" col="type" sort={sort} onSort={onSort} />
+                <SortableTh label="From" col="from" sort={sort} onSort={onSort} />
+                <SortableTh label="Reported By" col="reported_by" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3">Items</th>
-                <th className="px-6 py-3">Created</th>
+                <SortableTh label="Created" col="created_at" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
             </thead>

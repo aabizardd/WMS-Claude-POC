@@ -10,8 +10,23 @@ import { ErpSyncService } from '../materials/erp-sync.service';
 import { WarehouseSyncService } from '../warehouses/warehouse-sync.service';
 import { VendorSyncService } from '../vendors/vendor-sync.service';
 import { CustomerSyncService } from '../customers/customer-sync.service';
+import { DepartmentSyncService } from '../departments/department-sync.service';
+import { ClassSyncService } from '../classes/class-sync.service';
+import { SubsidiarySyncService } from '../subsidiaries/subsidiary-sync.service';
 import { MrnSyncService } from '../mrn/mrn-sync.service';
 import { SalesOrderSyncService } from '../sales-orders/sales-order-sync.service';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
+
+type SyncLogOrder = Prisma.SyncLogOrderByWithRelationInput;
+const SYNC_LOG_SORTABLE: Record<string, (d: SortDir) => SyncLogOrder> = {
+  module: (d) => ({ module: d }),
+  trigger: (d) => ({ trigger: d }),
+  status: (d) => ({ status: d }),
+  upserted: (d) => ({ upserted: d }),
+  failed: (d) => ({ failed: d }),
+  message: (d) => ({ message: d }),
+  created_at: (d) => ({ createdAt: d }),
+};
 
 interface SyncerDef {
   watermark: () => Promise<Date | null>;
@@ -48,6 +63,9 @@ export class SyncRunnerService {
     warehouses: WarehouseSyncService,
     vendors: VendorSyncService,
     customers: CustomerSyncService,
+    departments: DepartmentSyncService,
+    classes: ClassSyncService,
+    subsidiaries: SubsidiarySyncService,
     mrn: MrnSyncService,
     salesOrders: SalesOrderSyncService,
   ) {
@@ -88,6 +106,18 @@ export class SyncRunnerService {
       customers: {
         watermark: () => latestCreatedAt(this.prisma.customer as never),
         run: (lm) => customers.sync({ lastModified: lm }),
+      },
+      departments: {
+        watermark: () => latestCreatedAt(this.prisma.department as never),
+        run: (lm) => departments.sync({ lastModified: lm }),
+      },
+      classes: {
+        watermark: () => latestCreatedAt(this.prisma.class as never),
+        run: (lm) => classes.sync({ lastModified: lm }),
+      },
+      subsidiaries: {
+        watermark: () => latestCreatedAt(this.prisma.subsidiary as never),
+        run: (lm) => subsidiaries.sync({ lastModified: lm }),
       },
       mrn: {
         watermark: () => latestCreatedAt(this.prisma.mrn as never),
@@ -178,9 +208,18 @@ export class SyncRunnerService {
 
   // ---------- log API ----------
 
-  async findAll(query: { page?: number; limit?: number; status?: string }) {
+  async findAll(query: {
+    page?: number;
+    limit?: number;
+    status?: string;
+    sort_by?: string;
+    sort_order?: string;
+  }) {
     const page = Number(query.page) || 1;
     const limit = Number(query.limit) || 10;
+    const orderBy = buildOrderBy(query.sort_by, query.sort_order, SYNC_LOG_SORTABLE, {
+      createdAt: 'desc',
+    });
 
     const where: Prisma.SyncLogWhereInput = {};
     if (query.status === 'failed' || query.status === 'partial' || query.status === 'success') {
@@ -191,7 +230,7 @@ export class SyncRunnerService {
       this.prisma.syncLog.count({ where }),
       this.prisma.syncLog.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -200,7 +239,13 @@ export class SyncRunnerService {
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
-      attributes: { page, limit, order_by: 'created_at desc', status: query.status ?? null },
+      attributes: {
+        page,
+        limit,
+        status: query.status ?? null,
+        sort_by: query.sort_by ?? null,
+        sort_order: query.sort_order ?? null,
+      },
       rows: rows.map((r) => this.serialize(r)),
     };
   }
