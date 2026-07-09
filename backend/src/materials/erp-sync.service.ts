@@ -2,11 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-
-interface ErpAuthResponse {
-  success: boolean;
-  data?: { access_token: string; token_type: string; expires_in: number };
-}
+import { ErpHttpService } from '../erp/erp-http.service';
 
 interface ErpLocation {
   location?: string;
@@ -15,6 +11,7 @@ interface ErpLocation {
   qtyAvailable?: string | number;
   qtyBackOrder?: string | number;
   qtyCommitted?: string | number;
+  qtyInTransit?: string | number;
   inventorylocationId?: string | number;
 }
 
@@ -76,88 +73,24 @@ export class ErpSyncService {
   constructor(
     private prisma: PrismaService,
     private config: ConfigService,
+    private erp: ErpHttpService,
   ) {}
 
-  private baseUrl() {
-    const url = this.config.get<string>('ERP_BASE_URL');
-    if (!url) throw new Error('ERP_BASE_URL is not configured');
-    return url.replace(/\/$/, '');
-  }
-
-  /** Obtain a bearer access token via client_credentials. */
-  async getAccessToken(): Promise<string> {
-    const res = await fetch(`${this.baseUrl()}/auth/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'client_credentials',
-        client_id: this.config.get<string>('ERP_CLIENT_ID'),
-        client_secret: this.config.get<string>('ERP_CLIENT_SECRET'),
-      }),
-    });
-
-    if (!res.ok) {
-      throw new Error(`ERP auth failed: ${res.status} ${await res.text()}`);
-    }
-    const json = (await res.json()) as ErpAuthResponse;
-    const token = json?.data?.access_token;
-    if (!token) throw new Error('ERP auth: access_token missing in response');
-    return token;
-  }
-
-  /** Fetch a single page of items. */
-  private async fetchItemsPage(
-    token: string,
+  /** Fetch a single page of items (shared client handles auth/throttle/429). */
+  private fetchItemsPage(
     page: number,
     pageSize: number,
     lastModified?: string,
   ): Promise<ErpItemsResponse> {
     const filters: Record<string, string> = {};
     if (lastModified) filters.lastmodified = lastModified;
-
-    // Retry on 429 (rate limit) with exponential backoff, honoring Retry-After.
-    const maxRetries = Number(this.config.get('ERP_SYNC_MAX_RETRIES') ?? 6);
-    const baseBackoff = Number(
-      this.config.get('ERP_SYNC_RETRY_BACKOFF_MS') ?? 5000,
-    );
-
-    for (let attempt = 0; ; attempt++) {
-      const res = await fetch(`${this.baseUrl()}/items/get`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          page,
-          page_size: pageSize,
-          sort_by: 'lastmodifieddate',
-          sort_order: 'DESC',
-          filters,
-        }),
-      });
-
-      if (res.ok) {
-        return (await res.json()) as ErpItemsResponse;
-      }
-
-      if (res.status === 429 && attempt < maxRetries) {
-        const retryAfter = Number(res.headers.get('retry-after'));
-        const wait =
-          Number.isFinite(retryAfter) && retryAfter > 0
-            ? retryAfter * 1000
-            : baseBackoff * Math.pow(2, attempt);
-        this.logger.warn(
-          `Rate limited on page ${page} (attempt ${attempt + 1}/${maxRetries}). Waiting ${wait}ms…`,
-        );
-        await this.delay(wait);
-        continue;
-      }
-
-      throw new Error(
-        `ERP items fetch failed (page ${page}): ${res.status} ${await res.text()}`,
-      );
-    }
+    return this.erp.post<ErpItemsResponse>('/items/get', {
+      page,
+      page_size: pageSize,
+      sort_by: 'lastmodifieddate',
+      sort_order: 'DESC',
+      filters,
+    });
   }
 
   /**
@@ -188,8 +121,6 @@ export class ErpSyncService {
     this.virtualBinCache.clear();
     this.virtualMaster = null;
 
-    const token = await this.getAccessToken();
-
     let page = 1;
     let totalPages = 1;
     let totalRecords = 0;
@@ -207,12 +138,7 @@ export class ErpSyncService {
         await this.delay(pageDelayMs);
       }
 
-      const res = await this.fetchItemsPage(
-        token,
-        page,
-        pageSize,
-        lastModified,
-      );
+      const res = await this.fetchItemsPage(page, pageSize, lastModified);
       totalPages = res.total_pages || 1;
       totalRecords = res.total_records ?? 0;
 
@@ -336,6 +262,7 @@ export class ErpSyncService {
       const committed = this.num(loc.qtyCommitted);
       const onOrder = this.num(loc.qtyOnOrder);
       const backOrder = this.num(loc.qtyBackOrder);
+      const inTransit = this.num(loc.qtyInTransit);
 
       // Find-or-create the header row and always refresh Oracle header qtys.
       let inv = await this.prisma.inventoryManagement.findFirst({
@@ -351,6 +278,7 @@ export class ErpSyncService {
             qtyCommitted: committed,
             qtyOnOrder: onOrder,
             qtyBackOrder: backOrder,
+            qtyInTransit: inTransit,
           },
           select: { id: true, materialId: true },
         });
@@ -361,6 +289,7 @@ export class ErpSyncService {
             qtyCommitted: committed,
             qtyOnOrder: onOrder,
             qtyBackOrder: backOrder,
+            qtyInTransit: inTransit,
             ...(inv.materialId ? {} : { materialId: material.id }),
           },
         });

@@ -3,9 +3,11 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ErpHttpService } from '../erp/erp-http.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import type { CreateInventoryAdjustmentDto } from './dto/create-inventory-adjustment.dto';
 import type { ApproveInventoryAdjustmentDto } from './dto/approve-inventory-adjustment.dto';
@@ -14,6 +16,18 @@ export interface WarehouseScope {
   userId: number;
   role: string;
   warehouseId: string | null;
+}
+
+// Static header values for the Oracle inventory adjustment (env-overridable).
+const ADJ_CUSTOMFORM = Number(process.env.ORACLE_ADJ_CUSTOMFORM ?? 112);
+const ADJ_SUBSIDIARY = Number(process.env.ORACLE_ADJ_SUBSIDIARY ?? 6);
+const ADJ_ACCOUNT = Number(process.env.ORACLE_ADJ_ACCOUNT ?? 53);
+
+interface OracleAdjustmentResponse {
+  status?: string;
+  success?: boolean;
+  message?: string;
+  inventory_adjustment_id?: number;
 }
 
 // Adjustment type -> the discrepancy type that may be attached as a memo.
@@ -31,6 +45,7 @@ const listInclude = {
 
 const detailInclude = {
   warehouse: { select: { id: true, name: true } },
+  class: { select: { id: true, name: true, oracleId: true } },
   createdBy: { select: { id: true, name: true } },
   approvedBy: { select: { id: true, name: true } },
   items: {
@@ -63,6 +78,7 @@ const SORTABLE: Record<string, (d: SortDir) => AdjOrder> = {
   adjustment_number: (d) => ({ adjustmentNumber: d }),
   adjustment_type: (d) => ({ adjustmentType: d }),
   status: (d) => ({ status: d }),
+  oracle_approval_status: (d) => ({ oracleApprovalStatus: d }),
   warehouse: (d) => ({ warehouse: { name: d } }),
   created_by: (d) => ({ createdBy: { name: d } }),
   created_at: (d) => ({ createdAt: d }),
@@ -72,7 +88,10 @@ const SORTABLE: Record<string, (d: SortDir) => AdjOrder> = {
 export class InventoryAdjustmentsService {
   private readonly logger = new Logger(InventoryAdjustmentsService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private erp: ErpHttpService,
+  ) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.InventoryAdjustmentWhereInput {
     if (scope.role === 'admin') {
@@ -144,6 +163,15 @@ export class InventoryAdjustmentsService {
       throw new BadRequestException('At least one material/bin line is required');
     }
 
+    // Header class (sent to Oracle on approval).
+    const klass = await this.prisma.class.findUnique({
+      where: { id: dto.class_id },
+      select: { id: true },
+    });
+    if (!klass) {
+      throw new BadRequestException('Selected class does not exist');
+    }
+
     // Validate each line against the inventory bin stock and snapshot context.
     const seen = new Set<string>();
     const prepared: {
@@ -194,12 +222,14 @@ export class InventoryAdjustmentsService {
       const qtyPassed = Number(line.qty_passed) || 0;
 
       if (type === 'qty_issue') {
-        if (!(qtyAdjustment > 0)) {
-          throw new BadRequestException('Qty adjustment must be greater than 0');
+        // Signed delta: + adds to available, - reduces it. Must not zero-input
+        // and must not drive available below 0.
+        if (qtyAdjustment === 0) {
+          throw new BadRequestException('Qty adjustment cannot be 0');
         }
-        if (qtyAdjustment > stock.availQty + 1e-9) {
+        if (stock.availQty + qtyAdjustment < -1e-9) {
           throw new BadRequestException(
-            `Qty adjustment (${qtyAdjustment}) exceeds available (${stock.availQty})`,
+            `Adjustment (${qtyAdjustment}) would make available negative (current ${stock.availQty})`,
           );
         }
       } else {
@@ -268,6 +298,7 @@ export class InventoryAdjustmentsService {
       data: {
         adjustmentNumber,
         warehouseId,
+        classId: dto.class_id,
         adjustmentType: type,
         status: 'PendingApproval',
         note: dto.note ?? null,
@@ -306,7 +337,15 @@ export class InventoryAdjustmentsService {
   ) {
     const a = await this.prisma.inventoryAdjustment.findUnique({
       where: { id },
-      select: { id: true, status: true, warehouseId: true },
+      include: {
+        warehouse: { select: { oracleId: true } },
+        class: { select: { oracleId: true } },
+        createdBy: { select: { department: { select: { oracleId: true } } } },
+        items: { include: { material: { select: { erpDocId: true } } } },
+        discrepancies: {
+          include: { discrepancy: { select: { discrepancyId: true } } },
+        },
+      },
     });
     if (
       !a ||
@@ -321,28 +360,152 @@ export class InventoryAdjustmentsService {
     }
 
     const reason = dto.reason?.trim() || null;
-    if (dto.action === 'reject' && !reason) {
-      throw new BadRequestException('A reason is required to reject');
+
+    // Reject — no Oracle call.
+    if (dto.action === 'reject') {
+      if (!reason) {
+        throw new BadRequestException('A reason is required to reject');
+      }
+      await this.prisma.inventoryAdjustment.update({
+        where: { id },
+        data: {
+          status: 'Rejected',
+          approvedById: scope.userId,
+          approvedAt: new Date(),
+          approvalReason: reason,
+        },
+      });
+      this.logger.log(`Adjustment ${id} rejected by user ${scope.userId}`);
+      return this.findOne(id, scope);
     }
+
+    // Approve — post to Oracle FIRST. If it fails, nothing is committed (stays
+    // Pending Approval) so the user can retry.
+    const oracle = await this.postToOracle(a);
 
     await this.prisma.inventoryAdjustment.update({
       where: { id },
       data: {
-        status: dto.action === 'approve' ? 'Approved' : 'Rejected',
+        status: 'Approved',
         approvedById: scope.userId,
         approvedAt: new Date(),
         approvalReason: reason,
-        // Approving in WMS hands off to Oracle; reject leaves it untouched ("-").
-        ...(dto.action === 'approve'
-          ? { oracleApprovalStatus: 'Pending Approval Oracle' }
-          : {}),
+        oracleApprovalStatus: 'Pending Approval Oracle',
+        oracleId: String(oracle.inventoryAdjustmentId),
       },
     });
 
     this.logger.log(
-      `Adjustment ${id} ${dto.action}ed by user ${scope.userId}`,
+      `Adjustment ${id} approved by user ${scope.userId}; Oracle IA ${oracle.inventoryAdjustmentId}`,
     );
-    return this.findOne(id, scope);
+    const detail = await this.findOne(id, scope);
+    return {
+      ...detail,
+      oracle: {
+        message: oracle.message,
+        inventory_adjustment_id: oracle.inventoryAdjustmentId,
+      },
+    };
+  }
+
+  // Build the Oracle Inventory Adjustment payload and POST it. Throws (503) with
+  // the bridge message on any failure so the caller can surface a retry.
+  private async postToOracle(a: {
+    warehouse: { oracleId: string | null } | null;
+    class: { oracleId: string } | null;
+    createdBy: { department: { oracleId: string } | null } | null;
+    note: string | null;
+    adjustmentType: string;
+    items: {
+      qtyAdjustment: number;
+      qtyPassed: number;
+      material: { erpDocId: string | null } | null;
+    }[];
+    discrepancies: { discrepancy: { discrepancyId: string } }[];
+  }): Promise<{ inventoryAdjustmentId: number; message: string }> {
+    const locationOracle = a.warehouse?.oracleId;
+    const classOracle = a.class?.oracleId;
+    const deptOracle = a.createdBy?.department?.oracleId;
+
+    if (!locationOracle) {
+      throw new BadRequestException(
+        'Warehouse has no Oracle location id — cannot post to Oracle',
+      );
+    }
+    if (!classOracle) {
+      throw new BadRequestException(
+        'Class is not set on this adjustment — cannot post to Oracle',
+      );
+    }
+    if (!deptOracle) {
+      throw new BadRequestException(
+        "The creator's department (Oracle) is missing — cannot post to Oracle",
+      );
+    }
+
+    const location = Number(locationOracle);
+    const department = Number(deptOracle);
+    const isQty = a.adjustmentType === 'qty_issue';
+
+    // Group lines by item (erp_doc_id) so multiple bins of the same material go
+    // out as ONE line with the summed quantity (Oracle expects one line/item).
+    const qtyByItem = new Map<number, number>();
+    for (const it of a.items) {
+      const item = Number(it.material?.erpDocId);
+      if (!Number.isFinite(item)) continue;
+      const q = isQty ? it.qtyAdjustment : it.qtyPassed;
+      qtyByItem.set(item, (qtyByItem.get(item) ?? 0) + q);
+    }
+    const lines = [...qtyByItem.entries()]
+      .map(([item, quantity]) => ({ item, location, quantity, department }))
+      .filter((l) => l.quantity !== 0);
+    if (lines.length === 0) {
+      throw new BadRequestException(
+        'No postable lines (missing item erp id or zero quantity)',
+      );
+    }
+
+    const memo = a.discrepancies
+      .map((d) => d.discrepancy.discrepancyId)
+      .join(', ');
+
+    const payload = {
+      customform: ADJ_CUSTOMFORM,
+      subsidiary: ADJ_SUBSIDIARY,
+      account: ADJ_ACCOUNT,
+      adjlocation: location,
+      department,
+      class: Number(classOracle),
+      memo,
+      custbody_me_description: a.note ?? '',
+      lines,
+    };
+
+    let res: { ok: boolean; status: number; body: OracleAdjustmentResponse | null };
+    try {
+      res = await this.erp.postRaw<OracleAdjustmentResponse>(
+        '/inventory/adjustments',
+        payload,
+      );
+    } catch (e) {
+      throw new ServiceUnavailableException(
+        `Failed to reach Oracle Inventory Adjustment: ${(e as Error).message}`,
+      );
+    }
+
+    const body = res.body;
+    const invId = body?.inventory_adjustment_id;
+    const ok =
+      (body?.status === 'success' || body?.success === true) && invId != null;
+    if (!ok) {
+      throw new ServiceUnavailableException(
+        body?.message ?? `Oracle Inventory Adjustment failed (HTTP ${res.status})`,
+      );
+    }
+    return {
+      inventoryAdjustmentId: invId,
+      message: body?.message ?? 'Inventory Adjustment created',
+    };
   }
 
   // ---------- read ----------
@@ -444,6 +607,8 @@ export class InventoryAdjustmentsService {
       bin_count: bins.size,
       total_qty: totalQty,
       discrepancy_count: a._count.discrepancies,
+      oracle_id: a.oracleId,
+      oracle_approval_status: a.oracleApprovalStatus,
       created_by: a.createdBy?.name ?? null,
       created_at: a.createdAt,
     };
@@ -455,9 +620,13 @@ export class InventoryAdjustmentsService {
       adjustment_number: a.adjustmentNumber,
       warehouse: a.warehouse?.name ?? null,
       warehouse_id: a.warehouseId,
+      class_id: a.classId,
+      class_name: a.class?.name ?? null,
+      class_oracle_id: a.class?.oracleId ?? null,
       adjustment_type: a.adjustmentType,
       status: a.status,
       note: a.note,
+      oracle_id: a.oracleId,
       created_by: a.createdBy?.name ?? null,
       created_at: a.createdAt,
       approved_by: a.approvedBy?.name ?? null,

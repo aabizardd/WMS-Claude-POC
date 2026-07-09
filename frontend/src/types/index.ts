@@ -454,6 +454,8 @@ export interface InventoryAdjustmentRow {
   bin_count: number;
   total_qty: number;
   discrepancy_count: number;
+  oracle_id?: string;
+  oracle_approval_status?: string;
   created_by: string | null;
   created_at: string;
 }
@@ -492,9 +494,13 @@ export interface InventoryAdjustmentDetail {
   adjustment_number: string;
   warehouse: string | null;
   warehouse_id: string | null;
+  class_id: string | null;
+  class_name: string | null;
+  class_oracle_id: string | null;
   adjustment_type: 'qty_issue' | 'quality_issue';
   status: string;
   note: string | null;
+  oracle_id: string;
   created_by: string | null;
   created_at: string;
   approved_by: string | null;
@@ -504,6 +510,11 @@ export interface InventoryAdjustmentDetail {
   total_qty: number;
   items: InventoryAdjustmentItemRow[];
   discrepancies: { id: string; discrepancy_id: string; type: string; from: string }[];
+}
+
+// Response of PUT /inventory-adjustments/:id/approve on success (approve action).
+export interface AdjustmentApprovalResult extends InventoryAdjustmentDetail {
+  oracle?: { message: string; inventory_adjustment_id: number };
 }
 
 export interface Bin {

@@ -45,6 +45,8 @@ export default function InventoryAdjustmentCreatePage() {
 
   const [type, setType] = useState<AdjType>('qty_issue');
   const [note, setNote] = useState('');
+  const [classes, setClasses] = useState<{ id: string; name: string | null; oracleId: string }[]>([]);
+  const [classId, setClassId] = useState('');
   const [materials, setMaterials] = useState<AdjMaterialOption[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [discrepancies, setDiscrepancies] = useState<DiscrepancyRow[]>([]);
@@ -53,6 +55,14 @@ export default function InventoryAdjustmentCreatePage() {
 
   // Admin with "All sites" selected cannot create — needs a concrete warehouse.
   const noWarehouse = canSwitch && !activeWarehouseId;
+
+  // Class options (header select; oracle_id is sent to Oracle on approval).
+  useEffect(() => {
+    api
+      .get<{ id: string; name: string | null; oracleId: string }[]>('/classes/options')
+      .then((r) => setClasses(r.data))
+      .catch(() => setClasses([]));
+  }, []);
 
   // Load material options (scoped to the active warehouse via the header).
   useEffect(() => {
@@ -195,21 +205,32 @@ export default function InventoryAdjustmentCreatePage() {
   }
 
   const allLines = groups.flatMap((g) => g.lines);
+
+  // Simulated new available for a bin line (frontend-only, not persisted).
+  //  qty_issue    → available + qty_adjustment (signed)
+  //  quality_issue→ available − (scrapped + passed)
+  const lineNewAvail = (l: BinLine) =>
+    type === 'qty_issue'
+      ? l.avail + (Number(l.qty_adjustment) || 0)
+      : l.avail - (Number(l.qty_scrapped) || 0) - (Number(l.qty_passed) || 0);
+
   const validity = useMemo(() => {
     if (allLines.length === 0) return { ok: false, msg: 'Add at least one material and bin.' };
     for (const l of allLines) {
       if (type === 'qty_issue') {
-        if (!(l.qty_adjustment > 0)) return { ok: false, msg: 'Enter a qty adjustment for every bin.' };
-        if (l.qty_adjustment > l.avail + 1e-9)
-          return { ok: false, msg: `Qty exceeds available (${l.avail}) for bin ${l.bin_label ?? ''}.` };
+        if ((Number(l.qty_adjustment) || 0) === 0)
+          return { ok: false, msg: 'Enter a non-zero qty adjustment for every bin.' };
+        if (lineNewAvail(l) < -1e-9)
+          return { ok: false, msg: `Adjustment makes available negative for bin ${l.bin_label ?? ''}.` };
       } else {
         const t = l.qty_scrapped + l.qty_passed;
         if (!(t > 0)) return { ok: false, msg: 'Enter scrapped/passed for every bin.' };
-        if (t > l.avail + 1e-9)
+        if (lineNewAvail(l) < -1e-9)
           return { ok: false, msg: `Scrapped+passed exceeds available (${l.avail}) for bin ${l.bin_label ?? ''}.` };
       }
     }
     return { ok: true, msg: '' };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allLines, type]);
 
   function toggleDisc(id: string) {
@@ -221,6 +242,10 @@ export default function InventoryAdjustmentCreatePage() {
   }
 
   async function handleSubmit() {
+    if (!classId) {
+      toast.error('Select a class.');
+      return;
+    }
     if (!validity.ok) {
       toast.error(validity.msg);
       return;
@@ -232,6 +257,7 @@ export default function InventoryAdjustmentCreatePage() {
         '/inventory-adjustments',
         {
           adjustment_type: type,
+          class_id: classId,
           note: note || undefined,
           items,
           discrepancy_ids: [...selectedDiscs],
@@ -305,8 +331,21 @@ export default function InventoryAdjustmentCreatePage() {
             />
           </div>
           <div>
+            <div className="mb-1 text-xs text-slate-400">Class *</div>
+            <SearchableSelect
+              value={classId}
+              onChange={setClassId}
+              placeholder="Select class…"
+              searchPlaceholder="Search class…"
+              options={classes.map((c) => ({
+                value: c.id,
+                label: c.name ? `${c.name} (${c.oracleId})` : c.oracleId,
+              }))}
+            />
+          </div>
+          <div>
             <div className="mb-1 text-xs text-slate-400">Note (optional)</div>
-            <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Memo…" />
+            <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Header description…" />
           </div>
         </div>
       </div>
@@ -338,9 +377,29 @@ export default function InventoryAdjustmentCreatePage() {
               return (
                 <div key={g.material_id} className="rounded-lg border border-slate-200">
                   <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5">
-                    <div className="font-medium text-slate-800">
-                      {g.material_code}
-                      {g.material_name ? <span className="ml-2 text-xs text-slate-400">{g.material_name}</span> : null}
+                    <div>
+                      <div className="font-medium text-slate-800">
+                        {g.material_code}
+                        {g.material_name ? <span className="ml-2 text-xs text-slate-400">{g.material_name}</span> : null}
+                      </div>
+                      {g.lines.length > 0 && (
+                        <div className="mt-0.5 text-xs text-slate-500">
+                          Total available:{' '}
+                          <span className="text-slate-400">
+                            {g.lines.reduce((s, l) => s + l.avail, 0)}
+                          </span>{' '}
+                          →{' '}
+                          <span
+                            className={`font-semibold ${
+                              g.lines.reduce((s, l) => s + lineNewAvail(l), 0) < 0
+                                ? 'text-rose-600'
+                                : 'text-brand-700'
+                            }`}
+                          >
+                            {g.lines.reduce((s, l) => s + lineNewAvail(l), 0)}
+                          </span>
+                        </div>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <div className="w-52">
@@ -374,13 +433,14 @@ export default function InventoryAdjustmentCreatePage() {
                             <th className="px-4 py-2 text-right">Qty Issue</th>
                             <th className="px-4 py-2 text-right">Quality Issue</th>
                             {type === 'qty_issue' ? (
-                              <th className="px-4 py-2 text-right">Qty Adjustment</th>
+                              <th className="px-4 py-2 text-right">Qty Adjustment (±)</th>
                             ) : (
                               <>
                                 <th className="px-4 py-2 text-right">Qty Scrapped</th>
                                 <th className="px-4 py-2 text-right">Qty Passed</th>
                               </>
                             )}
+                            <th className="px-4 py-2 text-right">New Available</th>
                             <th className="px-4 py-2 text-right">Action</th>
                           </tr>
                         </thead>
@@ -395,7 +455,7 @@ export default function InventoryAdjustmentCreatePage() {
                                 <td className="px-4 py-2">
                                   <div className="flex justify-end">
                                     <input
-                                      type="number" step="any" min={0}
+                                      type="number" step="any"
                                       className="input w-24 text-right"
                                       value={l.qty_adjustment}
                                       onChange={(e) => patchLine(g.material_id, l.key, { qty_adjustment: Number(e.target.value) })}
@@ -426,6 +486,13 @@ export default function InventoryAdjustmentCreatePage() {
                                   </td>
                                 </>
                               )}
+                              <td
+                                className={`px-4 py-2 text-right font-semibold ${
+                                  lineNewAvail(l) < 0 ? 'text-rose-600' : 'text-brand-700'
+                                }`}
+                              >
+                                {lineNewAvail(l)}
+                              </td>
                               <td className="px-4 py-2">
                                 <div className="flex justify-end">
                                   <button
@@ -499,7 +566,7 @@ export default function InventoryAdjustmentCreatePage() {
           <span className="text-xs text-amber-600">{validity.msg}</span>
         )}
         <Link to="/admin/inventory-adjustments" className="btn-secondary">Cancel</Link>
-        <button className="btn-primary" onClick={handleSubmit} disabled={saving || noWarehouse || !validity.ok}>
+        <button className="btn-primary" onClick={handleSubmit} disabled={saving || noWarehouse || !classId || !validity.ok}>
           {saving ? 'Saving…' : 'Create Adjustment'}
         </button>
       </div>

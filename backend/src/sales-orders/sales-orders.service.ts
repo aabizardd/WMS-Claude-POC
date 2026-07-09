@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { subsidiarySingleFilter } from '../common/subsidiary-filter';
 
 export interface WarehouseScope {
   role: string;
@@ -66,7 +67,11 @@ export class SalesOrdersService {
       { lastModified: 'desc' },
     );
 
-    const where: Prisma.SalesOrderWhereInput = { ...this.scopeWhere(scope) };
+    const where: Prisma.SalesOrderWhereInput = {
+      ...this.scopeWhere(scope),
+      // Only sales orders within the allowed subsidiary are visible.
+      subsidiaryId: subsidiarySingleFilter(),
+    };
     // Status filtering is done here in WMS (on stored data), not sent to Oracle.
     if (query.status) {
       where.statusName = query.status;
@@ -120,7 +125,11 @@ export class SalesOrdersService {
   // Distinct statuses present in stored data — populates the FE status filter.
   async getStatuses(scope: WarehouseScope) {
     const rows = await this.prisma.salesOrder.findMany({
-      where: { ...this.scopeWhere(scope), statusName: { not: null } },
+      where: {
+        ...this.scopeWhere(scope),
+        statusName: { not: null },
+        subsidiaryId: subsidiarySingleFilter(),
+      },
       distinct: ['statusName'],
       select: { statusName: true },
       orderBy: { statusName: 'asc' },

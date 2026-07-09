@@ -18,11 +18,10 @@ export class AdjustmentItemDto {
   @IsUUID()
   bin_id!: string;
 
-  // qty_issue type
+  // qty_issue type — signed delta to available (+/-).
   @IsOptional()
   @Type(() => Number)
   @IsNumber({ allowNaN: false, allowInfinity: false })
-  @Min(0)
   qty_adjustment?: number;
 
   // quality_issue type
@@ -42,6 +41,10 @@ export class AdjustmentItemDto {
 export class CreateInventoryAdjustmentDto {
   @IsIn(['qty_issue', 'quality_issue'])
   adjustment_type!: 'qty_issue' | 'quality_issue';
+
+  // Header class — its Class.oracleId is sent to Oracle on approval.
+  @IsUUID()
+  class_id!: string;
 
   @IsOptional()
   @IsString()

@@ -426,6 +426,7 @@ export class InventoryService {
       qty_committed: m.qtyCommitted,
       qty_on_order: m.qtyOnOrder,
       qty_back_order: m.qtyBackOrder,
+      qty_in_transit: m.qtyInTransit,
     };
   }
 
@@ -435,6 +436,8 @@ export class InventoryService {
       ...this.materialFields(m),
       ...this.oracleHeaderFields(m),
       ...this.sumBatches(m.binStocks),
+      // In Transit is tracked at header level (Oracle-mirrored), not per bin.
+      in_transit_qty: m.qtyInTransit,
     };
   }
 
@@ -466,6 +469,8 @@ export class InventoryService {
       ...this.materialFields(m),
       ...this.oracleHeaderFields(m),
       ...this.sumBatches(m.binStocks),
+      // In Transit is tracked at header level (Oracle-mirrored), not per bin.
+      in_transit_qty: m.qtyInTransit,
       bins,
     };
   }

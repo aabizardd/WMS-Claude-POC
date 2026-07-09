@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { subsidiaryListOr } from '../common/subsidiary-filter';
 
 type ClassRow = Prisma.ClassGetPayload<object>;
 
@@ -37,15 +38,17 @@ export class ClassesService {
       DEFAULT_ORDER,
     );
 
-    const where: Prisma.ClassWhereInput = query.search
-      ? {
-          OR: [
-            { name: { contains: query.search, mode: 'insensitive' } },
-            { parentName: { contains: query.search, mode: 'insensitive' } },
-            { subsidiaryName: { contains: query.search, mode: 'insensitive' } },
-          ],
-        }
-      : {};
+    const where: Prisma.ClassWhereInput = {
+      // Only classes whose subsidiary list includes an allowed subsidiary.
+      AND: [{ OR: subsidiaryListOr('subsidiaryId') }],
+    };
+    if (query.search) {
+      where.OR = [
+        { name: { contains: query.search, mode: 'insensitive' } },
+        { parentName: { contains: query.search, mode: 'insensitive' } },
+        { subsidiaryName: { contains: query.search, mode: 'insensitive' } },
+      ];
+    }
 
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.class.count({ where }),
@@ -73,7 +76,10 @@ export class ClassesService {
   // Lightweight lookup for dropdowns.
   options() {
     return this.prisma.class.findMany({
-      where: { isInactive: false },
+      where: {
+        isInactive: false,
+        AND: [{ OR: subsidiaryListOr('subsidiaryId') }],
+      },
       orderBy: { name: 'asc' },
       select: { id: true, name: true, oracleId: true },
     });

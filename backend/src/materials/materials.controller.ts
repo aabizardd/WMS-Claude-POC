@@ -33,6 +33,9 @@ export class MaterialsController {
     return this.erpSync.sync({
       lastModified: dto.lastModified,
       pageSize: dto.pageSize,
+      // Manual "Sync from ERP" also upserts per-location qty_available (the
+      // background scheduler still skips it).
+      syncAvailability: true,
     });
   }
 

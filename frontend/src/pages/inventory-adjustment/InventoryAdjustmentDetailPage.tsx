@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import axios from 'axios';
 import api from '../../lib/api';
-import type { InventoryAdjustmentDetail } from '../../types';
+import type { AdjustmentApprovalResult, InventoryAdjustmentDetail } from '../../types';
 import { adjStatusBadge, adjStatusLabel, adjTypeLabel } from './InventoryAdjustmentsPage';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -48,20 +48,26 @@ export default function InventoryAdjustmentDetailPage() {
     }
     setSubmitting(true);
     try {
-      const r = await api.put<InventoryAdjustmentDetail>(
+      const r = await api.put<AdjustmentApprovalResult>(
         `/inventory-adjustments/${id}/approve`,
         { action: modalAction, reason: reason.trim() || undefined },
       );
       setA(r.data);
       setModalAction(null);
-      toast.success(
-        modalAction === 'approve' ? 'Adjustment approved' : 'Adjustment rejected',
-      );
+      if (modalAction === 'approve') {
+        // Success alert uses the Oracle response message.
+        toast.success(r.data.oracle?.message ?? 'Adjustment approved');
+      } else {
+        toast.success('Adjustment rejected');
+      }
     } catch (err) {
+      let msg = 'Action failed';
       if (axios.isAxiosError(err)) {
-        const msg = err.response?.data?.message;
-        toast.error(Array.isArray(msg) ? msg.join(', ') : msg ?? 'Action failed');
-      } else toast.error('Action failed');
+        const m = err.response?.data?.message;
+        msg = Array.isArray(m) ? m.join(', ') : m ?? msg;
+      }
+      // Keep the modal open on failure so the user can retry (esp. Oracle post).
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }
@@ -130,6 +136,11 @@ export default function InventoryAdjustmentDetailPage() {
           <Meta label="Adjustment No." value={a.adjustment_number} />
           <Meta label="Type" value={adjTypeLabel(a.adjustment_type)} />
           <Meta label="Warehouse" value={a.warehouse} />
+          <Meta
+            label="Class"
+            value={a.class_name ? `${a.class_name} (${a.class_oracle_id})` : a.class_oracle_id}
+          />
+          <Meta label="Oracle IA ID" value={a.oracle_id} />
           <Meta label="Status" value={adjStatusLabel(a.status)} />
           <Meta label="Total Qty" value={a.total_qty} />
           <Meta label="Created By" value={a.created_by} />
@@ -186,6 +197,7 @@ export default function InventoryAdjustmentDetailPage() {
                       <th className="px-5 py-3 text-right">Qty Passed</th>
                     </>
                   )}
+                  <th className="px-5 py-3 text-right">New Available (sim.)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -203,6 +215,16 @@ export default function InventoryAdjustmentDetailPage() {
                         <td className="px-5 py-3 text-right font-semibold text-slate-800">{it.qty_passed}</td>
                       </>
                     )}
+                    {(() => {
+                      const na = isQty
+                        ? it.avail_at_create + it.qty_adjustment
+                        : it.avail_at_create - it.qty_scrapped - it.qty_passed;
+                      return (
+                        <td className={`px-5 py-3 text-right font-semibold ${na < 0 ? 'text-rose-600' : 'text-brand-700'}`}>
+                          {na}
+                        </td>
+                      );
+                    })()}
                   </tr>
                 ))}
               </tbody>

@@ -170,7 +170,7 @@ export default function InventoryDetailPage() {
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error || "Inventory not found."}
         </div>
-        <Link to="/admin/inventory" className="btn-secondary">
+        <Link to="/admin/inventory/list" className="btn-secondary">
           ← Back to inventory
         </Link>
       </div>
@@ -181,7 +181,7 @@ export default function InventoryDetailPage() {
     <div className="space-y-6">
       <div className="flex items-start gap-3">
         <Link
-          to="/admin/inventory"
+          to="/admin/inventory/list"
           className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
           aria-label="Back"
         >

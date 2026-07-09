@@ -1,9 +1,9 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { Link } from 'react-router-dom';
-import api from '../../lib/api';
-import type { InventoryRow, Paginated } from '../../types';
-import { useSort } from '../../hooks/useSort';
-import SortableTh from '../../components/SortableTh';
+import { useEffect, useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
+import api from "../../lib/api";
+import type { InventoryRow, Paginated } from "../../types";
+import { useSort } from "../../hooks/useSort";
+import SortableTh from "../../components/SortableTh";
 
 const LIMIT = 10;
 
@@ -11,8 +11,8 @@ export default function InventoryPage() {
   const [data, setData] = useState<Paginated<InventoryRow> | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState("");
+  const [searchInput, setSearchInput] = useState("");
   const { sort, toggle, params } = useSort();
   const onSort = (col: string) => {
     setPage(1);
@@ -21,7 +21,7 @@ export default function InventoryPage() {
 
   async function load() {
     setLoading(true);
-    const r = await api.get<Paginated<InventoryRow>>('/inventory', {
+    const r = await api.get<Paginated<InventoryRow>>("/inventory", {
       params: { page, limit: LIMIT, search: search || undefined, ...params() },
     });
     setData(r.data);
@@ -47,8 +47,8 @@ export default function InventoryPage() {
           Inventory Management
         </h1>
         <p className="mt-1 text-sm text-slate-500">
-          {data ? `${data.total_data} materials` : 'Inventory'} on hand · one row
-          per material per warehouse (sum of its batches).
+          {data ? `${data.total_data} materials` : "Inventory"} on hand · one
+          row per material per warehouse (sum of its batches).
         </p>
       </div>
 
@@ -67,8 +67,8 @@ export default function InventoryPage() {
             type="button"
             className="btn-secondary"
             onClick={() => {
-              setSearchInput('');
-              setSearch('');
+              setSearchInput("");
+              setSearch("");
               setPage(1);
             }}
           >
@@ -82,15 +82,49 @@ export default function InventoryPage() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <SortableTh label="Material" col="material_code" sort={sort} onSort={onSort} pad="px-5" />
-                <SortableTh label="Type" col="material_type" sort={sort} onSort={onSort} pad="px-5" />
-                <SortableTh label="Category" col="material_category" sort={sort} onSort={onSort} pad="px-5" />
-                <SortableTh label="UoM" col="primary_uom" sort={sort} onSort={onSort} pad="px-5" />
-                <SortableTh label="Warehouse" col="warehouse_name" sort={sort} onSort={onSort} pad="px-5" />
+                <SortableTh
+                  label="Material"
+                  col="material_code"
+                  sort={sort}
+                  onSort={onSort}
+                  pad="px-5"
+                />
+                <SortableTh
+                  label="Type"
+                  col="material_type"
+                  sort={sort}
+                  onSort={onSort}
+                  pad="px-5"
+                />
+                <SortableTh
+                  label="Category"
+                  col="material_category"
+                  sort={sort}
+                  onSort={onSort}
+                  pad="px-5"
+                />
+                <SortableTh
+                  label="UoM"
+                  col="primary_uom"
+                  sort={sort}
+                  onSort={onSort}
+                  pad="px-5"
+                />
+                <SortableTh
+                  label="Warehouse"
+                  col="warehouse_name"
+                  sort={sort}
+                  onSort={onSort}
+                  pad="px-5"
+                />
                 <th className="px-5 py-3 text-right">On Hand</th>
                 <th className="px-5 py-3 text-right">Reserved</th>
                 <th className="px-5 py-3 text-right">Avail</th>
-                <th className="px-5 py-3 text-right">In Transit</th>
+                {/* <th className="px-5 py-3 text-right">In Transit</th> */}
+                <th className="px-5 py-3 text-right">Qty Commited</th>
+                <th className="px-5 py-3 text-right">Qty In Transit</th>
+                <th className="px-5 py-3 text-right">Qty On Order</th>
+                <th className="px-5 py-3 text-right">Qty Back Order</th>
                 <th className="px-5 py-3 text-right">Qlty Issue</th>
                 <th className="px-5 py-3 text-right">Qty Issue</th>
                 <th className="px-5 py-3 text-right">Actions</th>
@@ -99,7 +133,10 @@ export default function InventoryPage() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={12} className="px-5 py-10 text-center text-slate-400">
+                  <td
+                    colSpan={12}
+                    className="px-5 py-10 text-center text-slate-400"
+                  >
                     Loading…
                   </td>
                 </tr>
@@ -108,26 +145,26 @@ export default function InventoryPage() {
                   <tr key={r.id} className="hover:bg-slate-50">
                     <td className="px-5 py-3">
                       <div className="font-medium text-slate-800">
-                        {r.material_name ?? '—'}
+                        {r.material_name ?? "—"}
                       </div>
                       <div className="text-xs text-slate-400">
                         {r.material_code}
                       </div>
                     </td>
                     <td className="px-5 py-3 text-slate-600">
-                      {r.material_type ?? '—'}
+                      {r.material_type ?? "—"}
                     </td>
                     <td className="px-5 py-3 text-slate-600">
-                      {r.material_category ?? '—'}
+                      {r.material_category ?? "—"}
                     </td>
                     <td className="px-5 py-3 text-slate-600">
-                      {r.primary_uom ?? '—'}
+                      {r.primary_uom ?? "—"}
                     </td>
                     <td className="px-5 py-3 text-slate-600">
-                      {r.warehouse_name ?? '—'}
+                      {r.warehouse_name ?? "—"}
                     </td>
                     <td className="px-5 py-3 text-right font-semibold text-slate-800">
-                      {r.on_hand}
+                      {r.on_hand + r.qty_committed}
                     </td>
                     <td className="px-5 py-3 text-right text-slate-600">
                       {r.reserved_qty}
@@ -136,8 +173,18 @@ export default function InventoryPage() {
                       {r.avail_qty}
                     </td>
                     <td className="px-5 py-3 text-right text-slate-600">
+                      {r.qty_committed}
+                    </td>
+                    <td className="px-5 py-3 text-right text-slate-600">
                       {r.in_transit_qty}
                     </td>
+                    <td className="px-5 py-3 text-right text-slate-600">
+                      {r.qty_on_order}
+                    </td>
+                    <td className="px-5 py-3 text-right text-slate-600">
+                      {r.qty_back_order}
+                    </td>
+
                     <td className="px-5 py-3 text-right text-slate-600">
                       {r.quality_issue}
                     </td>
@@ -147,7 +194,7 @@ export default function InventoryPage() {
                     <td className="px-5 py-3">
                       <div className="flex justify-end">
                         <Link
-                          to={`/admin/inventory/${r.id}`}
+                          to={`/admin/inventory/list/${r.id}`}
                           className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
                         >
                           Detail
@@ -158,7 +205,10 @@ export default function InventoryPage() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={12} className="px-5 py-10 text-center text-slate-400">
+                  <td
+                    colSpan={12}
+                    className="px-5 py-10 text-center text-slate-400"
+                  >
                     No inventory yet. It is generated when a Goods Receive is
                     received.
                   </td>

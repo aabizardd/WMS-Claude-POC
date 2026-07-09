@@ -35,6 +35,7 @@ import GoodsReceiveTab from './pages/inbound/GoodsReceiveTab';
 import GoodsReceiveDetailPage from './pages/inbound/GoodsReceiveDetailPage';
 import PutawayTab from './pages/inbound/PutawayTab';
 import PutawayDetailPage from './pages/inbound/PutawayDetailPage';
+import InventoryLandingPage from './pages/inventory/InventoryLandingPage';
 import InventoryPage from './pages/inventory/InventoryPage';
 import InventoryDetailPage from './pages/inventory/InventoryDetailPage';
 import InventoryAdjustmentsPage from './pages/inventory-adjustment/InventoryAdjustmentsPage';
@@ -340,9 +341,10 @@ export default function App() {
               }
             />
 
-          {/* Inventory Management */}
+          {/* Inventory — landing page (module selection) */}
+          <Route path="inventory" element={<InventoryLandingPage />} />
           <Route
-            path="inventory"
+            path="inventory/list"
             element={
               <RequirePermission permission="inventory:read">
                 <InventoryPage />
@@ -350,7 +352,7 @@ export default function App() {
             }
           />
           <Route
-            path="inventory/:id"
+            path="inventory/list/:id"
             element={
               <RequirePermission permission="inventory:read">
                 <InventoryDetailPage />

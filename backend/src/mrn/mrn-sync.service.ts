@@ -1,11 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
-
-interface ErpAuthResponse {
-  success: boolean;
-  data?: { access_token: string };
-}
+import { ErpHttpService } from '../erp/erp-http.service';
 
 interface PibItem {
   po_id?: number;
@@ -75,63 +71,23 @@ export class MrnSyncService {
   constructor(
     private prisma: PrismaService,
     private config: ConfigService,
+    private erp: ErpHttpService,
   ) {}
 
-  private baseUrl() {
-    const url = this.config.get<string>('ERP_BASE_URL');
-    if (!url) throw new Error('ERP_BASE_URL is not configured');
-    return url.replace(/\/$/, '');
-  }
-
-  async getAccessToken(): Promise<string> {
-    const res = await fetch(`${this.baseUrl()}/auth/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'client_credentials',
-        client_id: this.config.get<string>('ERP_CLIENT_ID'),
-        client_secret: this.config.get<string>('ERP_CLIENT_SECRET'),
-      }),
-    });
-    if (!res.ok) {
-      throw new Error(`ERP auth failed: ${res.status} ${await res.text()}`);
-    }
-    const json = (await res.json()) as ErpAuthResponse;
-    const token = json?.data?.access_token;
-    if (!token) throw new Error('ERP auth: access_token missing in response');
-    return token;
-  }
-
-  private async fetchPage(
-    token: string,
+  private fetchPage(
     page: number,
     pageSize: number,
     lastModified?: string,
   ): Promise<PibResponse> {
-    // Only inbound shipments still in transit are injected.
     const filters: Record<string, string> = { status: 'inTransit' };
     if (lastModified) filters.lastmodified = lastModified;
-
-    const res = await fetch(`${this.baseUrl()}/inbound-shipments/get`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        page,
-        page_size: pageSize,
-        sort_by: 'lastmodifieddate',
-        sort_order: 'desc',
-        filters,
-      }),
+    return this.erp.post<PibResponse>('/inbound-shipments/get', {
+      page,
+      page_size: pageSize,
+      sort_by: 'lastmodifieddate',
+      sort_order: 'desc',
+      filters,
     });
-    if (!res.ok) {
-      throw new Error(
-        `Inbound shipments fetch failed (page ${page}): ${res.status} ${await res.text()}`,
-      );
-    }
-    return (await res.json()) as PibResponse;
   }
 
   async sync(options: SyncOptions = {}): Promise<SyncResult> {
@@ -149,7 +105,6 @@ export class MrnSyncService {
         : `Starting FULL MRN sync (pageSize=${pageSize})`,
     );
 
-    const token = await this.getAccessToken();
     let page = 1;
     let totalPages = 1;
     let totalRecords = 0;
@@ -160,7 +115,7 @@ export class MrnSyncService {
     do {
       if (page > 1 && pageDelayMs > 0) await this.delay(pageDelayMs);
 
-      const res = await this.fetchPage(token, page, pageSize, lastModified);
+      const res = await this.fetchPage(page, pageSize, lastModified);
       totalPages = res.total_pages || 1;
       totalRecords = res.total_records ?? 0;
 

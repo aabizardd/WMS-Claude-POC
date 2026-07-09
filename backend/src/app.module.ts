@@ -15,6 +15,7 @@ import { AislesModule } from './aisles/aisles.module';
 import { ShelvesModule } from './shelves/shelves.module';
 import { BinsModule } from './bins/bins.module';
 import { VendorsModule } from './vendors/vendors.module';
+import { ErpModule } from './erp/erp.module';
 import { CustomersModule } from './customers/customers.module';
 import { DepartmentsModule } from './departments/departments.module';
 import { ClassesModule } from './classes/classes.module';
@@ -38,6 +39,7 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    ErpModule,
     PrismaModule,
     AuthModule,
     UsersModule,

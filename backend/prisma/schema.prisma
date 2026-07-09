@@ -372,6 +372,8 @@ model Class {
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
+  adjustments InventoryAdjustment[]
+
   @@map("classes")
 }
 
@@ -509,6 +511,7 @@ model InventoryManagement {
   qtyCommitted Float @default(0) @map("qty_committed")
   qtyOnOrder   Float @default(0) @map("qty_on_order")
   qtyBackOrder Float @default(0) @map("qty_back_order")
+  qtyInTransit Float @default(0) @map("qty_in_transit")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -565,6 +568,14 @@ model InventoryAdjustment {
   adjustmentType   InventoryAdjustmentType   @map("adjustment_type")
   status           InventoryAdjustmentStatus @default(PendingApproval)
   note             String?
+
+  // Header class chosen at create; its Class.oracleId is sent to Oracle.
+  classId String? @map("class_id")
+  class   Class?  @relation(fields: [classId], references: [id])
+
+  // Oracle inventory_adjustment_id returned after a successful post. "-" until then.
+  oracleId String @default("-") @map("oracle_id")
+
   createdById      Int?                      @map("created_by")
   createdBy        User?                     @relation("AdjustmentCreator", fields: [createdById], references: [id])
 

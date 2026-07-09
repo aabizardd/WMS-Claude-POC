@@ -62,7 +62,11 @@
       "Bash(grep -n \"api.get<Paginated\\\\|}, \\\\[page\\\\|import { useAuth\\\\|const \\\\[search\" /c/WMS/frontend/src/pages/warehouse/WarehousesPage.tsx)",
       "Bash(grep -n \"api.get<Paginated\\\\|}, \\\\[page\\\\|import { useAuth\\\\|const \\\\[search\\\\|useSort\" /c/WMS/frontend/src/pages/complaint/ComplaintsPage.tsx)",
       "Bash(grep -n \"api.get<Paginated\\\\|}, \\\\[page\\\\|import { useAuth\\\\|const \\\\[search\\\\|params:\" /c/WMS/frontend/src/pages/discrepancy/DiscrepancyPage.tsx)",
-      "Bash(perl -0pi -e \"s/\\(    inventory: 'Inventory',\\\\n\\)/\\\\$1    inventoryAdjustment: 'Inventory Adjustment',\\\\n/; s/\\(    inventory: 'Inventaris',\\\\n\\)/\\\\$1    inventoryAdjustment: 'Penyesuaian Inventaris',\\\\n/; s/\\(    inventory: '库存',\\\\n\\)/\\\\$1    inventoryAdjustment: '库存调整',\\\\n/\" src/i18n/resources.ts)"
+      "Bash(perl -0pi -e \"s/\\(    inventory: 'Inventory',\\\\n\\)/\\\\$1    inventoryAdjustment: 'Inventory Adjustment',\\\\n/; s/\\(    inventory: 'Inventaris',\\\\n\\)/\\\\$1    inventoryAdjustment: 'Penyesuaian Inventaris',\\\\n/; s/\\(    inventory: '库存',\\\\n\\)/\\\\$1    inventoryAdjustment: '库存调整',\\\\n/\" src/i18n/resources.ts)",
+      "Bash(grep -n \"baseUrl\\(\\)}/\\\\|as OracleInbound\\\\|as Oracle.*Response\\\\|filters\\\\b\\\\|external_id\\\\|body: JSON\" src/mrn/mrn-sync.service.ts)",
+      "Bash(grep -rn \"/admin/inventory\\\\b\\\\|/admin/inventory/\\\\|/admin/inventory'\\\\|/admin/inventory\\\\`\" src)",
+      "Bash(grep -iB0 \"subsidiary\")",
+      "Bash(python \"C:/Users/mabiz/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/0a7669f1-4e78-4485-ae10-2e2fa876c7ed/e5f92783-4c19-457e-8b70-585b37a971a1/skills/docx/scripts/office/validate.py\" UAT-Master-Data-WMS.docx)"
     ]
   }
 }

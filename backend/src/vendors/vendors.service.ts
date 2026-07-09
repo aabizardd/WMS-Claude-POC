@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { subsidiarySingleFilter } from '../common/subsidiary-filter';
 
 type VendorRow = Prisma.VendorGetPayload<object>;
 
@@ -38,15 +39,17 @@ export class VendorsService {
       DEFAULT_ORDER,
     );
 
-    const where: Prisma.VendorWhereInput = query.search
-      ? {
-          OR: [
-            { companyName: { contains: query.search, mode: 'insensitive' } },
-            { entityId: { contains: query.search, mode: 'insensitive' } },
-            { email: { contains: query.search, mode: 'insensitive' } },
-          ],
-        }
-      : {};
+    const where: Prisma.VendorWhereInput = {
+      // Only vendors within the allowed subsidiary are visible.
+      subsidiaryId: subsidiarySingleFilter(),
+    };
+    if (query.search) {
+      where.OR = [
+        { companyName: { contains: query.search, mode: 'insensitive' } },
+        { entityId: { contains: query.search, mode: 'insensitive' } },
+        { email: { contains: query.search, mode: 'insensitive' } },
+      ];
+    }
 
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.vendor.count({ where }),
@@ -74,6 +77,7 @@ export class VendorsService {
   // Lightweight lookup for dropdowns.
   options() {
     return this.prisma.vendor.findMany({
+      where: { subsidiaryId: subsidiarySingleFilter() },
       orderBy: { companyName: 'asc' },
       select: { id: true, companyName: true, entityId: true, oracleId: true },
     });
