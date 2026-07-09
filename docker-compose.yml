@@ -38,12 +38,12 @@ services:
       context: ./frontend
       args:
         # Empty → SPA uses same-origin "/api", proxied by nginx to the backend.
-        VITE_API_URL: ''
+        VITE_API_URL: '/api'
     restart: unless-stopped
     depends_on:
       - backend
     ports:
-      - '80:80'
+      - '3080:80'
 
 volumes:
   pgdata:
