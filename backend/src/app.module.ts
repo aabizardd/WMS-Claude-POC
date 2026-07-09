@@ -37,6 +37,7 @@ import { ComplaintsModule } from './complaints/complaints.module';
 import { OracleSyncModule } from './sync/oracle-sync.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
+import { HealthModule } from './health/health.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from './auth/guards/permissions.guard';
 
@@ -80,6 +81,7 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
     PurchaseOrdersModule,
     OracleSyncModule,
     DashboardModule,
+    HealthModule,
   ],
   providers: [
     // 0) Rate limit (runs first, before authentication) to blunt brute-force.
