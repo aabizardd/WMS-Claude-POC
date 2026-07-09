@@ -892,12 +892,12 @@ export interface ComplaintRow {
   email: string;
   description: string;
   status: string;
-  evidence_count: number;
   reported_by: string | null;
   warehouse: { id: string; name: string } | null;
   created_at: string;
 }
 
 export interface ComplaintDetail extends ComplaintRow {
+  evidence_count: number;
   evidences: string[];
 }

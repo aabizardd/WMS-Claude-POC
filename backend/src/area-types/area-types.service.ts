@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { LIST_HARD_CAP } from '../common/list-cap';
 import { CreateAreaTypeDto } from './dto/create-area-type.dto';
 import { UpdateAreaTypeDto } from './dto/update-area-type.dto';
 
@@ -15,6 +16,7 @@ export class AreaTypesService {
   findAll() {
     return this.prisma.areaType.findMany({
       orderBy: { areaTypeCode: 'asc' },
+      take: LIST_HARD_CAP,
       include: { _count: { select: { bins: true } } },
     });
   }

@@ -66,7 +66,14 @@
       "Bash(grep -n \"baseUrl\\(\\)}/\\\\|as OracleInbound\\\\|as Oracle.*Response\\\\|filters\\\\b\\\\|external_id\\\\|body: JSON\" src/mrn/mrn-sync.service.ts)",
       "Bash(grep -rn \"/admin/inventory\\\\b\\\\|/admin/inventory/\\\\|/admin/inventory'\\\\|/admin/inventory\\\\`\" src)",
       "Bash(grep -iB0 \"subsidiary\")",
-      "Bash(python \"C:/Users/mabiz/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/0a7669f1-4e78-4485-ae10-2e2fa876c7ed/e5f92783-4c19-457e-8b70-585b37a971a1/skills/docx/scripts/office/validate.py\" UAT-Master-Data-WMS.docx)"
+      "Bash(python \"C:/Users/mabiz/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/0a7669f1-4e78-4485-ae10-2e2fa876c7ed/e5f92783-4c19-457e-8b70-585b37a971a1/skills/docx/scripts/office/validate.py\" UAT-Master-Data-WMS.docx)",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('deps:', ', '.join\\(d.get\\('dependencies',{}\\).keys\\(\\)\\)\\)\")",
+      "Bash(echo \"=== frontend/.env ===\" && cat frontend/.env && echo \"=== ERP http service \\(secrets/logging\\) ===\" && sed -n '1,60p' backend/src/erp/*.ts | grep -niE \"log|token|secret|password|apikey|authorization\" | head; echo \"=== helmet/throttler in deps? ===\" && grep -iE \"helmet|throttl\" backend/package.json || echo \"NONE\")",
+      "Bash(node -e \"require\\('helmet'\\);require\\('@nestjs/throttler'\\);console.log\\('ok'\\)\")",
+      "Bash(node -e \"console.log\\(require\\('@prisma/client/package.json'\\).version\\)\")",
+      "PowerShell(Get-Process node -ErrorAction SilentlyContinue)",
+      "Read(//c/Users/mabiz/.claude/projects/C--WMS/memory/**)",
+      "Bash(printf '%s\\\\n' '- [WMS security+perf hardening]\\(wms-security-perf-hardening.md\\) — JWT_SECRET now required, throttler login rate-limit, helmet, per-request isActive revalidation, DB indexes + pg_trgm search migration, list caps, complaint list excludes base64')"
     ]
   }
 }

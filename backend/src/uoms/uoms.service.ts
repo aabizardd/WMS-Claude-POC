@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { LIST_HARD_CAP } from '../common/list-cap';
 import { CreateUomDto } from './dto/create-uom.dto';
 import { UpdateUomDto } from './dto/update-uom.dto';
 
@@ -13,7 +14,10 @@ export class UomsService {
   constructor(private prisma: PrismaService) {}
 
   findAll() {
-    return this.prisma.uom.findMany({ orderBy: { uomCode: 'asc' } });
+    return this.prisma.uom.findMany({
+      orderBy: { uomCode: 'asc' },
+      take: LIST_HARD_CAP,
+    });
   }
 
   // Lightweight lookup for dropdowns.

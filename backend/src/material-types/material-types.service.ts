@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { LIST_HARD_CAP } from '../common/list-cap';
 import { CreateMaterialTypeDto } from './dto/create-material-type.dto';
 import { UpdateMaterialTypeDto } from './dto/update-material-type.dto';
 
@@ -15,6 +16,7 @@ export class MaterialTypesService {
   findAll() {
     return this.prisma.materialType.findMany({
       orderBy: { materialTypeCode: 'asc' },
+      take: LIST_HARD_CAP,
       include: { _count: { select: { materials: true } } },
     });
   }

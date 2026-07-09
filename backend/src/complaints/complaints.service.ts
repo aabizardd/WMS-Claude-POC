@@ -36,6 +36,24 @@ const listInclude = {
 
 type ComplaintRow = Prisma.ComplaintGetPayload<{ include: typeof listInclude }>;
 
+// Lightweight projection for list rows: everything EXCEPT the heavy base64
+// `evidences` payload (only fetched on the detail endpoint).
+const listSelect = {
+  id: true,
+  complaintNumber: true,
+  menuFeature: true,
+  title: true,
+  email: true,
+  description: true,
+  status: true,
+  createdAt: true,
+  userId: true,
+  user: { select: { id: true, name: true } },
+  warehouse: { select: { id: true, name: true } },
+} satisfies Prisma.ComplaintSelect;
+
+type ComplaintListRow = Prisma.ComplaintGetPayload<{ select: typeof listSelect }>;
+
 @Injectable()
 export class ComplaintsService {
   private readonly logger = new Logger(ComplaintsService.name);
@@ -125,7 +143,7 @@ export class ComplaintsService {
       this.prisma.complaint.count({ where }),
       this.prisma.complaint.findMany({
         where,
-        include: listInclude,
+        select: listSelect,
         orderBy,
         skip: (page - 1) * limit,
         take: limit,
@@ -141,7 +159,7 @@ export class ComplaintsService {
         sort_by: query.sort_by ?? null,
         sort_order: query.sort_order ?? null,
       },
-      rows: rows.map((r) => this.serialize(r, false)),
+      rows: rows.map((r) => this.serializeList(r)),
     };
   }
 
@@ -154,7 +172,7 @@ export class ComplaintsService {
     if (actor.role !== 'admin' && c.userId !== actor.userId) {
       throw new NotFoundException(`Complaint ${id} not found`);
     }
-    return this.serialize(c, true);
+    return this.serialize(c);
   }
 
   // Admin-only (enforced by permission): change status (e.g. to Solved).
@@ -166,11 +184,11 @@ export class ComplaintsService {
       data: { status },
       include: listInclude,
     });
-    return this.serialize(updated, true);
+    return this.serialize(updated);
   }
 
-  // withEvidence=false trims the (heavy) base64 payload from list rows.
-  private serialize(c: ComplaintRow, withEvidence = true) {
+  // Detail serializer: includes the full base64 evidence payload.
+  private serialize(c: ComplaintRow) {
     return {
       id: c.id,
       complaint_number: c.complaintNumber,
@@ -180,7 +198,23 @@ export class ComplaintsService {
       description: c.description,
       status: c.status,
       evidence_count: c.evidences.length,
-      evidences: withEvidence ? c.evidences : undefined,
+      evidences: c.evidences,
+      reported_by: c.user?.name ?? null,
+      warehouse: c.warehouse,
+      created_at: c.createdAt,
+    };
+  }
+
+  // List serializer: same shape minus the heavy base64 payload (not fetched).
+  private serializeList(c: ComplaintListRow) {
+    return {
+      id: c.id,
+      complaint_number: c.complaintNumber,
+      menu_feature: c.menuFeature,
+      title: c.title,
+      email: c.email,
+      description: c.description,
+      status: c.status,
       reported_by: c.user?.name ?? null,
       warehouse: c.warehouse,
       created_at: c.createdAt,

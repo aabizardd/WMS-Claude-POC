@@ -6,6 +6,7 @@ import {
 import * as bcrypt from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { LIST_HARD_CAP } from '../common/list-cap';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
@@ -63,6 +64,7 @@ export class UsersService {
       where,
       select: userSelect,
       orderBy: { id: 'asc' },
+      take: LIST_HARD_CAP,
     });
   }
 

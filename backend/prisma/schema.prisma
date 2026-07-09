@@ -1,10 +1,12 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgTrgm(map: "pg_trgm")]
 }
 
 model Role {
@@ -65,18 +67,20 @@ model User {
   subsidiaryId String?     @map("subsidiary_id")
   subsidiary   Subsidiary? @relation(fields: [subsidiaryId], references: [id])
 
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  discrepancies Discrepancy[]
-  pickAssignments PutawayItem[]
-  pickingAssignments PickingItem[]
-  packingAssignments PackingItem[]
-  deliveryAssignments DeliveryItem[]
-  complaints Complaint[]
+  discrepancies        Discrepancy[]
+  pickAssignments      PutawayItem[]
+  pickingAssignments   PickingItem[]
+  packingAssignments   PackingItem[]
+  deliveryAssignments  DeliveryItem[]
+  complaints           Complaint[]
   inventoryAdjustments InventoryAdjustment[] @relation("AdjustmentCreator")
   approvedAdjustments  InventoryAdjustment[] @relation("AdjustmentApprover")
 
+  @@index([warehouseId])
+  @@index([roleId])
   @@map("users")
 }
 
@@ -102,9 +106,9 @@ model Uom {
 }
 
 model MaterialCategory {
-  id                   String @id @default(uuid())
-  materialCategoryName String @map("material_category_name")
-  materialCategoryCode String @unique @map("material_category_code")
+  id                   String  @id @default(uuid())
+  materialCategoryName String  @map("material_category_name")
+  materialCategoryCode String  @unique @map("material_category_code")
   description          String?
 
   isActive  Boolean  @default(true) @map("is_active")
@@ -117,9 +121,9 @@ model MaterialCategory {
 }
 
 model MaterialType {
-  id               String @id @default(uuid())
-  materialTypeName String @map("material_type_name")
-  materialTypeCode String @unique @map("material_type_code")
+  id               String  @id @default(uuid())
+  materialTypeName String  @map("material_type_name")
+  materialTypeCode String  @unique @map("material_type_code")
   description      String?
 
   isActive  Boolean  @default(true) @map("is_active")
@@ -176,6 +180,11 @@ model Material {
   deliveryItems   DeliveryItem[]
   adjustmentItems InventoryAdjustmentItem[]
 
+  @@index([materialCategoryId])
+  @@index([materialTypeId])
+  @@index([primaryUomId])
+  @@index([materialName(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([materialCode(ops: raw("gin_trgm_ops"))], type: Gin)
   @@map("materials")
 }
 
@@ -200,20 +209,22 @@ model Warehouse {
   createdAt              DateTime  @default(now()) @map("created_at")
   updatedAt              DateTime  @updatedAt @map("updated_at")
 
-  bins          Bin[]
-  users         User[]
-  mrns          Mrn[]
-  goodsReceives GoodsReceive[]
-  putaways      Putaway[]
-  inventories   InventoryManagement[]
-  discrepancies Discrepancy[]
-  salesOrders   SalesOrder[]
-  pickings      Picking[]
-  packings      Packing[]
-  deliveries    Delivery[]
-  complaints    Complaint[]
+  bins                 Bin[]
+  users                User[]
+  mrns                 Mrn[]
+  goodsReceives        GoodsReceive[]
+  putaways             Putaway[]
+  inventories          InventoryManagement[]
+  discrepancies        Discrepancy[]
+  salesOrders          SalesOrder[]
+  pickings             Picking[]
+  packings             Packing[]
+  deliveries           Delivery[]
+  complaints           Complaint[]
   inventoryAdjustments InventoryAdjustment[]
 
+  @@index([subsidiaryId])
+  @@index([parentId])
   @@map("warehouses")
 }
 
@@ -286,14 +297,19 @@ model Bin {
   createdAt  DateTime  @default(now()) @map("created_at")
   modifiedAt DateTime? @map("modified_at")
 
-  mrnItems MrnItem[] // bins chosen as receive destination
-  putawayItems PutawayItem[]
+  mrnItems           MrnItem[] // bins chosen as receive destination
+  putawayItems       PutawayItem[]
   inventoryBinStocks InventoryBinStock[]
-  pickingItems PickingItem[]
-  packingItems PackingItem[]
-  deliveryItems DeliveryItem[]
-  adjustmentItems InventoryAdjustmentItem[]
+  pickingItems       PickingItem[]
+  packingItems       PackingItem[]
+  deliveryItems      DeliveryItem[]
+  adjustmentItems    InventoryAdjustmentItem[]
 
+  @@index([warehouseId])
+  @@index([aisleId])
+  @@index([shelfId])
+  @@index([areaTypeId])
+  @@index([binLabel(ops: raw("gin_trgm_ops"))], type: Gin)
   @@map("bins")
 }
 
@@ -316,6 +332,9 @@ model Vendor {
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @updatedAt @map("updated_at")
 
+  @@index([subsidiaryId])
+  @@index([companyName(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([entityId(ops: raw("gin_trgm_ops"))], type: Gin)
   @@map("vendors")
 }
 
@@ -334,6 +353,8 @@ model Customer {
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
+  @@index([companyName(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([entityId(ops: raw("gin_trgm_ops"))], type: Gin)
   @@map("customers")
 }
 
@@ -354,6 +375,8 @@ model Department {
 
   users User[]
 
+  @@index([subsidiaryId])
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
   @@map("departments")
 }
 
@@ -374,6 +397,8 @@ model Class {
 
   adjustments InventoryAdjustment[]
 
+  @@index([subsidiaryId])
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
   @@map("classes")
 }
 
@@ -417,9 +442,9 @@ model Mrn {
   dateCreated          String?   @map("date_created")
   lastModified         DateTime? @map("last_modified")
 
-  receivingLocationId   String? @map("receiving_location_id")
-  receivingLocationName String? @map("receiving_location_name")
-  warehouseId           String? @map("warehouse_id")
+  receivingLocationId   String?    @map("receiving_location_id")
+  receivingLocationName String?    @map("receiving_location_name")
+  warehouseId           String?    @map("warehouse_id")
   warehouse             Warehouse? @relation(fields: [warehouseId], references: [id])
 
   createdBy String?  @map("created_by")
@@ -429,6 +454,8 @@ model Mrn {
   items        MrnItem[]
   goodsReceive GoodsReceive?
 
+  @@index([warehouseId])
+  @@index([status])
   @@map("mrns")
 }
 
@@ -467,6 +494,8 @@ model MrnItem {
   inventoriedAt DateTime? @map("inventoried_at")
 
   @@unique([mrnId, lineId])
+  @@index([mrnId])
+  @@index([binId])
   @@map("mrn_items")
 }
 
@@ -493,6 +522,8 @@ model GoodsReceive {
   discrepancies Discrepancy[]
   putaways      Putaway[]
 
+  @@index([warehouseId])
+  @@index([status])
   @@map("goods_receives")
 }
 
@@ -519,6 +550,8 @@ model InventoryManagement {
   binStocks InventoryBinStock[]
 
   @@unique([materialCode, warehouseId])
+  @@index([warehouseId])
+  @@index([materialId])
   @@map("inventory_management")
 }
 
@@ -541,6 +574,7 @@ model InventoryBinStock {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@unique([inventoryId, binId])
+  @@index([binId])
   @@map("inventory_bin_stocks")
 }
 
@@ -576,8 +610,8 @@ model InventoryAdjustment {
   // Oracle inventory_adjustment_id returned after a successful post. "-" until then.
   oracleId String @default("-") @map("oracle_id")
 
-  createdById      Int?                      @map("created_by")
-  createdBy        User?                     @relation("AdjustmentCreator", fields: [createdById], references: [id])
+  createdById Int?  @map("created_by")
+  createdBy   User? @relation("AdjustmentCreator", fields: [createdById], references: [id])
 
   // Approval (WH Manager). Set once when status leaves PendingApproval.
   approvedById         Int?      @map("approved_by")
@@ -587,12 +621,15 @@ model InventoryAdjustment {
   // Oracle-side approval status; "-" until WMS-approved, then "Pending Approval Oracle".
   oracleApprovalStatus String    @default("-") @map("oracle_approval_status")
 
-  createdAt        DateTime                  @default(now()) @map("created_at")
-  updatedAt        DateTime                  @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   items         InventoryAdjustmentItem[]
   discrepancies InventoryAdjustmentDiscrepancy[]
 
+  @@index([warehouseId])
+  @@index([status])
+  @@index([classId])
   @@map("inventory_adjustments")
 }
 
@@ -613,8 +650,8 @@ model InventoryAdjustmentItem {
   // qty_issue type
   qtyAdjustment Float @default(0) @map("qty_adjustment")
   // quality_issue type
-  qtyScrapped Float @default(0) @map("qty_scrapped")
-  qtyPassed   Float @default(0) @map("qty_passed")
+  qtyScrapped   Float @default(0) @map("qty_scrapped")
+  qtyPassed     Float @default(0) @map("qty_passed")
 
   // Snapshot of the bin's quantities at create time (informational context).
   availAtCreate        Float @default(0) @map("avail_at_create")
@@ -623,6 +660,9 @@ model InventoryAdjustmentItem {
 
   createdAt DateTime @default(now()) @map("created_at")
 
+  @@index([adjustmentId])
+  @@index([materialId])
+  @@index([binId])
   @@map("inventory_adjustment_items")
 }
 
@@ -680,9 +720,12 @@ model Discrepancy {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  details DiscrepancyDetail[]
+  details         DiscrepancyDetail[]
   adjustmentLinks InventoryAdjustmentDiscrepancy[]
 
+  @@index([warehouseId])
+  @@index([pickingId])
+  @@index([grId])
   @@map("discrepancies")
 }
 
@@ -691,9 +734,9 @@ model DiscrepancyDetail {
   discrepancyId String      @map("discrepancy_id")
   discrepancy   Discrepancy @relation(fields: [discrepancyId], references: [id], onDelete: Cascade)
 
-  poNumber  String            @map("po_number")
-  itemName  String?           @map("item_name")
-  mrnItemId String?           @map("mrn_item_id")
+  poNumber   String            @map("po_number")
+  itemName   String?           @map("item_name")
+  mrnItemId  String?           @map("mrn_item_id")
   sourceFrom DiscrepancySource @map("source_from")
 
   qtyDiscrepancy     Int                @map("qty_discrepancy")
@@ -701,6 +744,7 @@ model DiscrepancyDetail {
 
   createdAt DateTime @default(now()) @map("created_at")
 
+  @@index([discrepancyId])
   @@map("r_discrepancy_detail")
 }
 
@@ -726,16 +770,19 @@ model Putaway {
 
   items PutawayItem[]
 
+  @@index([warehouseId])
+  @@index([status])
+  @@index([grId])
   @@map("putaways")
 }
 
 model PutawayItem {
-  id           String  @id @default(uuid())
-  putawayId    String  @map("putaway_id")
-  putaway      Putaway @relation(fields: [putawayId], references: [id], onDelete: Cascade)
+  id        String  @id @default(uuid())
+  putawayId String  @map("putaway_id")
+  putaway   Putaway @relation(fields: [putawayId], references: [id], onDelete: Cascade)
 
-  mrnItemId    String  @map("mrn_item_id")
-  mrnItem      MrnItem @relation(fields: [mrnItemId], references: [id])
+  mrnItemId String  @map("mrn_item_id")
+  mrnItem   MrnItem @relation(fields: [mrnItemId], references: [id])
 
   itemName     String? @map("item_name")
   poNumber     String? @map("po_number")
@@ -743,8 +790,8 @@ model PutawayItem {
   vendorName   String? @map("vendor_name")
   plannedQty   Float   @default(0) @map("planned_qty")
 
-  pickerId  Int?  @map("picker_id")
-  picker    User? @relation(fields: [pickerId], references: [id])
+  pickerId Int?  @map("picker_id")
+  picker   User? @relation(fields: [pickerId], references: [id])
 
   actualQty    Float   @default(0) @map("actual_qty")
   qualityIssue Float   @default(0) @map("quality_issue")
@@ -755,6 +802,8 @@ model PutawayItem {
 
   createdAt DateTime @default(now()) @map("created_at")
 
+  @@index([putawayId])
+  @@index([binId])
   @@map("putaway_items")
 }
 
@@ -801,6 +850,8 @@ model SalesOrder {
   items    SalesOrderItem[]
   pickings Picking[]
 
+  @@index([warehouseId])
+  @@index([subsidiaryId])
   @@map("sales_orders")
 }
 
@@ -836,6 +887,7 @@ model SalesOrderItem {
   deliveryItems DeliveryItem[]
 
   @@unique([salesOrderId, lineNumber])
+  @@index([materialId])
   @@map("sales_order_items")
 }
 
@@ -854,8 +906,8 @@ enum PickingStatus {
 
 // A Picking Document generated from a Sales Order (supports partial item/qty).
 model Picking {
-  id          String  @id @default(uuid())
-  pickingCode String  @unique @map("picking_code") // PICK-YYYYMMDD-NNN
+  id          String @id @default(uuid())
+  pickingCode String @unique @map("picking_code") // PICK-YYYYMMDD-NNN
 
   salesOrderId String     @map("sales_order_id")
   salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id])
@@ -872,6 +924,9 @@ model Picking {
   discrepancies Discrepancy[]
   packing       Packing?
 
+  @@index([salesOrderId])
+  @@index([warehouseId])
+  @@index([status])
   @@map("pickings")
 }
 
@@ -906,6 +961,9 @@ model PickingItem {
 
   createdAt DateTime @default(now()) @map("created_at")
 
+  @@index([pickingId])
+  @@index([materialId])
+  @@index([binId])
   @@map("picking_items")
 }
 
@@ -935,6 +993,8 @@ model Packing {
   items    PackingItem[]
   delivery Delivery?
 
+  @@index([warehouseId])
+  @@index([status])
   @@map("packings")
 }
 
@@ -969,6 +1029,9 @@ model PackingItem {
 
   createdAt DateTime @default(now()) @map("created_at")
 
+  @@index([packingId])
+  @@index([materialId])
+  @@index([binId])
   @@map("packing_items")
 }
 
@@ -1003,6 +1066,8 @@ model Delivery {
 
   items DeliveryItem[]
 
+  @@index([warehouseId])
+  @@index([status])
   @@map("deliveries")
 }
 
@@ -1030,6 +1095,9 @@ model DeliveryItem {
 
   createdAt DateTime @default(now()) @map("created_at")
 
+  @@index([deliveryId])
+  @@index([materialId])
+  @@index([binId])
   @@map("delivery_items")
 }
 
@@ -1059,6 +1127,9 @@ model Complaint {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  @@index([userId])
+  @@index([warehouseId])
+  @@index([status])
   @@map("complaints")
 }
 
@@ -1086,5 +1157,6 @@ model SyncLog {
   retriedAt    DateTime?  @map("retried_at")
   createdAt    DateTime   @default(now()) @map("created_at")
 
+  @@index([status, createdAt])
   @@map("sync_logs")
 }

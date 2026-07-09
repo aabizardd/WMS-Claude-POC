@@ -1,9 +1,17 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Standard security headers (HSTS, X-Content-Type-Options, frameguard, ...).
+  app.use(helmet());
+
+  // Behind a reverse proxy (Render/Nginx) so rate limiting reads the real
+  // client IP from X-Forwarded-For instead of the proxy IP.
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
 
   app.setGlobalPrefix('api');
 

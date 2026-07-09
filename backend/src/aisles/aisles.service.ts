@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { LIST_HARD_CAP } from '../common/list-cap';
 import { CreateAisleDto } from './dto/create-aisle.dto';
 import { UpdateAisleDto } from './dto/update-aisle.dto';
 
@@ -15,6 +16,7 @@ export class AislesService {
   findAll() {
     return this.prisma.aisle.findMany({
       orderBy: { aisleCode: 'asc' },
+      take: LIST_HARD_CAP,
       include: { _count: { select: { bins: true } } },
     });
   }

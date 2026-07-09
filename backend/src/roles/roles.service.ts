@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { LIST_HARD_CAP } from '../common/list-cap';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 
@@ -23,6 +24,7 @@ export class RolesService {
     const roles = await this.prisma.role.findMany({
       orderBy: { id: 'asc' },
       include: roleInclude,
+      take: LIST_HARD_CAP,
     });
     return roles.map((r) => this.serialize(r));
   }

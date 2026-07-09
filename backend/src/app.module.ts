@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
@@ -39,6 +40,9 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // Global rate limiting: default 100 requests / 60s per IP. Sensitive
+    // endpoints (e.g. login) tighten this further with @Throttle.
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
     ErpModule,
     PrismaModule,
     AuthModule,
@@ -73,6 +77,8 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
     OracleSyncModule,
   ],
   providers: [
+    // 0) Rate limit (runs first, before authentication) to blunt brute-force.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
     // 1) Authenticate (JWT). Routes opt out with @Public().
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     // 2) Authorize (RBAC). Routes opt in with @RequirePermissions().
