@@ -64,7 +64,10 @@ const PERMISSION_TREE: TreeNode[] = [
           { label: 'Putaway', resource: 'putaway' },
         ],
       },
-      { label: 'Inbound from Local Vendor', comingSoon: true },
+      {
+        label: 'Inbound from Local Vendor',
+        children: [{ label: 'PO', resource: 'purchase-orders' }],
+      },
       { label: 'Inbound from Customer Return', comingSoon: true },
       { label: 'Inbound from Stock Transfer', comingSoon: true },
     ],
@@ -77,8 +80,8 @@ const PERMISSION_TREE: TreeNode[] = [
         children: [
           { label: 'List Outbound', resource: 'sales-orders' },
           { label: 'Picking', resource: 'picking' },
-          { label: 'Packing', comingSoon: true },
-          { label: 'Delivery', comingSoon: true },
+          { label: 'Packing', resource: 'packing' },
+          { label: 'Delivery', resource: 'delivery' },
         ],
       },
       { label: 'Transfer Stock', comingSoon: true },

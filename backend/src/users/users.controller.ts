@@ -12,6 +12,7 @@ import {
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { QueryUserDto } from './dto/query-user.dto';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import {
   CurrentUser,
@@ -24,8 +25,8 @@ export class UsersController {
 
   @Get()
   @RequirePermissions('users:read')
-  findAll(@CurrentUser() user: AuthUser) {
-    return this.usersService.findAll(user);
+  findAll(@CurrentUser() user: AuthUser, @Query() query: QueryUserDto) {
+    return this.usersService.findAll(user, query);
   }
 
   @Get('pickers')
@@ -41,8 +42,8 @@ export class UsersController {
 
   @Post()
   @RequirePermissions('users:create')
-  create(@Body() dto: CreateUserDto) {
-    return this.usersService.create(dto);
+  create(@Body() dto: CreateUserDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.create(dto, user);
   }
 
   @Put(':id')

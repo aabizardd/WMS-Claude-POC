@@ -139,7 +139,11 @@ export class DeliveryService {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          sales_order_id: salesOrderId,
+          // Outbound from a Sales Order. transaction_type is one of
+          // sales_order | transfer_order | vendor_return; transaction_id was
+          // formerly sent as sales_order_id.
+          transaction_type: 'sales_order',
+          transaction_id: salesOrderId,
           ship_status: 'shipped',
           items,
         }),

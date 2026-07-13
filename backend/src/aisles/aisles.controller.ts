@@ -6,10 +6,12 @@ import {
   Param,
   Post,
   Put,
+  Query,
 } from '@nestjs/common';
 import { AislesService } from './aisles.service';
 import { CreateAisleDto } from './dto/create-aisle.dto';
 import { UpdateAisleDto } from './dto/update-aisle.dto';
+import { PaginatedQueryDto } from '../common/dto/paginated-query.dto';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @Controller('aisles')
@@ -18,8 +20,8 @@ export class AislesController {
 
   @Get()
   @RequirePermissions('aisles:read')
-  findAll() {
-    return this.service.findAll();
+  findAll(@Query() query: PaginatedQueryDto) {
+    return this.service.findAll(query);
   }
 
   @Get('options')

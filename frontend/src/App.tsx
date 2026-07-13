@@ -35,6 +35,10 @@ import GoodsReceiveTab from './pages/inbound/GoodsReceiveTab';
 import GoodsReceiveDetailPage from './pages/inbound/GoodsReceiveDetailPage';
 import PutawayTab from './pages/inbound/PutawayTab';
 import PutawayDetailPage from './pages/inbound/PutawayDetailPage';
+import LocalInboundLayout from './pages/inbound/LocalInboundLayout';
+import PoTab from './pages/inbound/PoTab';
+import PoDetailPage from './pages/inbound/PoDetailPage';
+import { InboundPlaceholder } from './pages/inbound/InboundLayout';
 import InventoryLandingPage from './pages/inventory/InventoryLandingPage';
 import InventoryPage from './pages/inventory/InventoryPage';
 import InventoryDetailPage from './pages/inventory/InventoryDetailPage';
@@ -340,6 +344,47 @@ export default function App() {
                 </RequirePermission>
               }
             />
+
+          {/* Inbound from Local Vendor (tabbed) — source is PO instead of MRN */}
+          <Route path="inbound/local" element={<LocalInboundLayout />}>
+            <Route index element={<Navigate to="po" replace />} />
+            <Route
+              path="po"
+              element={
+                <RequirePermission permission="purchase-orders:read">
+                  <PoTab />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="goods-receive"
+              element={
+                <RequirePermission permission="goods-receive:read">
+                  <InboundPlaceholder title="Goods Receive (Local Vendor)" />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="putaway"
+              element={
+                <RequirePermission permission="putaway:read">
+                  <InboundPlaceholder title="Putaway (Local Vendor)" />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="history"
+              element={<InboundPlaceholder title="History (Local Vendor)" />}
+            />
+          </Route>
+          <Route
+            path="inbound/local/po/:id"
+            element={
+              <RequirePermission permission="purchase-orders:read">
+                <PoDetailPage />
+              </RequirePermission>
+            }
+          />
 
           {/* Inventory — landing page (module selection) */}
           <Route path="inventory" element={<InventoryLandingPage />} />

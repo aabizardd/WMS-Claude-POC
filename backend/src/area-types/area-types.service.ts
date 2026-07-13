@@ -5,20 +5,49 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { LIST_HARD_CAP } from '../common/list-cap';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { paginationMeta } from '../common/pagination';
+import { PaginatedQueryDto } from '../common/dto/paginated-query.dto';
 import { CreateAreaTypeDto } from './dto/create-area-type.dto';
 import { UpdateAreaTypeDto } from './dto/update-area-type.dto';
+
+type AreaTypeOrder = Prisma.AreaTypeOrderByWithRelationInput;
+const SORTABLE: Record<string, (d: SortDir) => AreaTypeOrder> = {
+  code: (d) => ({ areaTypeCode: d }),
+  name: (d) => ({ areaTypeName: d }),
+  status: (d) => ({ isActive: d }),
+  bins: (d) => ({ bins: { _count: d } }),
+};
+const DEFAULT_ORDER: AreaTypeOrder = { areaTypeCode: 'asc' };
 
 @Injectable()
 export class AreaTypesService {
   constructor(private prisma: PrismaService) {}
 
-  findAll() {
-    return this.prisma.areaType.findMany({
-      orderBy: { areaTypeCode: 'asc' },
-      take: LIST_HARD_CAP,
-      include: { _count: { select: { bins: true } } },
-    });
+  async findAll(query: PaginatedQueryDto = {}) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const orderBy = buildOrderBy(query.sort_by, query.sort_order, SORTABLE, DEFAULT_ORDER);
+    const where: Prisma.AreaTypeWhereInput = query.search
+      ? {
+          OR: [
+            { areaTypeCode: { contains: query.search, mode: 'insensitive' } },
+            { areaTypeName: { contains: query.search, mode: 'insensitive' } },
+          ],
+        }
+      : {};
+
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.areaType.count({ where }),
+      this.prisma.areaType.findMany({
+        where,
+        orderBy,
+        skip: (page - 1) * limit,
+        take: limit,
+        include: { _count: { select: { bins: true } } },
+      }),
+    ]);
+    return { ...paginationMeta(total, page, limit, query), rows };
   }
 
   options() {

@@ -5,9 +5,10 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { LIST_HARD_CAP } from '../common/list-cap';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
+import { QueryRoleDto } from './dto/query-role.dto';
 
 const roleInclude = {
   _count: { select: { users: true } },
@@ -16,17 +17,60 @@ const roleInclude = {
 
 type RoleWithRelations = Prisma.RoleGetPayload<{ include: typeof roleInclude }>;
 
+type RoleOrder = Prisma.RoleOrderByWithRelationInput;
+const SORTABLE: Record<string, (d: SortDir) => RoleOrder> = {
+  name: (d) => ({ name: d }),
+  description: (d) => ({ description: d }),
+  users: (d) => ({ users: { _count: d } }),
+  permissions: (d) => ({ permissions: { _count: d } }),
+};
+const DEFAULT_ORDER: RoleOrder = { id: 'asc' };
+
 @Injectable()
 export class RolesService {
   constructor(private prisma: PrismaService) {}
 
-  async findAll() {
-    const roles = await this.prisma.role.findMany({
-      orderBy: { id: 'asc' },
-      include: roleInclude,
-      take: LIST_HARD_CAP,
-    });
-    return roles.map((r) => this.serialize(r));
+  async findAll(query: QueryRoleDto = {}) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const orderBy = buildOrderBy(
+      query.sort_by,
+      query.sort_order,
+      SORTABLE,
+      DEFAULT_ORDER,
+    );
+
+    const where: Prisma.RoleWhereInput = query.search
+      ? {
+          OR: [
+            { name: { contains: query.search, mode: 'insensitive' } },
+            { description: { contains: query.search, mode: 'insensitive' } },
+          ],
+        }
+      : {};
+
+    const [total, roles] = await this.prisma.$transaction([
+      this.prisma.role.count({ where }),
+      this.prisma.role.findMany({
+        where,
+        orderBy,
+        include: roleInclude,
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+    return {
+      total_page: Math.ceil(total / limit) || 0,
+      total_data: total,
+      attributes: {
+        page,
+        limit,
+        sort_by: query.sort_by ?? null,
+        sort_order: query.sort_order ?? null,
+      },
+      rows: roles.map((r) => this.serialize(r)),
+    };
   }
 
   // Lightweight lookup for dropdowns (id + name only).

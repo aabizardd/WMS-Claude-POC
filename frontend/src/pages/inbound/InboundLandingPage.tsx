@@ -28,12 +28,13 @@ const INBOUND_TYPES: InboundType[] = [
   {
     key: 'local-vendor',
     title: 'Inbound from Local Vendor',
-    description: 'Receive goods directly from local vendors.',
+    description: 'Purchase Orders from local vendors: PO → Goods Receive → Putaway.',
     accent: 'bg-emerald-600',
     icon: (
       <path d="M3 7h18M3 7l2-3h14l2 3M3 7v12a1 1 0 001 1h16a1 1 0 001-1V7M9 11h6" />
     ),
-    enabled: false,
+    to: '/admin/inbound/local',
+    enabled: true,
   },
   {
     key: 'customer-return',

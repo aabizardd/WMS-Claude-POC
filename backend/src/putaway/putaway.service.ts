@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import type { GeneratePutawayDto } from './dto/generate-putaway.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { findGrForMrn } from '../goods-receive/gr-source.util';
 
 type PutawayOrder = Prisma.PutawayOrderByWithRelationInput;
 const PUTAWAY_SORTABLE: Record<string, (d: SortDir) => PutawayOrder> = {
@@ -148,13 +149,6 @@ export class PutawayService {
     for (const row of dto.items) {
       const mrnItem = await this.prisma.mrnItem.findUnique({
         where: { id: row.mrnItemId },
-        include: {
-          mrn: {
-            include: {
-              goodsReceive: { select: { id: true, warehouseId: true } },
-            },
-          },
-        },
       });
       if (!mrnItem) {
         throw new BadRequestException(`MRN item ${row.mrnItemId} not found`);
@@ -169,7 +163,8 @@ export class PutawayService {
           `Planned qty (${row.plannedQty}) exceeds remaining (${mrnItem.qtyRemaining}) for "${mrnItem.itemName ?? row.mrnItemId}"`,
         );
       }
-      const grRef = mrnItem.mrn.goodsReceive;
+      // GR that this MRN backs (PIB source: sourceDocId = mrn.id).
+      const grRef = await findGrForMrn(this.prisma, mrnItem.mrnId);
       if (!grRef) {
         throw new BadRequestException(
           `MRN item ${row.mrnItemId} is not linked to a Goods Receive`,
@@ -450,7 +445,6 @@ export class PutawayService {
     const gr = await this.prisma.goodsReceive.findUnique({
       where: { id: goodsReceiveId },
       include: {
-        mrn: { include: { items: true } },
         putaways: {
           where: { status: 'Closed' },
           include: { items: true },
@@ -486,7 +480,7 @@ export class PutawayService {
       await this.prisma.discrepancyDetail.createMany({
         data: detailRows.map((r) => ({ ...r, discrepancyId: existing.id })),
       });
-      this.logger.log(`Updated quality discrepancy for GR ${gr.mrn.shipmentNumber}`);
+      this.logger.log(`Updated quality discrepancy for GR ${gr.sourceDocNumber}`);
     } else {
       const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
       const count = await this.prisma.discrepancy.count({
@@ -505,7 +499,7 @@ export class PutawayService {
           details: { create: detailRows },
         },
       });
-      this.logger.log(`Created quality discrepancy ${discId} for GR ${gr.mrn.shipmentNumber}`);
+      this.logger.log(`Created quality discrepancy ${discId} for GR ${gr.sourceDocNumber}`);
     }
   }
 
@@ -515,7 +509,6 @@ export class PutawayService {
     const gr = await this.prisma.goodsReceive.findUnique({
       where: { id: goodsReceiveId },
       include: {
-        mrn: { include: { items: true } },
         putaways: {
           where: { status: 'Closed' },
           include: { items: true },
@@ -551,7 +544,7 @@ export class PutawayService {
         });
       }
       this.logger.log(
-        `Updated quantity discrepancy (putaway) for GR ${gr.mrn.shipmentNumber}`,
+        `Updated quantity discrepancy (putaway) for GR ${gr.sourceDocNumber}`,
       );
     } else if (detailRows.length > 0) {
       const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -572,7 +565,7 @@ export class PutawayService {
         },
       });
       this.logger.log(
-        `Created quantity discrepancy ${discId} (putaway) for GR ${gr.mrn.shipmentNumber}`,
+        `Created quantity discrepancy ${discId} (putaway) for GR ${gr.sourceDocNumber}`,
       );
     }
   }
@@ -582,16 +575,21 @@ export class PutawayService {
   //  2) every GR item has remaining qty = 0 (nothing left to putaway).
   // Otherwise the GR stays On Progress.
   private async maybeCloseGoodsReceive(goodsReceiveId: string) {
+    // Resolve the GR's source MRN (PIB) to count its remaining items.
+    const grDoc = await this.prisma.goodsReceive.findUnique({
+      where: { id: goodsReceiveId },
+      select: { sourceType: true, sourceDocId: true },
+    });
+    const mrnId =
+      grDoc?.sourceType === 'PIB' ? grDoc.sourceDocId : '__none__';
+
     const [total, notClosed, itemsWithRemaining] = await this.prisma.$transaction([
       this.prisma.putaway.count({ where: { grId: goodsReceiveId } }),
       this.prisma.putaway.count({
         where: { grId: goodsReceiveId, status: { not: 'Closed' } },
       }),
       this.prisma.mrnItem.count({
-        where: {
-          mrn: { goodsReceive: { id: goodsReceiveId } },
-          qtyRemaining: { gt: 0 },
-        },
+        where: { mrnId, qtyRemaining: { gt: 0 } },
       }),
     ]);
 

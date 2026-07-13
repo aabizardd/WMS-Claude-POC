@@ -222,6 +222,7 @@ model Warehouse {
   deliveries           Delivery[]
   complaints           Complaint[]
   inventoryAdjustments InventoryAdjustment[]
+  purchaseOrders       PurchaseOrder[]
 
   @@index([subsidiaryId])
   @@index([parentId])
@@ -451,8 +452,7 @@ model Mrn {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  items        MrnItem[]
-  goodsReceive GoodsReceive?
+  items MrnItem[]
 
   @@index([warehouseId])
   @@index([status])
@@ -507,10 +507,24 @@ enum GoodsReceiveStatus {
   Closed
 }
 
+// Every inbound door funnels into a Goods Receive. The source is generic:
+// PIB (MRN), PO (local vendor), customer return, or transfer return.
+enum GoodsReceiveSource {
+  PIB
+  PO
+  CUSTOMER_RETURN
+  TRANSFER_RETURN
+}
+
 model GoodsReceive {
-  id          String             @id @default(uuid())
-  mrnId       String             @unique @map("mrn_id")
-  mrn         Mrn                @relation(fields: [mrnId], references: [id], onDelete: Cascade)
+  id              String             @id @default(uuid())
+  // Generic source: sourceDocId is the WMS internal id of the source document
+  // (mrn.id for PIB, purchaseOrder.id for PO, ...). sourceDocNumber is a
+  // denormalized human-readable number (e.g. shipment/PO number) for lists.
+  sourceType      GoodsReceiveSource @default(PIB) @map("source_type")
+  sourceDocId     String             @map("source_doc_id")
+  sourceDocNumber String?            @map("source_doc_number")
+
   grNumber    String             @unique @map("gr_number")
   status      GoodsReceiveStatus @default(Open)
   warehouseId String?            @map("warehouse_id")
@@ -522,9 +536,98 @@ model GoodsReceive {
   discrepancies Discrepancy[]
   putaways      Putaway[]
 
+  @@unique([sourceType, sourceDocId])
   @@index([warehouseId])
   @@index([status])
+  @@index([sourceDocId])
   @@map("goods_receives")
+}
+
+// ===================== Purchase Order (Local Vendor inbound) =====================
+
+// Synced from Oracle "purchase-orders/get-list". Source doc for Inbound from
+// Local Vendor. Only PO with po_status "pendingReceipt" can be received (GR),
+// and — unlike PIB/MRN — a Goods Receive is NOT auto-created.
+model PurchaseOrder {
+  id            String  @id @default(uuid())
+  oracleId      String  @unique @map("oracle_id") // Oracle po_id
+  poNumber      String? @map("po_number")
+  poDate        String? @map("po_date")
+  poStatus      String? @map("po_status") // e.g. pendingReceipt
+  poStatusLabel String? @map("po_status_label")
+  memo          String?
+
+  vendorId       Int?    @map("vendor_id")
+  vendorName     String? @map("vendor_name")
+  currencyId     Int?    @map("currency_id")
+  currencySymbol String? @map("currency_symbol")
+
+  approvalStatus        Int?    @map("approval_status")
+  approvalStatusDisplay String? @map("approval_status_display")
+
+  subsidiaryId      String? @map("subsidiary_id")
+  subsidiaryDisplay String? @map("subsidiary_display")
+  classDisplay      String? @map("class_display")
+  departmentDisplay String? @map("department_display")
+
+  locationOracleId String?    @map("location_oracle_id") // Oracle location id
+  locationName     String?    @map("location_name")
+  warehouseId      String?    @map("warehouse_id")
+  warehouse        Warehouse? @relation(fields: [warehouseId], references: [id])
+
+  createdByNetsuite String?   @map("created_by_netsuite")
+  dateCreated       String?   @map("date_created")
+  lastModified      DateTime? @map("last_modified")
+
+  createdBy String?  @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  lines PurchaseOrderLine[]
+
+  @@index([warehouseId])
+  @@index([poStatus])
+  @@index([subsidiaryId])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderLine {
+  id              String        @id @default(uuid())
+  purchaseOrderId String        @map("purchase_order_id")
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  lineId       String  @map("line_id") // Oracle line_id
+  itemOracleId String? @map("item_oracle_id") // Oracle item id (-> materials.erp_doc_id)
+  itemDisplay  String? @map("item_display")
+  itemType     String? @map("item_type")
+  description  String?
+
+  quantity         Float @default(0)
+  committed        Float @default(0)
+  backordered      Float @default(0)
+  quantityReceived Float @default(0) @map("quantity_received") // value from Oracle
+  quantityBilled   Float @default(0) @map("quantity_billed")
+
+  locationOracleId  String? @map("location_oracle_id")
+  locationName      String? @map("location_name")
+  departmentDisplay String? @map("department_display")
+  classDisplay      String? @map("class_display")
+
+  inboundShipmentNumber String? @map("inbound_shipment_number")
+  inboundShipmentLineId Int?    @map("inbound_shipment_line_id")
+
+  // Resolved WMS material (item_oracle_id -> materials.erp_doc_id). Optional.
+  materialId String? @map("material_id")
+
+  // WMS-managed (Goods Receive, phase 2): actual received + destination bin.
+  qtyActual     Float     @default(0) @map("qty_actual")
+  qtyRemaining  Float     @default(0) @map("qty_remaining")
+  binId         String?   @map("bin_id")
+  inventoriedAt DateTime? @map("inventoried_at")
+
+  @@unique([purchaseOrderId, lineId])
+  @@index([purchaseOrderId])
+  @@map("purchase_order_lines")
 }
 
 // ===================== Inventory Management =====================

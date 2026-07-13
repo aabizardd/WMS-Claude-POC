@@ -6,10 +6,12 @@ import {
   Param,
   Post,
   Put,
+  Query,
 } from '@nestjs/common';
 import { AreaTypesService } from './area-types.service';
 import { CreateAreaTypeDto } from './dto/create-area-type.dto';
 import { UpdateAreaTypeDto } from './dto/update-area-type.dto';
+import { PaginatedQueryDto } from '../common/dto/paginated-query.dto';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @Controller('area-types')
@@ -18,8 +20,8 @@ export class AreaTypesController {
 
   @Get()
   @RequirePermissions('area-types:read')
-  findAll() {
-    return this.service.findAll();
+  findAll(@Query() query: PaginatedQueryDto) {
+    return this.service.findAll(query);
   }
 
   @Get('options')

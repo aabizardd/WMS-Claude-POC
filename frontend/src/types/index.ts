@@ -321,6 +321,137 @@ export interface Paginated<T> {
   rows: T[];
 }
 
+// ===== Dashboard =====
+
+export interface NameCount {
+  status?: string;
+  type?: string;
+  source?: string;
+  count: number;
+}
+export interface DashboardSummary {
+  range_days: number;
+  warehouse_id: string | null;
+  kpis: {
+    goods_receive_period: number;
+    goods_receive_open: number;
+    sales_order_period: number;
+    sales_order_pending: number;
+    sku_on_hand: number;
+    on_hand_qty: number;
+    adjustment_pending: number;
+    discrepancy_period: number;
+    complaint_open: number;
+  };
+  inbound: {
+    throughput: { date: string; count: number }[];
+    gr_status: NameCount[];
+    putaway_status: NameCount[];
+    funnel: { stage: string; count: number }[];
+  };
+  outbound: {
+    throughput: { date: string; count: number }[];
+    funnel: { stage: string; count: number }[];
+    so_status: NameCount[];
+    picking_status: NameCount[];
+    packing_status: NameCount[];
+    delivery_status: NameCount[];
+  };
+  inventory: {
+    on_hand_by_warehouse: { warehouse: string; on_hand: number }[];
+    top_materials: { code: string; name: string; on_hand: number }[];
+    composition: { bucket: string; qty: number }[];
+    low_stock: number;
+    zero_stock: number;
+  };
+  quality: {
+    discrepancy_by_type: NameCount[];
+    discrepancy_by_source: NameCount[];
+    adjustment_by_status: NameCount[];
+    adjustment_by_type: NameCount[];
+    complaint_status: NameCount[];
+  };
+  ops: {
+    sync_by_status: NameCount[];
+    last_sync_per_module: { module: string; status: string; at: string }[];
+    aging: { label: string; count: number }[];
+  };
+}
+
+// ===== Purchase Order (Local Vendor inbound) =====
+
+export interface PurchaseOrderRow {
+  id: string;
+  oracle_id: string;
+  po_number: string | null;
+  po_date: string | null;
+  po_status: string | null;
+  po_status_label: string | null;
+  vendor_name: string | null;
+  currency_symbol: string | null;
+  subsidiary_display: string | null;
+  warehouse: { id: string; name: string } | null;
+  line_count: number;
+  last_modified: string | null;
+  created_at: string;
+}
+
+export interface PurchaseOrderLine {
+  id: string;
+  line_id: string;
+  item_oracle_id: string | null;
+  item_display: string | null;
+  item_type: string | null;
+  description: string | null;
+  quantity: number;
+  committed: number;
+  backordered: number;
+  quantity_received: number;
+  quantity_billed: number;
+  qty_remaining_to_receive: number;
+  location_name: string | null;
+  department_display: string | null;
+  class_display: string | null;
+  inbound_shipment_number: string | null;
+  material_id: string | null;
+}
+
+export interface PurchaseOrderDetail {
+  id: string;
+  oracle_id: string;
+  po_number: string | null;
+  po_date: string | null;
+  po_status: string | null;
+  po_status_label: string | null;
+  memo: string | null;
+  vendor_id: number | null;
+  vendor_name: string | null;
+  currency_symbol: string | null;
+  approval_status_display: string | null;
+  subsidiary_display: string | null;
+  class_display: string | null;
+  department_display: string | null;
+  location_name: string | null;
+  warehouse: { id: string; name: string } | null;
+  created_by_netsuite: string | null;
+  date_created: string | null;
+  last_modified: string | null;
+  created_at: string;
+  lines: PurchaseOrderLine[];
+}
+
+export interface PurchaseOrderSyncResult {
+  fullSync: boolean;
+  lastModified: string | null;
+  totalRecords: number;
+  totalPages: number;
+  pagesFetched: number;
+  upserted: number;
+  skipped: number;
+  failed: number;
+  durationMs: number;
+}
+
 export interface ErpSyncResult {
   fullSync: boolean;
   lastModified: string | null;

@@ -19,10 +19,13 @@ const MRN_SORTABLE: Record<string, (d: SortDir) => MrnOrder> = {
 const mrnInclude = {
   items: true,
   warehouse: { select: { id: true, name: true } },
-  goodsReceive: { select: { id: true, grNumber: true, status: true } },
 } satisfies Prisma.MrnInclude;
 
 type MrnWithRelations = Prisma.MrnGetPayload<{ include: typeof mrnInclude }>;
+
+// The Goods Receive that an MRN backs (PIB source). GR no longer has a direct
+// mrn relation — it links back via sourceType='PIB' + sourceDocId = mrn.id.
+type GrRef = { id: string; grNumber: string; status: string };
 
 @Injectable()
 export class MrnService {
@@ -33,6 +36,21 @@ export class MrnService {
       return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
     }
     return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
+  }
+
+  // Map mrn.id -> its PIB Goods Receive (if any) for the given MRN ids.
+  private async grByMrnId(mrnIds: string[]): Promise<Map<string, GrRef>> {
+    if (mrnIds.length === 0) return new Map();
+    const grs = await this.prisma.goodsReceive.findMany({
+      where: { sourceType: 'PIB', sourceDocId: { in: mrnIds } },
+      select: { id: true, grNumber: true, status: true, sourceDocId: true },
+    });
+    return new Map(
+      grs.map((g) => [
+        g.sourceDocId,
+        { id: g.id, grNumber: g.grNumber, status: g.status },
+      ]),
+    );
   }
 
   async findAll(
@@ -70,6 +88,8 @@ export class MrnService {
       }),
     ]);
 
+    const grMap = await this.grByMrnId(rows.map((r) => r.id));
+
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
@@ -79,7 +99,7 @@ export class MrnService {
         sort_by: query.sort_by ?? null,
         sort_order: query.sort_order ?? null,
       },
-      rows: rows.map((r) => this.serialize(r)),
+      rows: rows.map((r) => this.serialize(r, grMap.get(r.id) ?? null)),
     };
   }
 
@@ -94,7 +114,8 @@ export class MrnService {
     ) {
       throw new NotFoundException(`MRN ${id} not found`);
     }
-    return this.serialize(mrn);
+    const grMap = await this.grByMrnId([mrn.id]);
+    return this.serialize(mrn, grMap.get(mrn.id) ?? null);
   }
 
   async getLastSyncAt() {
@@ -105,7 +126,7 @@ export class MrnService {
     return { lastSyncAt: latest?.createdAt ?? null };
   }
 
-  private serialize(m: MrnWithRelations) {
+  private serialize(m: MrnWithRelations, goodsReceive: GrRef | null) {
     return {
       id: m.id,
       oracle_id: m.oracleId,
@@ -126,7 +147,7 @@ export class MrnService {
       last_modified: m.lastModified,
       receiving_location_name: m.receivingLocationName,
       warehouse: m.warehouse,
-      goods_receive: m.goodsReceive,
+      goods_receive: goodsReceive,
       items: m.items.map((it) => ({
         id: it.id,
         item_name: it.itemName,

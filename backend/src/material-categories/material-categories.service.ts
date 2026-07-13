@@ -5,20 +5,50 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { LIST_HARD_CAP } from '../common/list-cap';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { paginationMeta } from '../common/pagination';
+import { PaginatedQueryDto } from '../common/dto/paginated-query.dto';
 import { CreateMaterialCategoryDto } from './dto/create-material-category.dto';
 import { UpdateMaterialCategoryDto } from './dto/update-material-category.dto';
+
+type CategoryOrder = Prisma.MaterialCategoryOrderByWithRelationInput;
+const SORTABLE: Record<string, (d: SortDir) => CategoryOrder> = {
+  code: (d) => ({ materialCategoryCode: d }),
+  name: (d) => ({ materialCategoryName: d }),
+  description: (d) => ({ description: d }),
+  status: (d) => ({ isActive: d }),
+  materials: (d) => ({ materials: { _count: d } }),
+};
+const DEFAULT_ORDER: CategoryOrder = { materialCategoryCode: 'asc' };
 
 @Injectable()
 export class MaterialCategoriesService {
   constructor(private prisma: PrismaService) {}
 
-  findAll() {
-    return this.prisma.materialCategory.findMany({
-      orderBy: { materialCategoryCode: 'asc' },
-      take: LIST_HARD_CAP,
-      include: { _count: { select: { materials: true } } },
-    });
+  async findAll(query: PaginatedQueryDto = {}) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const orderBy = buildOrderBy(query.sort_by, query.sort_order, SORTABLE, DEFAULT_ORDER);
+    const where: Prisma.MaterialCategoryWhereInput = query.search
+      ? {
+          OR: [
+            { materialCategoryCode: { contains: query.search, mode: 'insensitive' } },
+            { materialCategoryName: { contains: query.search, mode: 'insensitive' } },
+          ],
+        }
+      : {};
+
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.materialCategory.count({ where }),
+      this.prisma.materialCategory.findMany({
+        where,
+        orderBy,
+        skip: (page - 1) * limit,
+        take: limit,
+        include: { _count: { select: { materials: true } } },
+      }),
+    ]);
+    return { ...paginationMeta(total, page, limit, query), rows };
   }
 
   // Lightweight lookup for dropdowns.

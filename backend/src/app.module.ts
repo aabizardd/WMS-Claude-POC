@@ -1,7 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { LoggingThrottlerGuard } from './common/logging-throttler.guard';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
@@ -34,6 +35,8 @@ import { PackingModule } from './packing/packing.module';
 import { DeliveryModule } from './delivery/delivery.module';
 import { ComplaintsModule } from './complaints/complaints.module';
 import { OracleSyncModule } from './sync/oracle-sync.module';
+import { DashboardModule } from './dashboard/dashboard.module';
+import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from './auth/guards/permissions.guard';
 
@@ -74,11 +77,14 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
     PackingModule,
     DeliveryModule,
     ComplaintsModule,
+    PurchaseOrdersModule,
     OracleSyncModule,
+    DashboardModule,
   ],
   providers: [
     // 0) Rate limit (runs first, before authentication) to blunt brute-force.
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    //    Subclass logs 429s so abuse/spikes surface in the security logs.
+    { provide: APP_GUARD, useClass: LoggingThrottlerGuard },
     // 1) Authenticate (JWT). Routes opt out with @Public().
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     // 2) Authorize (RBAC). Routes opt in with @RequirePermissions().

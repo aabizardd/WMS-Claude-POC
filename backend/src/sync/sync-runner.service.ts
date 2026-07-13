@@ -15,6 +15,7 @@ import { ClassSyncService } from '../classes/class-sync.service';
 import { SubsidiarySyncService } from '../subsidiaries/subsidiary-sync.service';
 import { MrnSyncService } from '../mrn/mrn-sync.service';
 import { SalesOrderSyncService } from '../sales-orders/sales-order-sync.service';
+import { PurchaseOrderSyncService } from '../purchase-orders/purchase-order-sync.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 
 type SyncLogOrder = Prisma.SyncLogOrderByWithRelationInput;
@@ -68,6 +69,7 @@ export class SyncRunnerService {
     subsidiaries: SubsidiarySyncService,
     mrn: MrnSyncService,
     salesOrders: SalesOrderSyncService,
+    purchaseOrders: PurchaseOrderSyncService,
   ) {
     const latestCreatedAt = async (
       model: {
@@ -126,6 +128,10 @@ export class SyncRunnerService {
       'sales-orders': {
         watermark: () => latestCreatedAt(this.prisma.salesOrder as never),
         run: (lm) => salesOrders.sync({ lastModified: lm }),
+      },
+      'purchase-orders': {
+        watermark: () => latestCreatedAt(this.prisma.purchaseOrder as never),
+        run: (lm) => purchaseOrders.sync({ lastModified: lm }),
       },
     };
   }

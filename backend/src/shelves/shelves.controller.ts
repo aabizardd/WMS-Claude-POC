@@ -6,10 +6,12 @@ import {
   Param,
   Post,
   Put,
+  Query,
 } from '@nestjs/common';
 import { ShelvesService } from './shelves.service';
 import { CreateShelfDto } from './dto/create-shelf.dto';
 import { UpdateShelfDto } from './dto/update-shelf.dto';
+import { PaginatedQueryDto } from '../common/dto/paginated-query.dto';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @Controller('shelves')
@@ -18,8 +20,8 @@ export class ShelvesController {
 
   @Get()
   @RequirePermissions('shelves:read')
-  findAll() {
-    return this.service.findAll();
+  findAll(@Query() query: PaginatedQueryDto) {
+    return this.service.findAll(query);
   }
 
   @Get('options')

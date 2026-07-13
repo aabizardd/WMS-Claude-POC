@@ -7,6 +7,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateActualsDto } from './dto/update-actuals.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { loadPibMrn, pibMrnInclude, type PibMrn } from './gr-source.util';
 
 export interface WarehouseScope {
   role: string;
@@ -16,7 +17,8 @@ export interface WarehouseScope {
 type GrOrder = Prisma.GoodsReceiveOrderByWithRelationInput;
 const GR_SORTABLE: Record<string, (d: SortDir) => GrOrder> = {
   gr_number: (d) => ({ grNumber: d }),
-  shipment_number: (d) => ({ mrn: { shipmentNumber: d } }),
+  // The source document number is denormalized onto the GR now.
+  shipment_number: (d) => ({ sourceDocNumber: d }),
   receiving_location: (d) => ({ warehouse: { name: d } }),
   status: (d) => ({ status: d }),
   created_at: (d) => ({ createdAt: d }),
@@ -24,16 +26,11 @@ const GR_SORTABLE: Record<string, (d: SortDir) => GrOrder> = {
 
 const grInclude = {
   warehouse: { select: { id: true, name: true } },
-  mrn: {
-    include: {
-      items: { include: { bin: { select: { id: true, binLabel: true } } } },
-    },
-  },
 } satisfies Prisma.GoodsReceiveInclude;
 
-type GrWithRelations = Prisma.GoodsReceiveGetPayload<{
-  include: typeof grInclude;
-}>;
+type GrRow = Prisma.GoodsReceiveGetPayload<{ include: typeof grInclude }>;
+// A GR with its source document (MRN for PIB) attached.
+type GrWithSource = GrRow & { mrn: PibMrn | null };
 
 @Injectable()
 export class GoodsReceiveService {
@@ -59,18 +56,14 @@ export class GoodsReceiveService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const orderBy = buildOrderBy(query.sort_by, query.sort_order, GR_SORTABLE, {
-      mrn: { shipmentNumber: 'desc' },
+      sourceDocNumber: 'desc',
     });
 
     const where: Prisma.GoodsReceiveWhereInput = { ...this.scopeWhere(scope) };
     if (query.search) {
       where.OR = [
         { grNumber: { contains: query.search, mode: 'insensitive' } },
-        {
-          mrn: {
-            shipmentNumber: { contains: query.search, mode: 'insensitive' },
-          },
-        },
+        { sourceDocNumber: { contains: query.search, mode: 'insensitive' } },
       ];
     }
 
@@ -85,6 +78,18 @@ export class GoodsReceiveService {
       }),
     ]);
 
+    // Batch-load the PIB source MRNs for this page (item count + receiving loc).
+    const mrnIds = rows
+      .filter((r) => r.sourceType === 'PIB')
+      .map((r) => r.sourceDocId);
+    const mrns = mrnIds.length
+      ? await this.prisma.mrn.findMany({
+          where: { id: { in: mrnIds } },
+          include: pibMrnInclude,
+        })
+      : [];
+    const mrnById = new Map(mrns.map((m) => [m.id, m]));
+
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
@@ -94,7 +99,9 @@ export class GoodsReceiveService {
         sort_by: query.sort_by ?? null,
         sort_order: query.sort_order ?? null,
       },
-      rows: rows.map((r) => this.serializeList(r)),
+      rows: rows.map((r) =>
+        this.serializeList(r, mrnById.get(r.sourceDocId) ?? null),
+      ),
     };
   }
 
@@ -106,8 +113,9 @@ export class GoodsReceiveService {
   // Fill the actual received quantity for the GR's items.
   async updateActuals(id: string, dto: UpdateActualsDto, scope: WarehouseScope) {
     const gr = await this.getScoped(id, scope);
+    const items = gr.mrn?.items ?? [];
 
-    const itemById = new Map(gr.mrn.items.map((it) => [it.id, it]));
+    const itemById = new Map(items.map((it) => [it.id, it]));
     for (const row of dto.items) {
       const item = itemById.get(row.id);
       if (!item) {
@@ -147,7 +155,10 @@ export class GoodsReceiveService {
     return this.serializeDetail(updated);
   }
 
-  private async getScoped(id: string, scope: WarehouseScope) {
+  private async getScoped(
+    id: string,
+    scope: WarehouseScope,
+  ): Promise<GrWithSource> {
     const gr = await this.prisma.goodsReceive.findUnique({
       where: { id },
       include: grInclude,
@@ -158,49 +169,54 @@ export class GoodsReceiveService {
     ) {
       throw new NotFoundException(`Goods Receive ${id} not found`);
     }
-    return gr;
+    const mrn = await loadPibMrn(this.prisma, gr);
+    return { ...gr, mrn };
   }
 
-  private serializeList(gr: GrWithRelations) {
+  private serializeList(gr: GrRow, mrn: PibMrn | null) {
     return {
       id: gr.id,
       gr_number: gr.grNumber,
       status: gr.status,
-      shipment_number: gr.mrn.shipmentNumber,
-      receiving_location_name: gr.mrn.receivingLocationName,
+      source_type: gr.sourceType,
+      shipment_number: gr.sourceDocNumber,
+      receiving_location_name: mrn?.receivingLocationName ?? null,
       warehouse: gr.warehouse,
-      item_count: gr.mrn.items.length,
+      item_count: mrn?.items.length ?? 0,
       created_at: gr.createdAt,
     };
   }
 
   // Goods Receive hides shipment amount and all *_id fields (names only).
-  private serializeDetail(gr: GrWithRelations) {
+  private serializeDetail(gr: GrWithSource) {
     const m = gr.mrn;
     return {
       id: gr.id,
       gr_number: gr.grNumber,
       status: gr.status,
+      source_type: gr.sourceType,
       warehouse: gr.warehouse,
-      // MRN information shown on the Goods Receive screen.
-      mrn: {
-        id: m.id,
-        oracle_id: m.oracleId,
-        shipment_number: m.shipmentNumber,
-        oracle_status: m.oracleStatus,
-        status: m.status,
-        expected_delivery_date: m.expectedDeliveryDate,
-        actual_delivery_date: m.actualDeliveryDate,
-        vessel_number: m.vesselNumber,
-        bill_of_lading: m.billOfLading,
-        port: m.port,
-        memo: m.memo,
-        date_created: m.dateCreated,
-        receiving_location_name: m.receivingLocationName,
-      },
-      shipment_number: m.shipmentNumber,
-      receiving_location_name: m.receivingLocationName,
-      items: m.items.map((it) => ({
+      // MRN information shown on the Goods Receive screen (PIB source).
+      mrn: m
+        ? {
+            id: m.id,
+            oracle_id: m.oracleId,
+            shipment_number: m.shipmentNumber,
+            oracle_status: m.oracleStatus,
+            status: m.status,
+            expected_delivery_date: m.expectedDeliveryDate,
+            actual_delivery_date: m.actualDeliveryDate,
+            vessel_number: m.vesselNumber,
+            bill_of_lading: m.billOfLading,
+            port: m.port,
+            memo: m.memo,
+            date_created: m.dateCreated,
+            receiving_location_name: m.receivingLocationName,
+          }
+        : null,
+      shipment_number: gr.sourceDocNumber,
+      receiving_location_name: m?.receivingLocationName ?? null,
+      items: (m?.items ?? []).map((it) => ({
         id: it.id,
         item_name: it.itemName,
         po_number: it.poNumber,

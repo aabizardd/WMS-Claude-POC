@@ -73,7 +73,29 @@
       "Bash(node -e \"console.log\\(require\\('@prisma/client/package.json'\\).version\\)\")",
       "PowerShell(Get-Process node -ErrorAction SilentlyContinue)",
       "Read(//c/Users/mabiz/.claude/projects/C--WMS/memory/**)",
-      "Bash(printf '%s\\\\n' '- [WMS security+perf hardening]\\(wms-security-perf-hardening.md\\) — JWT_SECRET now required, throttler login rate-limit, helmet, per-request isActive revalidation, DB indexes + pg_trgm search migration, list caps, complaint list excludes base64')"
+      "Bash(printf '%s\\\\n' '- [WMS security+perf hardening]\\(wms-security-perf-hardening.md\\) — JWT_SECRET now required, throttler login rate-limit, helmet, per-request isActive revalidation, DB indexes + pg_trgm search migration, list caps, complaint list excludes base64')",
+      "Bash(grep -nA3 \"findAll\" shelves/shelves.controller.ts)",
+      "Bash(grep -nA8 \"interface Paginated\\\\|type Paginated\" types/index.ts)",
+      "Bash(grep -rn \"['\\\\\"\\\\`]/shelves\" .)",
+      "Bash(grep -nA12 \"private serialize\" roles/roles.service.ts)",
+      "Bash(node -e \"const s=require\\('./package.json'\\).scripts; console.log\\(JSON.stringify\\(s,null,1\\)\\)\")",
+      "Bash(kill 1521)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3001/api/auth/login)",
+      "Bash(grep -nE \"^enum |^  [A-Za-z]+$\" backend/prisma/schema.prisma)",
+      "Bash(node -e \"const d=require\\('./package.json'\\).dependencies; console.log\\(Object.keys\\(d\\).filter\\(k=>/chart|recharts|d3|victory|nivo|visx|apex/i.test\\(k\\)\\).join\\(', '\\)||'NONE'\\)\")",
+      "Bash(node -e \"const d=require\\('./package.json'\\).dependencies; console.log\\(Object.keys\\(d\\).join\\(', '\\)\\)\")",
+      "Bash(awk '/^model Warehouse \\\\{/,/^}/' prisma/schema.prisma)",
+      "PowerShell($c = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { $c | Select-Object -First 1 | ForEach-Object { $p = Get-Process -Id $_.OwningProcess; [PSCustomObject]@{ PID=$p.Id; Name=$p.ProcessName; Started=$p.StartTime } } | Format-List } else { Write-Output \"nothing listening on 3000\" })",
+      "Bash(ERP_SYNC_SCHEDULER_ENABLED=false npx ts-node src/scripts/test-po-endpoint.ts)",
+      "Bash(printf '%s\\\\n' '- [WMS Inbound Local Vendor]\\(wms-inbound-local-vendor.md\\) — PO-sourced inbound \\(clone of Inbound from PIB, PO instead of MRN\\); Phase 1 \\(PO sync+tab\\) done, Phase 2 \\(Create GR from PO\\) pending')",
+      "Bash(echo \"started backend pid $!\")",
+      "Bash(ERP_SYNC_SCHEDULER_ENABLED=false npm run sync:purchase-orders)",
+      "Bash(sed -E 's/\\\\x1b\\\\[[0-9;]*m//g')",
+      "Bash(curl -s -o /dev/null -w \"GET /purchase-orders/statuses -> %{http_code}\\\\n\" --max-time 5 http://localhost:3000/api/purchase-orders/statuses)",
+      "Bash(node -e 'const{PrismaClient}=require\\('\\\\''@prisma/client'\\\\''\\);const p=new PrismaClient\\(\\);p.$queryRawUnsafe\\('\\\\''SELECT source_type, count\\(*\\)::int, count\\(source_doc_id\\)::int as with_docid, count\\(source_doc_number\\)::int as with_num FROM goods_receives GROUP BY source_type'\\\\''\\).then\\(r=>{console.log\\('\\\\''GR rows after migration:'\\\\'',r\\);return p.$disconnect\\(\\)}\\).catch\\(e=>{console.error\\(e.message\\);process.exit\\(1\\)}\\)')",
+      "PowerShell($c = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if \\($c\\) { Stop-Process -Id $c.OwningProcess -Force; Start-Sleep -Seconds 2; \"stopped pid \" + $c.OwningProcess } else { \"nothing on 3000\" })",
+      "Bash(ERP_SYNC_SCHEDULER_ENABLED=false npx ts-node src/scripts/test-gr.ts)",
+      "Bash(grep -nA5 \"create\\\\|update\" users/users.controller.ts)"
     ]
   }
 }

@@ -44,9 +44,12 @@ export default function UserFormPage() {
   const navigate = useNavigate();
   const isNew = !id;
 
-  const { has } = useAuth();
+  const { has, user } = useAuth();
   const canManage = isNew ? has('users:create') : has('users:update');
   const viewOnly = !canManage;
+  // Non-admins can't grant the admin (super-admin) role, and the warehouse is
+  // fixed to their own (from /me) — not selectable.
+  const isAdmin = user?.role === 'admin';
 
   const [roles, setRoles] = useState<Role[]>([]);
   const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
@@ -95,7 +98,16 @@ export default function UserFormPage() {
           // Populate the subsidiary dropdown for the user's existing department.
           if (u.departmentId) loadSubsidiaries(u.departmentId);
         } else {
-          setForm((f) => ({ ...f, roleId: roleList[0]?.id ?? '' }));
+          // New user: default to the first assignable role (admins excluded for
+          // non-admin creators) and lock the warehouse to the creator's own.
+          const assignable = roleList.filter(
+            (r) => isAdmin || r.name !== 'admin',
+          );
+          setForm((f) => ({
+            ...f,
+            roleId: assignable[0]?.id ?? '',
+            warehouseId: isAdmin ? f.warehouseId : (user?.warehouseId ?? ''),
+          }));
         }
       })
       .catch(() => active && setLoadError('Failed to load.'))
@@ -294,18 +306,27 @@ export default function UserFormPage() {
                 onChange={(v) => set({ roleId: Number(v) })}
                 disabled={viewOnly}
                 placeholder="Select role"
-                options={roles.map((r) => ({ value: String(r.id), label: r.name }))}
+                options={roles
+                  .filter((r) => isAdmin || r.name !== 'admin')
+                  .map((r) => ({ value: String(r.id), label: r.name }))}
               />
             </Field>
             <Field label="Warehouse" required error={fieldErrors.warehouseId}>
               <SearchableSelect
                 value={form.warehouseId}
                 onChange={(v) => set({ warehouseId: v })}
-                disabled={viewOnly}
+                // Only admins can choose the warehouse; others are fixed to
+                // their own (from /me).
+                disabled={viewOnly || !isAdmin}
                 placeholder="Select warehouse"
                 searchPlaceholder="Search warehouse…"
                 options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
               />
+              {!isAdmin && (
+                <p className="mt-1 text-xs text-slate-400">
+                  Fixed to your warehouse.
+                </p>
+              )}
             </Field>
             <Field label="Department">
               <SearchableSelect

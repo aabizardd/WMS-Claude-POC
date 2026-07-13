@@ -8,6 +8,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdjustBinsDto } from './dto/adjust-bins.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { loadPibMrn } from '../goods-receive/gr-source.util';
 
 type InvOrder = Prisma.InventoryManagementOrderByWithRelationInput;
 // Only real columns are server-sortable; the quantity columns are aggregates
@@ -269,12 +270,14 @@ export class InventoryService {
   async generateFromGoodsReceive(goodsReceiveId: string) {
     const gr = await this.prisma.goodsReceive.findUnique({
       where: { id: goodsReceiveId },
-      include: { mrn: { include: { items: true } } },
     });
     if (!gr) return;
 
+    const mrn = await loadPibMrn(this.prisma, gr);
+    if (!mrn) return;
+
     let created = 0;
-    for (const item of gr.mrn.items) {
+    for (const item of mrn.items) {
       if (!(item.qtyActual > 0)) continue;
 
       // Idempotent: skip items already taken into inventory.
@@ -287,7 +290,7 @@ export class InventoryService {
               where: { erpDocId: String(item.itemId) },
             })
           : null;
-      const materialCode =
+      const materialCode: string =
         material?.materialCode ?? item.itemName ?? `ITEM-${item.itemId}`;
 
       // Find-or-create the inventory row for (materialCode, warehouse).

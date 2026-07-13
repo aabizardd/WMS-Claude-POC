@@ -7,10 +7,12 @@ import {
   ParseIntPipe,
   Post,
   Put,
+  Query,
 } from '@nestjs/common';
 import { RolesService } from './roles.service';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
+import { QueryRoleDto } from './dto/query-role.dto';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @Controller('roles')
@@ -19,8 +21,8 @@ export class RolesController {
 
   @Get()
   @RequirePermissions('roles:read')
-  findAll() {
-    return this.rolesService.findAll();
+  findAll(@Query() query: QueryRoleDto) {
+    return this.rolesService.findAll(query);
   }
 
   // Lookup for dropdowns — any authenticated user (declared before ':id').

@@ -1,14 +1,28 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { LIST_HARD_CAP } from '../common/list-cap';
+import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { QueryUserDto } from './dto/query-user.dto';
+
+type UserOrder = Prisma.UserOrderByWithRelationInput;
+const SORTABLE: Record<string, (d: SortDir) => UserOrder> = {
+  name: (d) => ({ name: d }),
+  username: (d) => ({ username: d }),
+  email: (d) => ({ email: d }),
+  is_active: (d) => ({ isActive: d }),
+  role: (d) => ({ role: { name: d } }),
+  warehouse: (d) => ({ warehouse: { name: d } }),
+  created_at: (d) => ({ createdAt: d }),
+};
+const DEFAULT_ORDER: UserOrder = { id: 'asc' };
 
 // Never return the password hash to clients
 const userSelect = {
@@ -51,7 +65,16 @@ function buildName(
 export class UsersService {
   constructor(private prisma: PrismaService) {}
 
-  findAll(scope: WarehouseScope) {
+  async findAll(scope: WarehouseScope, query: QueryUserDto = {}) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const orderBy = buildOrderBy(
+      query.sort_by,
+      query.sort_order,
+      SORTABLE,
+      DEFAULT_ORDER,
+    );
+
     const where: Prisma.UserWhereInput = {};
     // Non-admins only see users in their warehouse (unchanged). Admins follow
     // the active warehouse from the header selector; "All" (no selection) → all.
@@ -60,12 +83,36 @@ export class UsersService {
     } else if (scope.warehouseId) {
       where.warehouseId = scope.warehouseId;
     }
-    return this.prisma.user.findMany({
-      where,
-      select: userSelect,
-      orderBy: { id: 'asc' },
-      take: LIST_HARD_CAP,
-    });
+    if (query.search) {
+      where.OR = [
+        { name: { contains: query.search, mode: 'insensitive' } },
+        { username: { contains: query.search, mode: 'insensitive' } },
+        { email: { contains: query.search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.user.count({ where }),
+      this.prisma.user.findMany({
+        where,
+        select: userSelect,
+        orderBy,
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+    return {
+      total_page: Math.ceil(total / limit) || 0,
+      total_data: total,
+      attributes: {
+        page,
+        limit,
+        sort_by: query.sort_by ?? null,
+        sort_order: query.sort_order ?? null,
+      },
+      rows,
+    };
   }
 
   findPickers(warehouseId?: string) {
@@ -92,7 +139,13 @@ export class UsersService {
     return user;
   }
 
-  async create(dto: CreateUserDto) {
+  async create(dto: CreateUserDto, actor?: WarehouseScope) {
+    // Non-admins cannot assign the admin (super-admin) role, and the new user
+    // is always scoped to the creator's own warehouse (from their token / /me).
+    if (actor && actor.role !== 'admin') {
+      await this.ensureNotAdminRole(dto.roleId);
+      if (actor.warehouseId) dto = { ...dto, warehouseId: actor.warehouseId };
+    }
     await this.ensureRoleExists(dto.roleId);
     await this.ensureWarehouseExists(dto.warehouseId);
     const org = await this.resolveOrg(dto.departmentId, dto.subsidiaryId);
@@ -178,6 +231,12 @@ export class UsersService {
     ) {
       throw new NotFoundException(`User ${id} not found`);
     }
+    // Non-admins cannot assign the admin role, nor move a user out of their own
+    // warehouse (the warehouse stays scoped to the editor's warehouse).
+    if (scope && scope.role !== 'admin') {
+      if (dto.roleId !== undefined) await this.ensureNotAdminRole(dto.roleId);
+      if (scope.warehouseId) dto = { ...dto, warehouseId: scope.warehouseId };
+    }
     if (dto.roleId !== undefined) {
       await this.ensureRoleExists(dto.roleId);
     }
@@ -253,6 +312,17 @@ export class UsersService {
     const role = await this.prisma.role.findUnique({ where: { id: roleId } });
     if (!role) {
       throw new BadRequestException(`Role ${roleId} does not exist`);
+    }
+  }
+
+  // Guard: only an admin may assign the admin (super-admin) role.
+  private async ensureNotAdminRole(roleId: number) {
+    const role = await this.prisma.role.findUnique({
+      where: { id: roleId },
+      select: { name: true },
+    });
+    if (role?.name === 'admin') {
+      throw new ForbiddenException('You cannot assign the admin role');
     }
   }
 

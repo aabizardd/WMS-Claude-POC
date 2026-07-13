@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { loadPibMrn } from '../goods-receive/gr-source.util';
 
 export interface WarehouseScope {
   role: string;
@@ -150,11 +151,13 @@ export class DiscrepancyService {
   async recordFromGoodsReceive(goodsReceiveId: string, reportedById?: number) {
     const gr = await this.prisma.goodsReceive.findUnique({
       where: { id: goodsReceiveId },
-      include: { mrn: { include: { items: true } } },
     });
     if (!gr) return;
 
-    const shortItems = gr.mrn.items.filter(
+    const mrn = await loadPibMrn(this.prisma, gr);
+    if (!mrn) return;
+
+    const shortItems = mrn.items.filter(
       (it) => it.qtyActual < it.qtyExpected,
     );
     if (shortItems.length === 0) return;

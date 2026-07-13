@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { DiscrepancyService } from '../discrepancy/discrepancy.service';
+import { loadPibMrn } from './gr-source.util';
 
 interface WarehouseScope {
   role: string;
@@ -87,10 +88,7 @@ export class GoodsReceiveReceiveService {
     id: string,
     scope: WarehouseScope,
   ): Promise<{ accepted: boolean }> {
-    const gr = await this.prisma.goodsReceive.findUnique({
-      where: { id },
-      include: { mrn: { include: { items: true } } },
-    });
+    const gr = await this.prisma.goodsReceive.findUnique({ where: { id } });
     if (
       !gr ||
       (scope.role !== 'admin' && gr.warehouseId !== scope.warehouseId)
@@ -106,11 +104,15 @@ export class GoodsReceiveReceiveService {
         `Cannot receive: GR status is "${gr.status}" (expected Open or Syncing)`,
       );
     }
-    if (!gr.mrn.oracleId) {
+    const mrn = await loadPibMrn(this.prisma, gr);
+    if (!mrn) {
+      throw new Error('Only a PIB Goods Receive can trigger an Oracle receive');
+    }
+    if (!mrn.oracleId) {
       throw new Error('MRN has no Oracle ID — cannot trigger receive');
     }
-    if (Number.isNaN(Number(gr.mrn.oracleId))) {
-      throw new Error(`MRN oracle_id "${gr.mrn.oracleId}" is not a valid number`);
+    if (Number.isNaN(Number(mrn.oracleId))) {
+      throw new Error(`MRN oracle_id "${mrn.oracleId}" is not a valid number`);
     }
 
     await this.prisma.goodsReceive.update({
@@ -123,13 +125,11 @@ export class GoodsReceiveReceiveService {
 
   async processInBackground(id: string): Promise<void> {
     try {
-      const gr = await this.prisma.goodsReceive.findUnique({
-        where: { id },
-        include: { mrn: { include: { items: true } } },
-      });
+      const gr = await this.prisma.goodsReceive.findUnique({ where: { id } });
       if (!gr) return;
 
-      const mrn = gr.mrn;
+      const mrn = await loadPibMrn(this.prisma, gr);
+      if (!mrn) return;
       const idInboundShipment = Number(mrn.oracleId);
 
       const items: ReceiveItem[] = [];

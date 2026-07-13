@@ -43,6 +43,8 @@ const RESOURCES: { resource: string; label: string; actions: string[] }[] = [
   { resource: 'bins', label: 'Bins', actions: ['read', 'create', 'update', 'delete'] },
   // Inbound — MRN mirrors Oracle PIB (read/sync); Goods Receive is editable.
   { resource: 'mrn', label: 'MRN', actions: ['read', 'sync'] },
+  // Inbound (Local Vendor) — Purchase Orders mirror Oracle (read/sync).
+  { resource: 'purchase-orders', label: 'Purchase Orders', actions: ['read', 'sync'] },
   { resource: 'goods-receive', label: 'Goods Receive', actions: ['read', 'update'] },
   // Inventory is generated automatically on receive; manual bin adjustment adds update.
   { resource: 'inventory', label: 'Inventory', actions: ['read', 'update'] },
@@ -94,6 +96,7 @@ export const STAFF_PERMISSION_KEYS = [
   'classes:read',
   'subsidiaries:read',
   'mrn:read',
+  'purchase-orders:read',
   'goods-receive:read',
   'inventory:read',
   'inventory-adjustments:read',

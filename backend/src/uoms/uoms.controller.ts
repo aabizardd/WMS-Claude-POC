@@ -6,10 +6,12 @@ import {
   Param,
   Post,
   Put,
+  Query,
 } from '@nestjs/common';
 import { UomsService } from './uoms.service';
 import { CreateUomDto } from './dto/create-uom.dto';
 import { UpdateUomDto } from './dto/update-uom.dto';
+import { PaginatedQueryDto } from '../common/dto/paginated-query.dto';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @Controller('uoms')
@@ -18,8 +20,8 @@ export class UomsController {
 
   @Get()
   @RequirePermissions('uoms:read')
-  findAll() {
-    return this.uomsService.findAll();
+  findAll(@Query() query: PaginatedQueryDto) {
+    return this.uomsService.findAll(query);
   }
 
   // Lookup for dropdowns — any authenticated user (declared before ':id').

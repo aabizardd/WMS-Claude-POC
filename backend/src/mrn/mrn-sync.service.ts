@@ -228,15 +228,18 @@ export class MrnSyncService {
       });
     }
 
-    // Auto-create the Goods Receive doc (status Open) once per MRN.
-    const existingGr = await this.prisma.goodsReceive.findUnique({
-      where: { mrnId: mrn.id },
+    // Auto-create the Goods Receive doc (status Open) once per MRN. The GR is
+    // source-generic; for PIB the source document is this MRN.
+    const existingGr = await this.prisma.goodsReceive.findFirst({
+      where: { sourceType: 'PIB', sourceDocId: mrn.id },
       select: { id: true },
     });
     if (!existingGr) {
       await this.prisma.goodsReceive.create({
         data: {
-          mrnId: mrn.id,
+          sourceType: 'PIB',
+          sourceDocId: mrn.id,
+          sourceDocNumber: pib.shipment_number ?? oracleId,
           grNumber: `GR-${pib.shipment_number ?? oracleId}`,
           status: 'Open',
           warehouseId,

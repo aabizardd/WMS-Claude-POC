@@ -6,10 +6,12 @@ import {
   Param,
   Post,
   Put,
+  Query,
 } from '@nestjs/common';
 import { MaterialCategoriesService } from './material-categories.service';
 import { CreateMaterialCategoryDto } from './dto/create-material-category.dto';
 import { UpdateMaterialCategoryDto } from './dto/update-material-category.dto';
+import { PaginatedQueryDto } from '../common/dto/paginated-query.dto';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 
 @Controller('material-categories')
@@ -18,8 +20,8 @@ export class MaterialCategoriesController {
 
   @Get()
   @RequirePermissions('material-categories:read')
-  findAll() {
-    return this.service.findAll();
+  findAll(@Query() query: PaginatedQueryDto) {
+    return this.service.findAll(query);
   }
 
   // Lookup for dropdowns — any authenticated user (declared before ':id').

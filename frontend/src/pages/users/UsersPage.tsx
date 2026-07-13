@@ -1,13 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 import api from '../../lib/api';
-import type { User } from '../../types';
+import type { User, Paginated } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
-import { useSort, sortRows } from '../../hooks/useSort';
+import { useSort } from '../../hooks/useSort';
 import SortableTh from '../../components/SortableTh';
+
+const LIMIT = 10;
 
 export default function UsersPage() {
   const { has } = useAuth();
@@ -17,32 +19,33 @@ export default function UsersPage() {
   const canUpdate = has('users:update');
   const canDelete = has('users:delete');
 
-  const [users, setUsers] = useState<User[]>([]);
+  const [data, setData] = useState<Paginated<User> | null>(null);
   const [loading, setLoading] = useState(true);
-  const { sort, toggle } = useSort();
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const { sort, toggle, params } = useSort();
+  const onSort = (col: string) => {
+    setPage(1);
+    toggle(col);
+  };
 
-  // Client-side sorting (this list is not paginated).
-  const rows = sortRows(users, sort, (u, col) => {
-    switch (col) {
-      case 'name': return u.name;
-      case 'username': return u.username;
-      case 'email': return u.email;
-      case 'role': return u.role.name;
-      case 'warehouse': return u.warehouse?.name ?? null;
-      case 'status': return u.isActive ? 1 : 0;
-      default: return null;
-    }
-  });
+  const rows = data?.rows ?? [];
 
   async function load() {
     setLoading(true);
-    const r = await api.get<User[]>('/users');
-    setUsers(r.data);
+    const r = await api.get<Paginated<User>>('/users', {
+      params: { page, limit: LIMIT, search: search || undefined, ...params() },
+    });
+    setData(r.data);
     setLoading(false);
   }
   useEffect(() => {
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, search, sort.sortBy, sort.order]);
+
+  const totalPage = data?.total_page ?? 0;
 
   async function handleDelete(u: User) {
     const ok = await confirm({
@@ -69,7 +72,8 @@ export default function UsersPage() {
         <div>
           <h1 className="text-2xl font-semibold text-slate-800">Users</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Manage application users, their role, and warehouse.
+            {data ? `${data.total_data} users` : 'Manage application users'} ·
+            role and warehouse.
           </p>
         </div>
         {canCreate && (
@@ -79,17 +83,49 @@ export default function UsersPage() {
         )}
       </div>
 
+      <form
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          setPage(1);
+          setSearch(searchInput.trim());
+        }}
+        className="flex gap-2"
+      >
+        <input
+          className="input max-w-xs"
+          placeholder="Search name / username / email…"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+        />
+        <button type="submit" className="btn-secondary">
+          Search
+        </button>
+        {search && (
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              setSearchInput('');
+              setSearch('');
+              setPage(1);
+            }}
+          >
+            Clear
+          </button>
+        )}
+      </form>
+
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <SortableTh label="Name" col="name" sort={sort} onSort={toggle} />
-                <SortableTh label="Username" col="username" sort={sort} onSort={toggle} />
-                <SortableTh label="Email" col="email" sort={sort} onSort={toggle} />
-                <SortableTh label="Role" col="role" sort={sort} onSort={toggle} />
-                <SortableTh label="Warehouse" col="warehouse" sort={sort} onSort={toggle} />
-                <SortableTh label="Status" col="status" sort={sort} onSort={toggle} />
+                <SortableTh label="Name" col="name" sort={sort} onSort={onSort} />
+                <SortableTh label="Username" col="username" sort={sort} onSort={onSort} />
+                <SortableTh label="Email" col="email" sort={sort} onSort={onSort} />
+                <SortableTh label="Role" col="role" sort={sort} onSort={onSort} />
+                <SortableTh label="Warehouse" col="warehouse" sort={sort} onSort={onSort} />
+                <SortableTh label="Status" col="is_active" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
             </thead>
@@ -100,10 +136,10 @@ export default function UsersPage() {
                     Loading…
                   </td>
                 </tr>
-              ) : users.length === 0 ? (
+              ) : rows.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-6 py-10 text-center text-slate-400">
-                    No users yet.
+                    No users found.
                   </td>
                 </tr>
               ) : (
@@ -161,6 +197,30 @@ export default function UsersPage() {
             </tbody>
           </table>
         </div>
+
+        {totalPage > 1 && (
+          <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3 text-sm">
+            <span className="text-slate-500">
+              Page {page} of {totalPage}
+            </span>
+            <div className="flex gap-2">
+              <button
+                className="btn-secondary"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                Prev
+              </button>
+              <button
+                className="btn-secondary"
+                disabled={page >= totalPage}
+                onClick={() => setPage((p) => Math.min(totalPage, p + 1))}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -6,6 +6,11 @@ import FormField, { requiredErrors } from './form/FormField';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { useConfirm } from '../context/ConfirmContext';
+import { useSort } from '../hooks/useSort';
+import SortableTh from './SortableTh';
+import type { Paginated } from '../types';
+
+const LIMIT = 10;
 
 // Minimal code+name+active master CRUD (Area Types / Aisles / Shelves).
 export interface MasterConfig {
@@ -34,8 +39,16 @@ export default function SimpleMasterPage({ config }: { config: MasterConfig }) {
   const canUpdate = has(`${config.permission}:update`);
   const canDelete = has(`${config.permission}:delete`);
 
-  const [items, setItems] = useState<Item[]>([]);
+  const [data, setData] = useState<Paginated<Item> | null>(null);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const { sort, toggle, params } = useSort();
+  const onSort = (col: string) => {
+    setPage(1);
+    toggle(col);
+  };
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Item | null>(null);
   const [code, setCode] = useState('');
@@ -45,16 +58,21 @@ export default function SimpleMasterPage({ config }: { config: MasterConfig }) {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
+  const items = data?.rows ?? [];
+  const totalPage = data?.total_page ?? 0;
+
   async function load() {
     setLoading(true);
-    const r = await api.get<Item[]>(config.endpoint);
-    setItems(r.data);
+    const r = await api.get<Paginated<Item>>(config.endpoint, {
+      params: { page, limit: LIMIT, search: search || undefined, ...params() },
+    });
+    setData(r.data);
     setLoading(false);
   }
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.endpoint]);
+  }, [config.endpoint, page, search, sort.sortBy, sort.order]);
 
   function openCreate() {
     setEditing(null);
@@ -141,15 +159,47 @@ export default function SimpleMasterPage({ config }: { config: MasterConfig }) {
         )}
       </div>
 
+      <form
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          setPage(1);
+          setSearch(searchInput.trim());
+        }}
+        className="flex gap-2"
+      >
+        <input
+          className="input max-w-xs"
+          placeholder={`Search ${config.codeLabel.toLowerCase()} / ${config.nameLabel.toLowerCase()}…`}
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+        />
+        <button type="submit" className="btn-secondary">
+          Search
+        </button>
+        {search && (
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              setSearchInput('');
+              setSearch('');
+              setPage(1);
+            }}
+          >
+            Clear
+          </button>
+        )}
+      </form>
+
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-6 py-3">{config.codeLabel}</th>
-                <th className="px-6 py-3">{config.nameLabel}</th>
-                <th className="px-6 py-3">Bins</th>
-                <th className="px-6 py-3">Status</th>
+                <SortableTh label={config.codeLabel} col="code" sort={sort} onSort={onSort} />
+                <SortableTh label={config.nameLabel} col="name" sort={sort} onSort={onSort} />
+                <SortableTh label="Bins" col="bins" sort={sort} onSort={onSort} />
+                <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
             </thead>
@@ -163,7 +213,7 @@ export default function SimpleMasterPage({ config }: { config: MasterConfig }) {
               ) : items.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-6 py-10 text-center text-slate-400">
-                    No data yet.
+                    No data found.
                   </td>
                 </tr>
               ) : (
@@ -218,6 +268,30 @@ export default function SimpleMasterPage({ config }: { config: MasterConfig }) {
             </tbody>
           </table>
         </div>
+
+        {totalPage > 1 && (
+          <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3 text-sm">
+            <span className="text-slate-500">
+              Page {page} of {totalPage}
+            </span>
+            <div className="flex gap-2">
+              <button
+                className="btn-secondary"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                Prev
+              </button>
+              <button
+                className="btn-secondary"
+                disabled={page >= totalPage}
+                onClick={() => setPage((p) => Math.min(totalPage, p + 1))}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <Modal
