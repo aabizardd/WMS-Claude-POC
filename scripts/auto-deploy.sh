@@ -4,9 +4,9 @@ set -e
 REPO_DIR=/home/fadlan/homelab/wms
 LOG_FILE=/home/fadlan/homelab/backups/wms/deploy.log
 LOCK_FILE=/tmp/wms-deploy.lock
-BOT_TOKEN="8977385492:AAE0ZCrR3D_8RcqEh0hxBPA33ssHjqVjU2U"
-CHAT_ID="6561778934"
 export PATH="$HOME/.local/bin:$PATH"
+
+[ -f "$REPO_DIR/.env.telegram" ] && source "$REPO_DIR/.env.telegram"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S'): $*" >> "$LOG_FILE"; }
 

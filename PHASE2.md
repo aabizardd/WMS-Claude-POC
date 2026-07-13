@@ -128,7 +128,7 @@ Perubahan:
 | Lock file | `/tmp/wms-deploy.lock` (cegah overlap) |
 | Cron backup | `0 2 * * * /home/fadlan/homelab/wms/scripts/backup-db.sh >> /home/fadlan/homelab/backups/wms/backup.log 2>&1` |
 | Cron auto-deploy | `*/5 * * * * /home/fadlan/homelab/wms/scripts/auto-deploy.sh` |
-| Telegram bot | Token `8977...` → chat `6561778934` |
+| Telegram bot | Credentials di `.env.telegram` (tidak di-commit) |
 
 ---
 
@@ -159,7 +159,7 @@ Cron */5 * * * *
 
 - **Lock file:** `/tmp/wms-deploy.lock` (cegah overlap jika build >5 menit)
 - **Log:** `/home/fadlan/homelab/backups/wms/deploy.log`
-- **Notifikasi:** Telegram via bot `8977385492:AAE0ZCrR3D_8RcqEh0hxBPA33ssHjqVjU2U` ke chat `6561778934`
+- **Notifikasi:** Telegram via bot — credentials di `.env.telegram` (tidak di-commit)
 
 ### Cron
 
@@ -288,4 +288,4 @@ Verifikasi end-to-end berhasil:
 | R2 file lebih besar dari lokal | Encryption overhead (slight) | Normal — R2 server-side encryption |
 | Auto-deploy skip terus | Cron mati / lock file stuck | `crontab -l` cek cron, `rm /tmp/wms-deploy.lock` hapus lock |
 | Auto-deploy rollback terus | Code ada breaking change | Cek `deploy.log`, fix code, push ulang, trigger manual `auto-deploy.sh` |
-| Telegeram notif tidak masuk | Bot token / chat ID salah | Cek variabel di `scripts/auto-deploy.sh` |
+| Telegram notif tidak masuk | Bot token / chat ID salah | Cek `.env.telegram` — pastikan `BOT_TOKEN` dan `CHAT_ID` benar |
