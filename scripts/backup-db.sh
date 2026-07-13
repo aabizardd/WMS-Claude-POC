@@ -5,6 +5,8 @@ BACKUP_DIR=/home/fadlan/homelab/backups/wms
 COMPOSE_FILE=/home/fadlan/homelab/wms/docker-compose.yml
 SECRET_FILE=/home/fadlan/homelab/wms/.env.secret
 RETENTION_DAYS=30
+R2_REMOTE="r2:wms-backups-zeyadev"
+RCLONE_LOG="$BACKUP_DIR/rclone.log"
 
 mkdir -p "$BACKUP_DIR"
 
@@ -21,3 +23,10 @@ docker compose exec -T db pg_dump -U wms wms | gzip > "$BACKUP_FILE"
 find "$BACKUP_DIR" -name "wms-*.sql.gz" -mtime +$RETENTION_DAYS -delete
 
 echo "Backup saved: $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
+
+# Upload to Cloudflare R2 (graceful: skip if rclone unavailable)
+if command -v rclone &>/dev/null && [ -f "$HOME/.config/rclone/rclone.conf" ]; then
+  rclone copy "$BACKUP_FILE" "$R2_REMOTE/daily/" --log-file "$RCLONE_LOG" --log-level INFO
+  rclone delete "$R2_REMOTE/daily/" --min-age 60d &>/dev/null || true
+  echo "R2 uploaded: $R2_REMOTE/daily/ ($(rclone ls "$R2_REMOTE/daily/" --log-file /dev/null | wc -l) files)"
+fi

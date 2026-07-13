@@ -65,7 +65,10 @@ ss -tlnp | grep 3080  # harus tidak ada output
 │   ├── Dockerfile
 │   └── nginx.conf
 ├── docker-compose.yml
-└── DEPLOYMENT.md                    ← dokumentasi ini
+├── scripts/
+│   └── backup-db.sh                 ← backup harian (lokal + R2)
+├── DEPLOYMENT.md                    ← dokumentasi deployment
+└── PHASE2.md                        ← dokumentasi R2 backup
 ```
 
 ---
@@ -367,13 +370,24 @@ cd /home/fadlan/homelab/wms
 docker compose restart
 ```
 
-### Rebuild + Deploy (setelah update code)
+### Auto-Deploy (CI/CD via Cron + Telegram)
+
+Setiap 5 menit cron mengecek branch `dev-fadlan`. Jika ada commit baru:
+1. Safety backup DB
+2. `git pull` → `docker compose build` → `up -d`
+3. Health check (`/api/health`)
+4. Notifikasi Telegram ✅
+5. Jika gagal → rollback otomatis ke commit sebelumnya + notifikasi ❌
 
 ```bash
-cd /home/fadlan/homelab/wms
-git pull
-docker compose build --no-cache
-docker compose up -d
+# Cek log auto-deploy
+tail -f /home/fadlan/homelab/backups/wms/deploy.log
+
+# Trigger manual
+bash /home/fadlan/homelab/wms/scripts/auto-deploy.sh
+
+# Cek cron
+crontab -l | grep auto-deploy
 ```
 
 ### Logs
@@ -386,9 +400,20 @@ docker compose logs -f frontend    # frontend saja
 
 ### Backup Database
 
+Backup otomatis via cron (02:00 UTC) — dump lokal + off-site ke Cloudflare R2:
+
 ```bash
-docker compose exec -T db pg_dump -U wms wms > ~/backups/wms-$(date +%Y%m%d-%H%M%S).sql
+# Manual trigger backup
+bash /home/fadlan/homelab/wms/scripts/backup-db.sh
+
+# Cek backup lokal
+ls -lh /home/fadlan/homelab/backups/wms/
+
+# Cek backup di R2
+rclone ls r2:wms-backups-zeyadev/daily/
 ```
+
+Lihat `PHASE2.md` untuk dokumentasi lengkap R2 off-site backup.
 
 ### Reseed (idempotent)
 
@@ -421,20 +446,49 @@ docker compose exec backend npm run prisma:seed
 | Port `3080` bentrok | Service lain pakai port itu | `ss -tlnp \| grep 3080` — ganti port di compose |
 | API `404` | nginx proxy_pass salah | Cek `frontend/nginx.conf` — pastikan `proxy_pass http://backend:3000;` |
 | CORS error di browser | FRONTEND_ORIGIN salah / split-origin | Set `FRONTEND_ORIGIN=""` untuk same-origin |
+| Auto-deploy skip terus | Cron mati / lock file stuck | `crontab -l` cek cron, `rm /tmp/wms-deploy.lock` hapus lock |
+| Auto-deploy rollback terus | Code ada breaking change | Cek `deploy.log`, fix code, push ulang, trigger manual `auto-deploy.sh` |
+| Telegeram notif tidak masuk | Bot token / chat ID salah | Cek variabel di `scripts/auto-deploy.sh` |
 
 ---
 
 ## 13. Rollback
 
+### Rollback Otomatis (deploy gagal)
+
+Jika `auto-deploy.sh` gagal (build error / health check tidak 200), script akan otomatis
+`git reset --hard` ke commit sebelumnya → rebuild → redeploy → kirim notifikasi Telegram.
+
+### Rollback Manual (data corrupt / migration error)
+
 ```bash
 cd /home/fadlan/homelab/wms
 
-# Hentikan dan hapus containers
+# 1. Restore backup dulu (jika DB schema berubah)
+LATEST=$(ls -t /home/fadlan/homelab/backups/wms/wms-*.sql.gz | head -1)
+gunzip -c "$LATEST" | docker exec -i wms-db-1 psql -U wms wms
+
+# 2. Rollback code ke commit sebelumnya
+git log --oneline -5
+git reset --hard <COMMIT_BEFORE_DEPLOY>
+
+# 3. Rebuild + redeploy (tanpa --pull agar versi dependency tetap)
+docker compose build
+docker compose up -d
+```
+
+### Rollback Ekstrim (hapus semua)
+
+```bash
+cd /home/fadlan/homelab/wms
 docker compose down
+docker volume rm wms_pgdata          # HAPUS SEMUA DATA!
+# lalu deploy ulang dari awal (lihat section 7)
+```
 
-# Hapus volume database (data hilang!)
-docker volume rm wms_pgdata
+### Rollback Hapus Service
 
+```bash
 # Hapus dari Cloudflare Tunnel
 # Edit /etc/cloudflared/config.yml → hapus baris wms-dev.zeyadev.web.id
 sudo systemctl restart cloudflared
