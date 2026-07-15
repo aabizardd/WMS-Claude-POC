@@ -95,7 +95,12 @@
       "Bash(node -e 'const{PrismaClient}=require\\('\\\\''@prisma/client'\\\\''\\);const p=new PrismaClient\\(\\);p.$queryRawUnsafe\\('\\\\''SELECT source_type, count\\(*\\)::int, count\\(source_doc_id\\)::int as with_docid, count\\(source_doc_number\\)::int as with_num FROM goods_receives GROUP BY source_type'\\\\''\\).then\\(r=>{console.log\\('\\\\''GR rows after migration:'\\\\'',r\\);return p.$disconnect\\(\\)}\\).catch\\(e=>{console.error\\(e.message\\);process.exit\\(1\\)}\\)')",
       "PowerShell($c = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if \\($c\\) { Stop-Process -Id $c.OwningProcess -Force; Start-Sleep -Seconds 2; \"stopped pid \" + $c.OwningProcess } else { \"nothing on 3000\" })",
       "Bash(ERP_SYNC_SCHEDULER_ENABLED=false npx ts-node src/scripts/test-gr.ts)",
-      "Bash(grep -nA5 \"create\\\\|update\" users/users.controller.ts)"
+      "Bash(grep -nA5 \"create\\\\|update\" users/users.controller.ts)",
+      "Bash(node -e 'const{PrismaClient}=require\\('\\\\''@prisma/client'\\\\''\\);const p=new PrismaClient\\(\\);p.salesOrder.groupBy\\({by:['\\\\''statusName'\\\\''],_count:{_all:true}}\\).then\\(r=>{console.log\\('\\\\''SO statusName values:'\\\\'',r.map\\(x=>x.statusName+'\\\\'' \\('\\\\''+x._count._all+'\\\\''\\)'\\\\''\\)\\);return p.$disconnect\\(\\)}\\)')",
+      "Bash(node -e 'const{PrismaClient}=require\\('\\\\''@prisma/client'\\\\''\\);const p=new PrismaClient\\(\\);p.salesOrder.groupBy\\({by:['\\\\''statusName'\\\\''],_count:{_all:true}}\\).then\\(r=>{r.forEach\\(x=>console.log\\('\\\\''  '\\\\''+JSON.stringify\\(x.statusName\\)+'\\\\'' = '\\\\''+x._count._all\\)\\);return p.$disconnect\\(\\)}\\)')",
+      "Bash(awk '/^model Picking \\\\{/,/^}/' prisma/schema.prisma)",
+      "Bash(grep -nA12 \"interface DiscrepancyRow\" types/index.ts)",
+      "Bash(ERP_SYNC_SCHEDULER_ENABLED=false npx ts-node src/scripts/test-disc-so.ts)"
     ]
   }
 }

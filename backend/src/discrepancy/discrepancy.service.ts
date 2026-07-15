@@ -20,7 +20,9 @@ const DISCREPANCY_SORTABLE: Record<string, (d: SortDir) => DiscrepancyOrder> = {
 
 const listInclude = {
   goodsReceive: { select: { grNumber: true } },
-  picking: { select: { pickingCode: true } },
+  picking: {
+    select: { pickingCode: true, salesOrder: { select: { tranId: true } } },
+  },
   reportedBy: { select: { id: true, name: true } },
   warehouse: { select: { id: true, name: true } },
   _count: { select: { details: true } },
@@ -28,24 +30,40 @@ const listInclude = {
 
 const detailInclude = {
   goodsReceive: { select: { grNumber: true } },
-  picking: { select: { pickingCode: true } },
+  picking: {
+    select: { pickingCode: true, salesOrder: { select: { tranId: true } } },
+  },
   reportedBy: { select: { id: true, name: true } },
   warehouse: { select: { id: true, name: true } },
   details: { orderBy: { createdAt: 'asc' as const } },
 } satisfies Prisma.DiscrepancyInclude;
 
 // Header "Source Number" + "Source" label, derived from the linked document.
+// so_number is the Sales Order number (tranId) for outbound discrepancies — used
+// by the FE to group outbound discrepancies per Sales Order.
 function sourceOf(d: {
   goodsReceive?: { grNumber: string } | null;
-  picking?: { pickingCode: string } | null;
+  picking?: { pickingCode: string; salesOrder?: { tranId: string | null } | null } | null;
 }) {
   if (d.goodsReceive) {
-    return { source_number: d.goodsReceive.grNumber, source: 'Inbound - Goods Receive' };
+    return {
+      source_number: d.goodsReceive.grNumber,
+      source: 'Inbound - Goods Receive',
+      so_number: null as string | null,
+    };
   }
   if (d.picking) {
-    return { source_number: d.picking.pickingCode, source: 'Outbound - Picking' };
+    return {
+      source_number: d.picking.pickingCode,
+      source: 'Outbound - Picking',
+      so_number: d.picking.salesOrder?.tranId ?? null,
+    };
   }
-  return { source_number: null as string | null, source: null as string | null };
+  return {
+    source_number: null as string | null,
+    source: null as string | null,
+    so_number: null as string | null,
+  };
 }
 
 type DiscList = Prisma.DiscrepancyGetPayload<{ include: typeof listInclude }>;

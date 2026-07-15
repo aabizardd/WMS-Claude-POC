@@ -14,6 +14,8 @@ import { useSort } from '../../hooks/useSort';
 import SortableTh from '../../components/SortableTh';
 
 const LIMIT = 10;
+// Sales Orders open on this status by default; the user can still change it.
+const DEFAULT_STATUS = 'Pending Fulfillment';
 
 // Sales Order list + manual ERP sync. Rendered inside the "List Outbound" tab
 // when the Sales Order outbound type is selected.
@@ -26,7 +28,7 @@ export default function SalesOrderList() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState(DEFAULT_STATUS);
   const [statuses, setStatuses] = useState<string[]>([]);
   const { sort, toggle, params } = useSort();
   const onSort = (col: string) => {
@@ -169,6 +171,10 @@ export default function SalesOrderList() {
           searchPlaceholder="Search status…"
           options={[
             { value: '', label: 'All statuses' },
+            // Keep the default selectable even before the status list loads.
+            ...(statuses.includes(DEFAULT_STATUS) ? [] : [DEFAULT_STATUS]).map(
+              (s) => ({ value: s, label: s }),
+            ),
             ...statuses.map((s) => ({ value: s, label: s })),
           ]}
         />

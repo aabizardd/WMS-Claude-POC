@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { Fragment, useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../lib/api';
 import type { DiscrepancyRow, Paginated } from '../../types';
@@ -63,6 +63,66 @@ export default function DiscrepancyPage() {
   }
 
   const totalPage = data?.total_page ?? 0;
+
+  // Group (within the current page): outbound discrepancies that carry a Sales
+  // Order number are grouped per SO; inbound (no SO) render in a separate group.
+  const rows = data?.rows ?? [];
+  const withSo = rows
+    .filter((r) => r.so_number)
+    .sort((a, b) => (a.so_number ?? '').localeCompare(b.so_number ?? ''));
+  const withoutSo = rows.filter((r) => !r.so_number);
+
+  const groupHeader = (label: string) => (
+    <tr className="bg-brand-50/50">
+      <td
+        colSpan={9}
+        className="px-6 py-2 text-xs font-semibold uppercase tracking-wide text-brand-700"
+      >
+        {label}
+      </td>
+    </tr>
+  );
+
+  const discRow = (d: DiscrepancyRow) => (
+    <tr key={d.id} className="hover:bg-slate-50">
+      <td className="px-6 py-3 font-medium text-slate-800">{d.discrepancy_id}</td>
+      <td className="px-6 py-3 text-slate-600">{d.source_number ?? '—'}</td>
+      <td className="px-6 py-3 text-slate-600">{d.source ?? '—'}</td>
+      <td className="px-6 py-3">
+        <span
+          className={`inline-block rounded-full px-2.5 py-1 text-xs font-medium ${typeBadge(
+            d.discrepancy_type,
+          )}`}
+        >
+          {d.discrepancy_type}
+        </span>
+      </td>
+      <td className="px-6 py-3">
+        <span
+          className={`inline-block rounded-full px-2.5 py-1 text-xs font-medium ${fromBadge(
+            d.discrepancy_from,
+          )}`}
+        >
+          {d.discrepancy_from}
+        </span>
+      </td>
+      <td className="px-6 py-3 text-slate-600">{d.reported_by ?? '—'}</td>
+      <td className="px-6 py-3 text-slate-600">{d.detail_count}</td>
+      <td className="px-6 py-3 text-slate-600">
+        {d.created_at ? new Date(d.created_at).toLocaleDateString() : '—'}
+      </td>
+      <td className="px-6 py-3">
+        <div className="flex justify-end">
+          <Link
+            to={`/admin/discrepancy/${d.id}`}
+            className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
+          >
+            View
+          </Link>
+        </div>
+      </td>
+    </tr>
+  );
 
   return (
     <div className="space-y-4">
@@ -149,59 +209,28 @@ export default function DiscrepancyPage() {
                     Loading…
                   </td>
                 </tr>
-              ) : data && data.rows.length > 0 ? (
-                data.rows.map((d) => (
-                  <tr key={d.id} className="hover:bg-slate-50">
-                    <td className="px-6 py-3 font-medium text-slate-800">
-                      {d.discrepancy_id}
-                    </td>
-                    <td className="px-6 py-3 text-slate-600">
-                      {d.source_number ?? '—'}
-                    </td>
-                    <td className="px-6 py-3 text-slate-600">
-                      {d.source ?? '—'}
-                    </td>
-                    <td className="px-6 py-3">
-                      <span
-                        className={`inline-block rounded-full px-2.5 py-1 text-xs font-medium ${typeBadge(
-                          d.discrepancy_type,
-                        )}`}
-                      >
-                        {d.discrepancy_type}
-                      </span>
-                    </td>
-                    <td className="px-6 py-3">
-                      <span
-                        className={`inline-block rounded-full px-2.5 py-1 text-xs font-medium ${fromBadge(
-                          d.discrepancy_from,
-                        )}`}
-                      >
-                        {d.discrepancy_from}
-                      </span>
-                    </td>
-                    <td className="px-6 py-3 text-slate-600">
-                      {d.reported_by ?? '—'}
-                    </td>
-                    <td className="px-6 py-3 text-slate-600">
-                      {d.detail_count}
-                    </td>
-                    <td className="px-6 py-3 text-slate-600">
-                      {d.created_at
-                        ? new Date(d.created_at).toLocaleDateString()
-                        : '—'}
-                    </td>
-                    <td className="px-6 py-3">
-                      <div className="flex justify-end">
-                        <Link
-                          to={`/admin/discrepancy/${d.id}`}
-                          className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
-                        >
-                          View
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+              ) : rows.length > 0 ? (
+                <>
+                  {/* Outbound discrepancies grouped per Sales Order. */}
+                  {withSo.map((d, i) => {
+                    const newGroup =
+                      i === 0 || withSo[i - 1].so_number !== d.so_number;
+                    return (
+                      <Fragment key={d.id}>
+                        {newGroup && groupHeader(`Sales Order: ${d.so_number}`)}
+                        {discRow(d)}
+                      </Fragment>
+                    );
+                  })}
+                  {/* Inbound / no Sales Order. */}
+                  {withoutSo.length > 0 && (
+                    <Fragment key="__no_so__">
+                      {withSo.length > 0 &&
+                        groupHeader('Other (inbound / no Sales Order)')}
+                      {withoutSo.map((d) => discRow(d))}
+                    </Fragment>
+                  )}
+                </>
               ) : (
                 <tr>
                   <td

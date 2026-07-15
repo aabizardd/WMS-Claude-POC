@@ -678,6 +678,8 @@ export interface DiscrepancyRow {
   discrepancy_id: string;
   source_number: string | null;
   source: string | null;
+  // Sales Order number for outbound discrepancies (null for inbound).
+  so_number: string | null;
   discrepancy_type: string;
   discrepancy_from: string;
   reported_by: string | null;
@@ -700,6 +702,8 @@ export interface DiscrepancyDetail {
   discrepancy_id: string;
   source_number: string | null;
   source: string | null;
+  // Sales Order number for outbound discrepancies (null for inbound).
+  so_number: string | null;
   discrepancy_type: string;
   discrepancy_from: string;
   reported_by: string | null;
