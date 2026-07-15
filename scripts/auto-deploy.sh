@@ -7,6 +7,7 @@ LOCK_FILE=/tmp/wms-deploy.lock
 export PATH="$HOME/.local/bin:$PATH"
 
 [ -f "$REPO_DIR/.env.telegram" ] && source "$REPO_DIR/.env.telegram"
+[ -f "$REPO_DIR/.env.secret" ] && source "$REPO_DIR/.env.secret"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S'): $*" >> "$LOG_FILE"; }
 
@@ -42,11 +43,11 @@ set +e
 git reset --hard origin/dev-fadlan >> "$LOG_FILE" 2>&1
 log "Pull done: $REMOTE"
 
-docker compose build --pull >> "$LOG_FILE" 2>&1
+docker compose -p wms-dev build --pull >> "$LOG_FILE" 2>&1
 BUILD_EXIT=$?
 log "Build exit code: $BUILD_EXIT"
 
-docker compose up -d >> "$LOG_FILE" 2>&1
+docker compose -p wms-dev up -d >> "$LOG_FILE" 2>&1
 DEPLOY_EXIT=$?
 log "Deploy exit code: $DEPLOY_EXIT"
 set -e
@@ -67,8 +68,8 @@ fi
 log "FAILED, rolling back..."
 git reset --hard "$PREV" >> "$LOG_FILE" 2>&1
 set +e
-docker compose build >> "$LOG_FILE" 2>&1
-docker compose up -d >> "$LOG_FILE" 2>&1
+docker compose -p wms-dev build >> "$LOG_FILE" 2>&1
+docker compose -p wms-dev up -d >> "$LOG_FILE" 2>&1
 set -e
 sleep 10
 RB_HEALTH=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:3080/api/health 2>/dev/null || echo "FAIL")
