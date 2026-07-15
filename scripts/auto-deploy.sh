@@ -23,9 +23,9 @@ trap 'rm -f "$LOCK_FILE"' EXIT
 
 cd "$REPO_DIR"
 
-git fetch origin dev-fadlan 2>>"$LOG_FILE"
+git fetch origin main 2>>"$LOG_FILE"
 LOCAL=$(git rev-parse HEAD)
-REMOTE=$(git rev-parse origin/dev-fadlan)
+REMOTE=$(git rev-parse origin/main)
 
 if [ "$LOCAL" = "$REMOTE" ]; then
   log "No changes"
@@ -39,7 +39,7 @@ bash scripts/backup-db.sh >> "$LOG_FILE" 2>&1
 PREV="$LOCAL"
 
 set +e
-git reset --hard origin/dev-fadlan >> "$LOG_FILE" 2>&1
+git reset --hard origin/main >> "$LOG_FILE" 2>&1
 log "Pull done: $REMOTE"
 
 docker compose build --pull >> "$LOG_FILE" 2>&1
