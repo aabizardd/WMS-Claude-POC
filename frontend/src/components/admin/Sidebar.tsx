@@ -172,8 +172,11 @@ export default function Sidebar({
             </button>
           ) : (
             <>
-              <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-brand-600 font-bold text-white">
-                W
+              <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white">
+                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 9l9-7 9 7v11H3z" />
+                  <rect x="8" y="13" width="8" height="7" rx="0.5" />
+                </svg>
               </div>
               <span className="text-lg font-semibold text-slate-800 dark:text-slate-100">WMS</span>
               <button
