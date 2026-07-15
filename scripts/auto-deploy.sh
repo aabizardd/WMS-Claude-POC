@@ -43,6 +43,35 @@ set +e
 git reset --hard origin/dev-fadlan >> "$LOG_FILE" 2>&1
 log "Pull done: $REMOTE"
 
+log "CI: running checks..."
+CI_FAILED=
+for ci_step in \
+  "frontend:typecheck" \
+  "frontend:lint" \
+  "frontend:test" \
+  "backend:typecheck" \
+  "backend:lint" \
+  "backend:test"; do
+  ci_dir="${ci_step%%:*}"
+  ci_cmd="${ci_step#*:}"
+  log "CI: $ci_step..."
+  if ! (cd "$REPO_DIR/$ci_dir" && npm run "$ci_cmd") >> "$LOG_FILE" 2>&1; then
+    log "CI FAILED: $ci_step"
+    CI_FAILED="$ci_step"
+    break
+  fi
+done
+
+if [ -n "$CI_FAILED" ]; then
+  notify "❌ WMS-DEV CI FAILED — deploy dibatalkan
+📦 $SHORT_REMOTE
+🔧 $CI_FAILED"
+  log "CI FAILED — aborting deploy"
+  git reset --hard "$PREV" >> "$LOG_FILE" 2>&1
+  exit 1
+fi
+log "CI: all checks passed"
+
 docker compose -p wms-dev build --pull >> "$LOG_FILE" 2>&1
 BUILD_EXIT=$?
 log "Build exit code: $BUILD_EXIT"

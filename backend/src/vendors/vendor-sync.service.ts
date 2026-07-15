@@ -81,8 +81,8 @@ export class VendorSyncService {
     );
 
     let page = 1;
-    let totalPages = 1;
-    let totalRecords = 0;
+    let totalPages: number;
+    let totalRecords: number;
     let upserted = 0;
     let failed = 0;
 

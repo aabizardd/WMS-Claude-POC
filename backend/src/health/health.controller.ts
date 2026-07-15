@@ -13,7 +13,7 @@ export class HealthController {
     try {
       await this.prisma.$queryRaw`SELECT 1`;
       dbConnected = true;
-    } catch {}
+    } catch { /* db not available */ }
 
     return {
       status: dbConnected ? 'ok' : 'degraded',
