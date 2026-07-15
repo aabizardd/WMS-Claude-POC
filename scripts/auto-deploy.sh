@@ -1,12 +1,13 @@
 #!/bin/bash
 set -e
 
-REPO_DIR=/home/fadlan/homelab/wms
-LOG_FILE=/home/fadlan/homelab/backups/wms/deploy.log
-LOCK_FILE=/tmp/wms-deploy.lock
+REPO_DIR=/home/fadlan/homelab/wms-poc
+LOG_FILE=/home/fadlan/homelab/backups/wms/wms-poc-deploy.log
+LOCK_FILE=/tmp/wms-poc-deploy.lock
 export PATH="$HOME/.local/bin:$PATH"
 
 [ -f "$REPO_DIR/.env.telegram" ] && source "$REPO_DIR/.env.telegram"
+[ -f "$REPO_DIR/.env.secret" ] && source "$REPO_DIR/.env.secret"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S'): $*" >> "$LOG_FILE"; }
 
@@ -28,7 +29,6 @@ LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse origin/main)
 
 if [ "$LOCAL" = "$REMOTE" ]; then
-  log "No changes"
   exit 0
 fi
 
@@ -42,23 +42,23 @@ set +e
 git reset --hard origin/main >> "$LOG_FILE" 2>&1
 log "Pull done: $REMOTE"
 
-docker compose build --pull >> "$LOG_FILE" 2>&1
+docker compose -p wms-poc build --pull >> "$LOG_FILE" 2>&1
 BUILD_EXIT=$?
 log "Build exit code: $BUILD_EXIT"
 
-docker compose up -d >> "$LOG_FILE" 2>&1
+docker compose -p wms-poc up -d >> "$LOG_FILE" 2>&1
 DEPLOY_EXIT=$?
 log "Deploy exit code: $DEPLOY_EXIT"
 set -e
 
 sleep 10
 
-HEALTH=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:3080/api/health 2>/dev/null || echo "FAIL")
+HEALTH=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:3081/api/health 2>/dev/null || echo "FAIL")
 log "Health check: $HEALTH"
 
 if [ "$BUILD_EXIT" -eq 0 ] && [ "$DEPLOY_EXIT" -eq 0 ] && [ "$HEALTH" = "200" ]; then
-  notify "✅ WMS Deployed
-🔗 https://wms-dev.zeyadev.web.id
+  notify "✅ WMS-POC Deployed
+🔗 https://wms-poc.zeyadev.web.id
 📦 $SHORT_REMOTE"
   log "SUCCESS"
   exit 0
@@ -67,11 +67,11 @@ fi
 log "FAILED, rolling back..."
 git reset --hard "$PREV" >> "$LOG_FILE" 2>&1
 set +e
-docker compose build >> "$LOG_FILE" 2>&1
-docker compose up -d >> "$LOG_FILE" 2>&1
+docker compose -p wms-poc build >> "$LOG_FILE" 2>&1
+docker compose -p wms-poc up -d >> "$LOG_FILE" 2>&1
 set -e
 sleep 10
-RB_HEALTH=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:3080/api/health 2>/dev/null || echo "FAIL")
+RB_HEALTH=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:3081/api/health 2>/dev/null || echo "FAIL")
 log "Rollback health: $RB_HEALTH"
 
 if [ "$BUILD_EXIT" -ne 0 ]; then
@@ -82,13 +82,13 @@ else
   FAIL_REASON="Health check: $HEALTH"
 fi
 
-notify "❌ WMS Deploy FAILED → Rollback $([ "$RB_HEALTH" = "200" ] && echo '✅' || echo '❌')
+notify "❌ WMS-POC Deploy FAILED → Rollback $([ "$RB_HEALTH" = "200" ] && echo '✅' || echo '❌')
 🔧 $FAIL_REASON
 📦 $SHORT_REMOTE
 📋 Logs: $(tail -5 "$LOG_FILE" | head -3 | tr '\n' ' ')"
 
 if [ "$RB_HEALTH" != "200" ]; then
-  notify "🚨 Rollback juga gagal! DB backup tersedia di /home/fadlan/homelab/backups/wms/ (sebelum deploy)"
+  notify "🚨 Rollback also failed! DB backup available at /home/fadlan/homelab/backups/wms/"
 fi
 
 exit 1
