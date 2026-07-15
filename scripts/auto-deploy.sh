@@ -55,7 +55,7 @@ for ci_step in \
   ci_dir="${ci_step%%:*}"
   ci_cmd="${ci_step#*:}"
   log "CI: $ci_step..."
-  if ! (cd "$REPO_DIR/$ci_dir" && npm run "$ci_cmd") >> "$LOG_FILE" 2>&1; then
+  if ! docker run --rm -v "$REPO_DIR/$ci_dir:/app" -w /app node:20-alpine sh -c "npm run $ci_cmd" >> "$LOG_FILE" 2>&1; then
     log "CI FAILED: $ci_step"
     CI_FAILED="$ci_step"
     break
