@@ -43,7 +43,7 @@ services:
     depends_on:
       - backend
     ports:
-      - '3080:80'
+      - '${WMS_FRONTEND_PORT:-3080}:80'
 
 volumes:
   pgdata:
