@@ -29,6 +29,7 @@ LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse origin/main)
 
 if [ "$LOCAL" = "$REMOTE" ]; then
+  log "No changes"
   exit 0
 fi
 
