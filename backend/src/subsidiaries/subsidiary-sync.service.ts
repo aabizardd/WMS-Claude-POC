@@ -4,12 +4,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ErpHttpService } from '../erp/erp-http.service';
 
 interface OracleSubsidiary {
-  subsidiary_id: string | number;
+  netsuite_id: string | number;
   subsidiary_name?: string | null;
-  subsidiary_fullname?: string | null;
-  is_delete?: boolean | null;
-  updated_at?: string | null;
-  created_at?: string | null;
+  legalname?: string | null;
+  isinactive?: boolean | null;
 }
 
 interface OracleSubsidiariesResponse {
@@ -91,12 +89,17 @@ export class SubsidiarySyncService {
 
       for (const s of res.data ?? []) {
         try {
+          if (s.netsuite_id == null) {
+            failed++;
+            this.logger.warn('Skipping subsidiary with null netsuite_id');
+            continue;
+          }
           await this.upsert(s);
           upserted++;
         } catch (e) {
           failed++;
           this.logger.warn(
-            `Failed to upsert subsidiary id=${s.subsidiary_id}: ${(e as Error).message}`,
+            `Failed to upsert subsidiary id=${s.netsuite_id}: ${(e as Error).message}`,
           );
         }
       }
@@ -119,19 +122,16 @@ export class SubsidiarySyncService {
   }
 
   private async upsert(s: OracleSubsidiary) {
-    // Oracle has no last_modified; use updated_at for the display timestamp.
-    const lm = s.updated_at ? new Date(s.updated_at) : null;
     const data = {
       name: s.subsidiary_name ?? null,
-      fullName: s.subsidiary_fullname ?? null,
-      isDelete: s.is_delete ?? false,
-      lastModified: lm && !isNaN(lm.getTime()) ? lm : null,
+      fullName: s.legalname ?? null,
+      isDelete: s.isinactive ?? false,
     };
     await this.prisma.subsidiary.upsert({
-      where: { oracleId: String(s.subsidiary_id) },
+      where: { oracleId: String(s.netsuite_id) },
       update: data,
       create: {
-        oracleId: String(s.subsidiary_id),
+        oracleId: String(s.netsuite_id),
         createdBy: 'ERP Sync',
         ...data,
       },

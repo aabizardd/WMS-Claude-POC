@@ -14,6 +14,7 @@ RUN npm run build
 
 # ---- Runtime stage ----
 FROM node:20-alpine
+RUN apk add --no-cache openssl
 WORKDIR /app
 ENV NODE_ENV=production
 
@@ -23,6 +24,9 @@ COPY package*.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
+# Source files needed by ts-node for seed / sync scripts
+COPY --from=build /app/src ./src
+COPY --from=build /app/tsconfig.json ./
 
 EXPOSE 3000
 
