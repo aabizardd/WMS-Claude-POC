@@ -41,13 +41,19 @@ export default function HistoryDetailPage() {
   }
 
   const t = dl.tracking;
+  // The whole page (back link + tracking chain) stays within the tab the
+  // delivery came from: Transfer Stock for a TO, Sales Order otherwise.
+  const isTransfer = dl.source_type === 'TRANSFER_ORDER';
+  const base = isTransfer
+    ? '/admin/outbound/transfer-stock'
+    : '/admin/outbound/sales-order';
 
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <Link
-            to="/admin/outbound/sales-order/history"
+            to={`${base}/history`}
             className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
             aria-label="Back"
           >
@@ -65,30 +71,39 @@ export default function HistoryDetailPage() {
         <span className="badge bg-emerald-50 text-emerald-700">{dl.status}</span>
       </div>
 
-      {/* Tracking chain: Sales Order → Picking → Packing → Delivery */}
+      {/* Tracking chain: Sales Order / Transfer Order → Picking → Packing → Delivery */}
       <div className="card p-5">
         <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
           Tracking
         </h3>
         <div className="flex flex-wrap items-stretch gap-2">
-          <Track
-            label="Sales Order"
-            value={t.so_number}
-            to={t.so_id ? `/admin/outbound/sales-order/list/${t.so_id}` : undefined}
-            sub={t.customer}
-          />
+          {isTransfer ? (
+            <Track
+              label="Transfer Order"
+              value={t.to_number}
+              to={t.to_id ? `${base}/list/${t.to_id}` : undefined}
+              sub={t.customer}
+            />
+          ) : (
+            <Track
+              label="Sales Order"
+              value={t.so_number}
+              to={t.so_id ? `${base}/list/${t.so_id}` : undefined}
+              sub={t.customer}
+            />
+          )}
           <Arrow />
           <Track
             label="Picking"
             value={t.picking_code}
-            to={t.picking_id ? `/admin/outbound/sales-order/picking/${t.picking_id}` : undefined}
+            to={t.picking_id ? `${base}/picking/${t.picking_id}` : undefined}
             sub={t.picking_status === 'OnProgress' ? 'On Progress' : t.picking_status}
           />
           <Arrow />
           <Track
             label="Packing"
             value={t.packing_code}
-            to={t.packing_id ? `/admin/outbound/sales-order/packing/${t.packing_id}` : undefined}
+            to={t.packing_id ? `${base}/packing/${t.packing_id}` : undefined}
           />
           <Arrow />
           <Track label="Delivery" value={t.delivery_code} sub={t.sdo_id ?? undefined} highlight />
@@ -103,9 +118,21 @@ export default function HistoryDetailPage() {
           <Meta label="Delivery ID" value={dl.delivery_id} />
           <Meta label="SDO ID" value={dl.sdo_id} />
           <Meta label="Packing ID" value={dl.packing_id} />
-          <Meta label="SO Number" value={dl.so_number} />
-          <Meta label="Sales Order (Oracle ID)" value={dl.so_oracle_id} />
-          <Meta label="Customer" value={dl.customer} />
+          {dl.source_type === 'TRANSFER_ORDER' ? (
+            <>
+              <Meta label="TO Number" value={dl.to_number} />
+              <Meta label="Transfer Order (Oracle ID)" value={dl.to_oracle_id} />
+            </>
+          ) : (
+            <>
+              <Meta label="SO Number" value={dl.so_number} />
+              <Meta label="Sales Order (Oracle ID)" value={dl.so_oracle_id} />
+            </>
+          )}
+          <Meta
+            label={dl.source_type === 'TRANSFER_ORDER' ? 'Warehouse Destination' : 'Customer'}
+            value={dl.customer}
+          />
           <Meta label="Location" value={dl.location} />
           <Meta label="Status" value={dl.status} />
           <Meta label="Created" value={new Date(dl.created_at).toLocaleString()} />

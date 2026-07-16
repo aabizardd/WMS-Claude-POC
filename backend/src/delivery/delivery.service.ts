@@ -19,8 +19,16 @@ interface ErpAuthResponse {
 
 interface ItemFulfillmentResponse {
   success: boolean;
-  data?: { status?: string; fulfillment_id?: number; local_id?: number };
+  data?: {
+    status?: string;
+    fulfillment_id?: number;
+    local_id?: number;
+    // Oracle's document number for the created fulfillment — becomes the SDO ID.
+    document_no?: string | number;
+  };
   message?: string;
+  // Tolerated if the bridge returns it at the top level instead of under data.
+  document_no?: string | number;
 }
 
 export interface WarehouseScope {
@@ -38,6 +46,9 @@ const packingSelect = {
       status: true,
       salesOrder: {
         select: { id: true, oracleId: true, tranId: true, customerName: true },
+      },
+      transferOrder: {
+        select: { id: true, oracleId: true, tranId: true, toLocationName: true },
       },
     },
   },
@@ -62,6 +73,7 @@ const detailInclude = {
         },
       },
       salesOrderItem: { select: { lineNumber: true } },
+      transferOrderItem: { select: { lineNumber: true } },
       bin: { select: { id: true, binLabel: true } },
       picker: { select: { id: true, name: true } },
     },
@@ -126,41 +138,63 @@ export class DeliveryService {
   // Create an Item Fulfillment in Oracle. Throws (503) on any failure so the
   // caller can surface a retry; nothing is persisted unless this succeeds.
   private async submitItemFulfillment(
-    salesOrderId: string,
+    transactionType: 'sales_order' | 'transfer_order',
+    transactionId: string,
     items: { line: number; quantity: number }[],
   ): Promise<ItemFulfillmentResponse['data'] & { message?: string }> {
+    // transaction_type is one of sales_order | transfer_order | vendor_return;
+    // transaction_id is the source doc's Oracle id.
+    const payload = {
+      transaction_type: transactionType,
+      transaction_id: transactionId,
+      ship_status: 'shipped',
+      items,
+    };
+    const url = `${this.baseUrl()}/items/item-fulfillment`;
+    // TEMP DIAGNOSTIC: log exactly what WMS sends (token excluded).
+    this.logger.warn(`[ItemFulfillment] REQUEST ${url} ${JSON.stringify(payload)}`);
+
     let res: Response;
+    let raw = '';
     try {
       const token = await this.getAccessToken();
-      res = await fetch(`${this.baseUrl()}/items/item-fulfillment`, {
+      res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          // Outbound from a Sales Order. transaction_type is one of
-          // sales_order | transfer_order | vendor_return; transaction_id was
-          // formerly sent as sales_order_id.
-          transaction_type: 'sales_order',
-          transaction_id: salesOrderId,
-          ship_status: 'shipped',
-          items,
-        }),
+        body: JSON.stringify(payload),
       });
+      raw = await res.text();
     } catch (e) {
+      this.logger.error(`[ItemFulfillment] NETWORK ERROR ${(e as Error).message}`);
       throw new ServiceUnavailableException(
         `Failed to reach Oracle Item Fulfillment: ${(e as Error).message}`,
       );
     }
 
-    const json = (await res.json().catch(() => null)) as ItemFulfillmentResponse | null;
+    // TEMP DIAGNOSTIC: log the raw Oracle response.
+    this.logger.warn(`[ItemFulfillment] RESPONSE HTTP ${res.status} ${raw}`);
+
+    let json: ItemFulfillmentResponse | null = null;
+    try {
+      json = JSON.parse(raw) as ItemFulfillmentResponse;
+    } catch {
+      json = null;
+    }
     if (!res.ok || !json?.success) {
       throw new ServiceUnavailableException(
         json?.message ?? `Oracle Item Fulfillment failed (HTTP ${res.status})`,
       );
     }
-    return { ...json.data, message: json.message };
+    // Only reached on a success response, so document_no is never read from a
+    // failed call. Accept it under data or at the top level.
+    return {
+      ...json.data,
+      document_no: json.data?.document_no ?? json.document_no,
+      message: json.message,
+    };
   }
 
   private scopeWhere(scope: WarehouseScope): Prisma.DeliveryWhereInput {
@@ -176,6 +210,7 @@ export class DeliveryService {
       limit?: number;
       search?: string;
       history?: string | boolean;
+      source?: string;
       sort_by?: string;
       sort_order?: string;
     },
@@ -193,6 +228,9 @@ export class DeliveryService {
       ...this.scopeWhere(scope),
       status: isHistory ? 'Closed' : { not: 'Closed' },
     };
+    if (query.source === 'SALES_ORDER' || query.source === 'TRANSFER_ORDER') {
+      where.sourceType = query.source;
+    }
     if (query.search) {
       where.OR = [
         { deliveryCode: { contains: query.search, mode: 'insensitive' } },
@@ -202,6 +240,13 @@ export class DeliveryService {
           packing: {
             picking: {
               salesOrder: { tranId: { contains: query.search, mode: 'insensitive' } },
+            },
+          },
+        },
+        {
+          packing: {
+            picking: {
+              transferOrder: { tranId: { contains: query.search, mode: 'insensitive' } },
             },
           },
         },
@@ -291,7 +336,9 @@ export class DeliveryService {
         const items = p.items
           .filter((it) => it.actualQty > 0)
           .map((it) => ({
-            salesOrderItemId: it.salesOrderItemId, // carry SO line reference
+            // Carry the source line reference (SO or TO) through from packing.
+            salesOrderItemId: it.salesOrderItemId,
+            transferOrderItemId: it.transferOrderItemId,
             materialId: it.materialId,
             materialCode: it.materialCode,
             materialName: it.materialName,
@@ -302,6 +349,7 @@ export class DeliveryService {
         await tx.delivery.create({
           data: {
             deliveryCode,
+            sourceType: p.sourceType, // inherit source from the packing
             packingId: p.id,
             warehouseId: p.warehouseId,
             status: 'Open',
@@ -327,11 +375,19 @@ export class DeliveryService {
     const d = await this.prisma.delivery.findUnique({
       where: { id },
       include: {
-        items: { include: { salesOrderItem: { select: { lineNumber: true } } } },
+        items: {
+          include: {
+            salesOrderItem: { select: { lineNumber: true } },
+            transferOrderItem: { select: { lineNumber: true } },
+          },
+        },
         packing: {
           select: {
             picking: {
-              select: { salesOrder: { select: { oracleId: true } } },
+              select: {
+                salesOrder: { select: { oracleId: true } },
+                transferOrder: { select: { oracleId: true } },
+              },
             },
           },
         },
@@ -344,25 +400,38 @@ export class DeliveryService {
       throw new BadRequestException('Shipment already generated for this delivery');
     }
 
-    // Build the Oracle Item Fulfillment payload from the delivery detail. Every
-    // shippable item must map to a Sales Order line — reject otherwise.
-    const salesOrderId = d.packing?.picking?.salesOrder?.oracleId ?? null;
-    if (!salesOrderId) {
+    // Build the Oracle Item Fulfillment payload from the delivery detail. The
+    // source (Sales Order or Transfer Order) drives transaction_type + line map.
+    const isTransfer = d.sourceType === 'TRANSFER_ORDER';
+    const transactionType = isTransfer ? 'transfer_order' : 'sales_order';
+    const sourceOracleId = isTransfer
+      ? d.packing?.picking?.transferOrder?.oracleId ?? null
+      : d.packing?.picking?.salesOrder?.oracleId ?? null;
+    if (!sourceOracleId) {
       throw new BadRequestException(
-        'Sales Order Oracle ID not found for this delivery',
+        `${isTransfer ? 'Transfer Order' : 'Sales Order'} Oracle ID not found for this delivery`,
       );
     }
-    const fulfillItems: { line: number; quantity: number }[] = [];
+    // Pre-processing: group the delivery items by source line and sum their qty.
+    // One source line can produce several delivery items (a material picked from
+    // more than one bin), but Oracle rejects a payload with duplicate lines — so
+    // the request carries one record per line with the summed quantity.
+    const qtyByLine = new Map<number, number>();
     for (const it of d.items) {
       if (!(it.qty > 0)) continue;
-      const line = it.salesOrderItem?.lineNumber ?? null;
+      const line = isTransfer
+        ? it.transferOrderItem?.lineNumber ?? null
+        : it.salesOrderItem?.lineNumber ?? null;
       if (line == null) {
         throw new BadRequestException(
-          `Cannot ship: item "${it.materialCode ?? it.id}" has no Sales Order line number`,
+          `Cannot ship: item "${it.materialCode ?? it.id}" has no source line number`,
         );
       }
-      fulfillItems.push({ line, quantity: it.qty });
+      qtyByLine.set(line, (qtyByLine.get(line) ?? 0) + it.qty);
     }
+    const fulfillItems = [...qtyByLine.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([line, quantity]) => ({ line, quantity }));
     if (fulfillItems.length === 0) {
       throw new BadRequestException('No shippable items on this delivery');
     }
@@ -370,15 +439,28 @@ export class DeliveryService {
     // Hit Oracle first — if this fails, nothing below runs (delivery stays Open
     // and the user can retry).
     const fulfillment = await this.submitItemFulfillment(
-      salesOrderId,
+      transactionType,
+      sourceOracleId,
       fulfillItems,
     );
 
-    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const count = await this.prisma.delivery.count({
-      where: { sdoId: { startsWith: `SDO-${today}` } },
-    });
-    const sdoId = `SDO-${today}-${String(count + 1).padStart(3, '0')}`;
+    // The SDO ID is Oracle's document_no for the fulfillment just created. Only
+    // a success response reaches this point (a failure throws above, leaving the
+    // delivery Open with no SDO ID). If a successful response omits document_no,
+    // fall back to the internal counter — the fulfillment already exists in
+    // Oracle, so failing here would strand the delivery and a retry would post a
+    // duplicate.
+    let sdoId = fulfillment?.document_no != null ? String(fulfillment.document_no).trim() : '';
+    if (!sdoId) {
+      const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const count = await this.prisma.delivery.count({
+        where: { sdoId: { startsWith: `SDO-${today}` } },
+      });
+      sdoId = `SDO-${today}-${String(count + 1).padStart(3, '0')}`;
+      this.logger.warn(
+        `[ItemFulfillment] success without document_no — falling back to generated SDO ${sdoId}`,
+      );
+    }
 
     // Atomic: close the delivery AND reduce reserved qty. Roll back if any fails.
     await this.prisma.$transaction(async (tx) => {
@@ -430,13 +512,17 @@ export class DeliveryService {
 
   private serializeList(d: DeliveryList) {
     const so = d.packing?.picking?.salesOrder;
+    const to = d.packing?.picking?.transferOrder;
     return {
       id: d.id,
       delivery_id: d.deliveryCode,
       sdo_id: d.sdoId,
+      source_type: d.sourceType,
       packing_id: d.packing?.packingCode ?? null,
       so_number: so?.tranId ?? null,
-      customer: so?.customerName ?? null,
+      to_number: to?.tranId ?? null,
+      source_number: so?.tranId ?? to?.tranId ?? null,
+      customer: so?.customerName ?? to?.toLocationName ?? null,
       location: d.warehouse?.name ?? null,
       status: d.status,
       item_count: d._count.items,
@@ -448,25 +534,36 @@ export class DeliveryService {
     const packing = d.packing;
     const picking = packing?.picking;
     const so = picking?.salesOrder;
+    const to = picking?.transferOrder;
     return {
       id: d.id,
       delivery_id: d.deliveryCode,
       sdo_id: d.sdoId,
+      source_type: d.sourceType,
       packing_id: packing?.packingCode ?? null,
       so_id: so?.id ?? null,
       so_oracle_id: so?.oracleId ?? null,
       so_number: so?.tranId ?? null,
-      customer: so?.customerName ?? null,
+      to_id: to?.id ?? null,
+      to_oracle_id: to?.oracleId ?? null,
+      to_number: to?.tranId ?? null,
+      source_number: so?.tranId ?? to?.tranId ?? null,
+      customer: so?.customerName ?? to?.toLocationName ?? null,
       location: d.warehouse?.name ?? null,
       status: d.status,
       oracle_fulfillment_id: d.oracleFulfillmentId ?? null,
       oracle_local_id: d.oracleLocalId ?? null,
       created_at: d.createdAt,
-      // Full outbound tracking chain: Sales Order → Picking → Packing → Delivery.
+      // Full outbound tracking chain: source doc → Picking → Packing → Delivery.
+      // The first step is the Sales Order or the Transfer Order, per source_type.
       tracking: {
+        source_type: d.sourceType,
         so_id: so?.id ?? null,
         so_number: so?.tranId ?? null,
-        customer: so?.customerName ?? null,
+        to_id: to?.id ?? null,
+        to_number: to?.tranId ?? null,
+        // Customer for SO; destination warehouse for TO.
+        customer: so?.customerName ?? to?.toLocationName ?? null,
         picking_id: picking?.id ?? null,
         picking_code: picking?.pickingCode ?? null,
         picking_status: picking?.status ?? null,
@@ -479,7 +576,10 @@ export class DeliveryService {
       items: d.items
         .map((it) => ({
           id: it.id,
-          line_number: it.salesOrderItem?.lineNumber ?? null,
+          line_number:
+            it.salesOrderItem?.lineNumber ??
+            it.transferOrderItem?.lineNumber ??
+            null,
           material_code: it.materialCode ?? it.material?.materialCode ?? null,
           material_name: it.materialName ?? it.material?.materialName ?? null,
           qty: it.qty,

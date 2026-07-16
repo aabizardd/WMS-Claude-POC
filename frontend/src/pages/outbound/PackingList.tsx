@@ -19,12 +19,24 @@ function statusBadge(status: string) {
   return map[status] ?? 'bg-slate-100 text-slate-600';
 }
 
-// Packing documents generated from Closed pickings.
-export default function PackingList() {
+// Packing documents generated from Closed pickings. Shared by the Sales Order
+// and Transfer Stock outbound tabs.
+interface PackingListProps {
+  source?: 'SALES_ORDER' | 'TRANSFER_ORDER';
+  basePath?: string;
+  // Generate Delivery is enabled per source (Transfer Stock delivery = phase 2c).
+  canGenerateDelivery?: boolean;
+}
+
+export default function PackingList({
+  source,
+  basePath = '/admin/outbound/sales-order',
+  canGenerateDelivery = true,
+}: PackingListProps = {}) {
   const { has } = useAuth();
   const toast = useToast();
   const confirm = useConfirm();
-  const canDeliver = has('delivery:create');
+  const canDeliver = has('delivery:create') && canGenerateDelivery;
 
   const [data, setData] = useState<Paginated<PackingRow> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -45,7 +57,13 @@ export default function PackingList() {
   async function load() {
     setLoading(true);
     const r = await api.get<Paginated<PackingRow>>('/packing', {
-      params: { page, limit: LIMIT, search: search || undefined, ...params() },
+      params: {
+        page,
+        limit: LIMIT,
+        search: search || undefined,
+        source: source || undefined,
+        ...params(),
+      },
     });
     setData(r.data);
     setLoading(false);
@@ -53,7 +71,7 @@ export default function PackingList() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, sort.sortBy, sort.order]);
+  }, [page, search, source, sort.sortBy, sort.order]);
 
   function onSearch(e: FormEvent) {
     e.preventDefault();
@@ -204,9 +222,19 @@ export default function PackingList() {
                 )}
                 <SortableTh label="Packing ID" col="packing_code" sort={sort} onSort={onSort} />
                 <SortableTh label="Picking ID" col="picking_id" sort={sort} onSort={onSort} />
-                <SortableTh label="SO Number" col="so_number" sort={sort} onSort={onSort} />
+                <SortableTh
+                  label={source === 'TRANSFER_ORDER' ? 'TO Number' : 'SO Number'}
+                  col="so_number"
+                  sort={sort}
+                  onSort={onSort}
+                />
                 <SortableTh label="Location" col="location" sort={sort} onSort={onSort} />
-                <SortableTh label="Customer" col="customer" sort={sort} onSort={onSort} />
+                <SortableTh
+                  label={source === 'TRANSFER_ORDER' ? 'Destination' : 'Customer'}
+                  col="customer"
+                  sort={sort}
+                  onSort={onSort}
+                />
                 <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Action</th>
               </tr>
@@ -242,7 +270,7 @@ export default function PackingList() {
                       {p.packing_id}
                     </td>
                     <td className="px-6 py-3 text-slate-600">{p.picking_id ?? '—'}</td>
-                    <td className="px-6 py-3 text-slate-600">{p.so_number ?? '—'}</td>
+                    <td className="px-6 py-3 text-slate-600">{p.source_number ?? '—'}</td>
                     <td className="px-6 py-3 text-slate-600">{p.location ?? '—'}</td>
                     <td className="px-6 py-3 text-slate-600">{p.customer ?? '—'}</td>
                     <td className="px-6 py-3">
@@ -251,7 +279,7 @@ export default function PackingList() {
                     <td className="px-6 py-3">
                       <div className="flex justify-end">
                         <Link
-                          to={`/admin/outbound/sales-order/packing/${p.id}`}
+                          to={`${basePath}/packing/${p.id}`}
                           className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
                         >
                           Detail

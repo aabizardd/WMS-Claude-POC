@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 import api from '../../lib/api';
@@ -20,8 +20,17 @@ function pickStatusBadge(status: string) {
   return map[status] ?? 'bg-slate-100 text-slate-600';
 }
 
-// Picking documents generated from Sales Orders.
-export default function PickingList() {
+// Picking documents. Shared by the Sales Order and Transfer Stock outbound
+// tabs — `source` filters by origin, `basePath` drives the links.
+interface PickingListProps {
+  source?: 'SALES_ORDER' | 'TRANSFER_ORDER';
+  basePath?: string;
+}
+
+export default function PickingList({
+  source,
+  basePath = '/admin/outbound/sales-order',
+}: PickingListProps = {}) {
   const { has } = useAuth();
   const toast = useToast();
   const confirm = useConfirm();
@@ -47,7 +56,13 @@ export default function PickingList() {
   async function load() {
     setLoading(true);
     const r = await api.get<Paginated<PickingRow>>('/picking', {
-      params: { page, limit: LIMIT, search: search || undefined, ...params() },
+      params: {
+        page,
+        limit: LIMIT,
+        search: search || undefined,
+        source: source || undefined,
+        ...params(),
+      },
     });
     setData(r.data);
     setLoading(false);
@@ -55,7 +70,7 @@ export default function PickingList() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, sort.sortBy, sort.order]);
+  }, [page, search, source, sort.sortBy, sort.order]);
 
   function onSearch(e: FormEvent) {
     e.preventDefault();
@@ -67,7 +82,7 @@ export default function PickingList() {
     const ok = await confirm({
       title: `Delete picking ${p.picking_id}?`,
       description:
-        'Remaining qty and reserved stock will be rolled back to the Sales Order.',
+        'Remaining qty and reserved stock will be rolled back to the source order.',
       type: 'danger',
       confirmText: 'Delete',
     });
@@ -105,14 +120,21 @@ export default function PickingList() {
     setSelectionMode(false);
     setSelected(new Set());
   }
-  function toggle(id: string) {
+  // Source doc (SO/TO number) of every id ever selected — selection can span
+  // pages, so this is the only place the source of an off-page id is known.
+  // Used for the client-side "same SO/TO" guard before generate.
+  const sourceById = useRef(new Map<string, string>());
+
+  function toggle(row: PickingRow) {
+    sourceById.current.set(row.id, row.source_number ?? '');
     setSelected((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      next.has(row.id) ? next.delete(row.id) : next.add(row.id);
       return next;
     });
   }
   function toggleAllOnPage() {
+    closedOnPage.forEach((r) => sourceById.current.set(r.id, r.source_number ?? ''));
     setSelected((prev) => {
       const next = new Set(prev);
       if (allSelectedOnPage) closedOnPage.forEach((r) => next.delete(r.id));
@@ -126,19 +148,33 @@ export default function PickingList() {
       toast.error('Select at least one picking');
       return;
     }
+    // Same-source guard (server re-validates): all selected pickings must come
+    // from one SO/TO — they merge into a single packing document.
+    const sources = new Set([...selected].map((id) => sourceById.current.get(id) ?? ''));
+    if (sources.size > 1) {
+      toast.error(
+        `All selected pickings must belong to the same SO/TO (selected: ${[...sources].filter(Boolean).join(', ')})`,
+      );
+      return;
+    }
     const ok = await confirm({
       title: 'Generate Packing?',
-      description: `${selected.size} picking document(s) will be packed. Packed pickings move to the Packing List.`,
+      description: `${selected.size} picking document(s) will be merged into ONE packing. Packed pickings move to the Packing List.`,
       type: 'info',
       confirmText: 'Generate',
     });
     if (!ok) return;
     setGenerating(true);
     try {
-      const r = await api.post<{ created: number }>('/packing/generate', {
-        pickingIds: [...selected],
-      });
-      toast.success(`${r.data.created} packing document(s) created`);
+      const r = await api.post<{ created: number; packing_codes?: string[] }>(
+        '/packing/generate',
+        { pickingIds: [...selected] },
+      );
+      toast.success(
+        r.data.packing_codes?.length
+          ? `Packing created: ${r.data.packing_codes.join(', ')}`
+          : `${r.data.created} packing document(s) created`,
+      );
       cancelSelection();
       setPage(1);
       await load();
@@ -232,9 +268,19 @@ export default function PickingList() {
                   </th>
                 )}
                 <SortableTh label="Picking ID" col="picking_code" sort={sort} onSort={onSort} />
-                <SortableTh label="SO Number" col="so_number" sort={sort} onSort={onSort} />
+                <SortableTh
+                  label={source === 'TRANSFER_ORDER' ? 'TO Number' : 'SO Number'}
+                  col="so_number"
+                  sort={sort}
+                  onSort={onSort}
+                />
                 <SortableTh label="Location" col="location" sort={sort} onSort={onSort} />
-                <SortableTh label="Customer" col="customer" sort={sort} onSort={onSort} />
+                <SortableTh
+                  label={source === 'TRANSFER_ORDER' ? 'Destination' : 'Customer'}
+                  col="customer"
+                  sort={sort}
+                  onSort={onSort}
+                />
                 <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Action</th>
               </tr>
@@ -260,7 +306,7 @@ export default function PickingList() {
                           type="checkbox"
                           className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
                           checked={selected.has(p.id)}
-                          onChange={() => toggle(p.id)}
+                          onChange={() => toggle(p)}
                         />
                       </td>
                     )}
@@ -268,7 +314,14 @@ export default function PickingList() {
                       {p.picking_id}
                     </td>
                     <td className="px-6 py-3">
-                      {p.so_id ? (
+                      {p.source_type === 'TRANSFER_ORDER' && p.to_id ? (
+                        <Link
+                          to={`/admin/outbound/transfer-stock/list/${p.to_id}`}
+                          className="font-medium text-brand-700 hover:underline"
+                        >
+                          {p.to_number ?? '—'}
+                        </Link>
+                      ) : p.so_id ? (
                         <Link
                           to={`/admin/outbound/sales-order/list/${p.so_id}`}
                           className="font-medium text-brand-700 hover:underline"
@@ -276,7 +329,9 @@ export default function PickingList() {
                           {p.so_number ?? '—'}
                         </Link>
                       ) : (
-                        <span className="text-slate-600">{p.so_number ?? '—'}</span>
+                        <span className="text-slate-600">
+                          {p.source_number ?? '—'}
+                        </span>
                       )}
                     </td>
                     <td className="px-6 py-3 text-slate-600">{p.location ?? '—'}</td>
@@ -289,7 +344,7 @@ export default function PickingList() {
                     <td className="px-6 py-3">
                       <div className="flex justify-end gap-2">
                         <Link
-                          to={`/admin/outbound/sales-order/picking/${p.id}`}
+                          to={`${basePath}/picking/${p.id}`}
                           className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
                         >
                           Detail

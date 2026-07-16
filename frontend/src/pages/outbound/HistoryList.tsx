@@ -8,7 +8,15 @@ import SortableTh from '../../components/SortableTh';
 const LIMIT = 10;
 
 // Closed deliveries (shipped) — read-only history.
-export default function HistoryList() {
+interface HistoryListProps {
+  source?: 'SALES_ORDER' | 'TRANSFER_ORDER';
+  basePath?: string;
+}
+
+export default function HistoryList({
+  source,
+  basePath = '/admin/outbound/sales-order',
+}: HistoryListProps = {}) {
   const [data, setData] = useState<Paginated<DeliveryRow> | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -28,6 +36,7 @@ export default function HistoryList() {
         limit: LIMIT,
         search: search || undefined,
         history: true,
+        source: source || undefined,
         ...params(),
       },
     });
@@ -37,7 +46,7 @@ export default function HistoryList() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, sort.sortBy, sort.order]);
+  }, [page, search, source, sort.sortBy, sort.order]);
 
   function onSearch(e: FormEvent) {
     e.preventDefault();
@@ -82,8 +91,18 @@ export default function HistoryList() {
                 <SortableTh label="Delivery ID" col="delivery_code" sort={sort} onSort={onSort} />
                 <SortableTh label="SDO ID" col="sdo_id" sort={sort} onSort={onSort} />
                 <SortableTh label="Packing ID" col="packing_id" sort={sort} onSort={onSort} />
-                <SortableTh label="SO Number" col="so_number" sort={sort} onSort={onSort} />
-                <SortableTh label="Customer" col="customer" sort={sort} onSort={onSort} />
+                <SortableTh
+                  label={source === 'TRANSFER_ORDER' ? 'TO Number' : 'SO Number'}
+                  col="so_number"
+                  sort={sort}
+                  onSort={onSort}
+                />
+                <SortableTh
+                  label={source === 'TRANSFER_ORDER' ? 'Destination' : 'Customer'}
+                  col="customer"
+                  sort={sort}
+                  onSort={onSort}
+                />
                 <SortableTh label="Location" col="location" sort={sort} onSort={onSort} />
                 <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Action</th>
@@ -104,7 +123,7 @@ export default function HistoryList() {
                     </td>
                     <td className="px-6 py-3 text-slate-600">{d.sdo_id ?? '—'}</td>
                     <td className="px-6 py-3 text-slate-600">{d.packing_id ?? '—'}</td>
-                    <td className="px-6 py-3 text-slate-600">{d.so_number ?? '—'}</td>
+                    <td className="px-6 py-3 text-slate-600">{d.source_number ?? '—'}</td>
                     <td className="px-6 py-3 text-slate-600">{d.customer ?? '—'}</td>
                     <td className="px-6 py-3 text-slate-600">{d.location ?? '—'}</td>
                     <td className="px-6 py-3">
@@ -115,7 +134,7 @@ export default function HistoryList() {
                     <td className="px-6 py-3">
                       <div className="flex justify-end">
                         <Link
-                          to={`/admin/outbound/sales-order/history/${d.id}`}
+                          to={`${basePath}/history/${d.id}`}
                           className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
                         >
                           Detail

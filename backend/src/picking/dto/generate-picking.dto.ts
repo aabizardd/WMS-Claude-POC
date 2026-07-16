@@ -4,14 +4,22 @@ import {
   IsArray,
   IsInt,
   IsNumber,
+  IsOptional,
   IsString,
   Min,
   ValidateNested,
 } from 'class-validator';
 
 export class GeneratePickingItemDto {
+  // Exactly one of salesOrderItemId / transferOrderItemId is set (matches the
+  // picking source).
+  @IsOptional()
   @IsString()
-  salesOrderItemId!: string;
+  salesOrderItemId?: string;
+
+  @IsOptional()
+  @IsString()
+  transferOrderItemId?: string;
 
   @IsNumber()
   @Min(0.0001)
@@ -25,8 +33,14 @@ export class GeneratePickingItemDto {
 }
 
 export class GeneratePickingDto {
+  // Source is a Sales Order OR a Transfer Order — exactly one is provided.
+  @IsOptional()
   @IsString()
-  salesOrderId!: string;
+  salesOrderId?: string;
+
+  @IsOptional()
+  @IsString()
+  transferOrderId?: string;
 
   @IsArray()
   @ArrayNotEmpty()

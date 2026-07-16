@@ -2,21 +2,15 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import axios from "axios";
 import api from "../../lib/api";
-import Modal from "../../components/Modal";
-import SearchableSelect from "../../components/SearchableSelect";
+import GeneratePickingModal, {
+  type PickAllocation,
+} from "../../components/GeneratePickingModal";
 import { useAuth } from "../../context/AuthContext";
 import {
   deliveryStatusBadgeClass,
   deliveryStatusLabel,
 } from "../../lib/outboundStatus";
 import type { Pickable, SalesOrderDetail } from "../../types";
-
-interface ItemForm {
-  selected: boolean;
-  qty: number;
-  binId: string;
-  pickerId: string;
-}
 
 export default function SalesOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -35,7 +29,6 @@ export default function SalesOrderDetailPage() {
   const [successMsg, setSuccessMsg] = useState("");
   const [pickable, setPickable] = useState<Pickable | null>(null);
   const [pickers, setPickers] = useState<{ id: number; name: string }[]>([]);
-  const [forms, setForms] = useState<Record<string, ItemForm>>({});
 
   function loadSo() {
     setLoading(true);
@@ -73,19 +66,6 @@ export default function SalesOrderDetailPage() {
       ]);
       setPickable(p.data);
       setPickers(pk.data);
-      setForms(
-        Object.fromEntries(
-          p.data.items.map((it) => [
-            it.id,
-            {
-              selected: false,
-              qty: it.remaining_qty,
-              binId: it.available_bins[0]?.bin_id ?? "",
-              pickerId: "",
-            } as ItemForm,
-          ]),
-        ),
-      );
     } catch {
       setGenError("Failed to load picking data.");
     } finally {
@@ -93,42 +73,16 @@ export default function SalesOrderDetailPage() {
     }
   }
 
-  function patchForm(itemId: string, patch: Partial<ItemForm>) {
-    setForms((f) => ({ ...f, [itemId]: { ...f[itemId], ...patch } }));
-  }
-
-  async function handleGenerate() {
-    if (!pickable) return;
-    setGenError("");
-    const chosen = pickable.items.filter((it) => forms[it.id]?.selected);
-    if (chosen.length === 0) {
-      setGenError("Select at least one item.");
-      return;
-    }
-    for (const it of chosen) {
-      const f = forms[it.id];
-      if (!(f.qty > 0) || f.qty > it.remaining_qty) {
-        setGenError(`Invalid qty for "${it.item_name ?? it.material_code}".`);
-        return;
-      }
-      if (!f.binId) {
-        setGenError(`Bin source is required for "${it.item_name ?? it.material_code}".`);
-        return;
-      }
-      if (!f.pickerId) {
-        setGenError(`Picker is required for "${it.item_name ?? it.material_code}".`);
-        return;
-      }
-    }
+  async function handleGenerate(allocations: PickAllocation[]) {
     setSubmitting(true);
     try {
       const payload = {
         salesOrderId: id,
-        items: chosen.map((it) => ({
-          salesOrderItemId: it.id,
-          requestQty: Number(forms[it.id].qty),
-          binId: forms[it.id].binId,
-          pickerId: Number(forms[it.id].pickerId),
+        items: allocations.map((a) => ({
+          salesOrderItemId: a.itemId,
+          requestQty: a.qty,
+          binId: a.binId,
+          pickerId: a.pickerId,
         })),
       };
       const r = await api.post<{ picking_id: string }>("/picking/generate", payload);
@@ -136,10 +90,12 @@ export default function SalesOrderDetailPage() {
       setSuccessMsg(`Picking generated: ${r.data.picking_id}`);
       loadSo();
     } catch (err) {
+      let msg = "Generate failed";
       if (axios.isAxiosError(err)) {
-        const msg = err.response?.data?.message;
-        setGenError(Array.isArray(msg) ? msg.join(", ") : msg ?? "Generate failed");
-      } else setGenError("Generate failed");
+        const m = err.response?.data?.message;
+        msg = Array.isArray(m) ? m.join(", ") : m ?? msg;
+      }
+      throw new Error(msg);
     } finally {
       setSubmitting(false);
     }
@@ -312,139 +268,16 @@ export default function SalesOrderDetailPage() {
         </div>
       </div>
 
-      <Modal
+      <GeneratePickingModal
         open={genOpen}
-        title="Generate Picking"
-        onClose={() => (submitting ? null : setGenOpen(false))}
-      >
-        <div className="space-y-4">
-          {genError && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {genError}
-            </div>
-          )}
-          {genLoading ? (
-            <div className="py-6 text-center text-sm text-slate-400">
-              Loading picking data…
-            </div>
-          ) : !pickable || pickable.items.length === 0 ? (
-            <p className="py-4 text-center text-sm text-slate-400">
-              No items with remaining quantity to pick.
-            </p>
-          ) : (
-            <>
-              <p className="text-sm text-slate-500">
-                Select items, quantity, bin source, and picker. Partial item and
-                partial qty are supported; qty cannot exceed remaining.
-              </p>
-              <div className="max-h-96 space-y-2 overflow-y-auto">
-                {pickable.items.map((it) => {
-                  const f = forms[it.id];
-                  if (!f) return null;
-                  return (
-                    <div
-                      key={it.id}
-                      className="rounded-lg border border-slate-200 bg-slate-50 p-3"
-                    >
-                      <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
-                          checked={f.selected}
-                          onChange={(e) =>
-                            patchForm(it.id, { selected: e.target.checked })
-                          }
-                        />
-                        {it.item_name ?? it.material_code ?? "—"}
-                        <span className="text-xs font-normal text-slate-400">
-                          ({it.material_code ?? "unmatched"}) · Remaining:{" "}
-                          {it.remaining_qty}
-                        </span>
-                      </label>
-                      {f.selected && (
-                        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                          <div>
-                            <label className="block text-xs text-slate-400">
-                              Qty
-                            </label>
-                            <input
-                              type="number"
-                              step="any"
-                              min={0}
-                              max={it.remaining_qty}
-                              className="input mt-0.5 w-full text-right text-sm"
-                              value={f.qty}
-                              onChange={(e) =>
-                                patchForm(it.id, { qty: Number(e.target.value) })
-                              }
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs text-slate-400">
-                              Bin Source
-                            </label>
-                            <SearchableSelect
-                              className="mt-0.5"
-                              value={f.binId}
-                              onChange={(v) => patchForm(it.id, { binId: v })}
-                              placeholder="— Select —"
-                              searchPlaceholder="Search bin…"
-                              options={it.available_bins.map((b) => ({
-                                value: b.bin_id ?? '',
-                                label: `${b.bin_label ?? '—'} (avail ${b.avail_qty})`,
-                              }))}
-                            />
-                            {it.available_bins.length === 0 && (
-                              <p className="mt-1 text-[11px] text-amber-600">
-                                No bin with stock for this material.
-                              </p>
-                            )}
-                          </div>
-                          <div>
-                            <label className="block text-xs text-slate-400">
-                              Picker
-                            </label>
-                            <SearchableSelect
-                              className="mt-0.5"
-                              value={f.pickerId}
-                              onChange={(v) => patchForm(it.id, { pickerId: v })}
-                              placeholder="— Select —"
-                              searchPlaceholder="Search picker…"
-                              options={pickers.map((p) => ({
-                                value: String(p.id),
-                                label: p.name,
-                              }))}
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          )}
-
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => setGenOpen(false)}
-              disabled={submitting}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={handleGenerate}
-              disabled={submitting || genLoading || !pickable || pickable.items.length === 0}
-            >
-              {submitting ? "Generating…" : "Generate Picking"}
-            </button>
-          </div>
-        </div>
-      </Modal>
+        loading={genLoading}
+        submitting={submitting}
+        pickable={pickable}
+        pickers={pickers}
+        loadError={genError}
+        onClose={() => setGenOpen(false)}
+        onSubmit={handleGenerate}
+      />
     </div>
   );
 }

@@ -24,4 +24,10 @@ export class QueryDiscrepancyDto extends SortableQueryDto {
   @IsOptional()
   @IsIn(['quantity', 'quality'])
   type?: string;
+
+  // Source document filter: SO (Sales Order) | TO (Transfer Order) | GR (Goods
+  // Receive). Omitted → all sources.
+  @IsOptional()
+  @IsIn(['SO', 'TO', 'GR'])
+  source_type?: string;
 }

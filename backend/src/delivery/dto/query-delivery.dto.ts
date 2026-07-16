@@ -22,4 +22,9 @@ export class QueryDeliveryDto extends SortableQueryDto {
   @IsOptional()
   @IsString()
   history?: string;
+
+  // SALES_ORDER | TRANSFER_ORDER — filters the delivery/history list by source.
+  @IsOptional()
+  @IsString()
+  source?: string;
 }

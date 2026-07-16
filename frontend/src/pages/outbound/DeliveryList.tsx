@@ -8,7 +8,15 @@ import SortableTh from '../../components/SortableTh';
 const LIMIT = 10;
 
 // Delivery documents generated from Packing.
-export default function DeliveryList() {
+interface DeliveryListProps {
+  source?: 'SALES_ORDER' | 'TRANSFER_ORDER';
+  basePath?: string;
+}
+
+export default function DeliveryList({
+  source,
+  basePath = '/admin/outbound/sales-order',
+}: DeliveryListProps = {}) {
   const [data, setData] = useState<Paginated<DeliveryRow> | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -23,7 +31,13 @@ export default function DeliveryList() {
   async function load() {
     setLoading(true);
     const r = await api.get<Paginated<DeliveryRow>>('/delivery', {
-      params: { page, limit: LIMIT, search: search || undefined, ...params() },
+      params: {
+        page,
+        limit: LIMIT,
+        search: search || undefined,
+        source: source || undefined,
+        ...params(),
+      },
     });
     setData(r.data);
     setLoading(false);
@@ -31,7 +45,7 @@ export default function DeliveryList() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, sort.sortBy, sort.order]);
+  }, [page, search, source, sort.sortBy, sort.order]);
 
   function onSearch(e: FormEvent) {
     e.preventDefault();
@@ -76,8 +90,18 @@ export default function DeliveryList() {
                 <SortableTh label="Delivery ID" col="delivery_code" sort={sort} onSort={onSort} />
                 <SortableTh label="SDO ID" col="sdo_id" sort={sort} onSort={onSort} />
                 <SortableTh label="Packing ID" col="packing_id" sort={sort} onSort={onSort} />
-                <SortableTh label="SO Number" col="so_number" sort={sort} onSort={onSort} />
-                <SortableTh label="Customer" col="customer" sort={sort} onSort={onSort} />
+                <SortableTh
+                  label={source === 'TRANSFER_ORDER' ? 'TO Number' : 'SO Number'}
+                  col="so_number"
+                  sort={sort}
+                  onSort={onSort}
+                />
+                <SortableTh
+                  label={source === 'TRANSFER_ORDER' ? 'Destination' : 'Customer'}
+                  col="customer"
+                  sort={sort}
+                  onSort={onSort}
+                />
                 <SortableTh label="Location" col="location" sort={sort} onSort={onSort} />
                 <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Action</th>
@@ -98,7 +122,7 @@ export default function DeliveryList() {
                     </td>
                     <td className="px-6 py-3 text-slate-600">{d.sdo_id ?? '—'}</td>
                     <td className="px-6 py-3 text-slate-600">{d.packing_id ?? '—'}</td>
-                    <td className="px-6 py-3 text-slate-600">{d.so_number ?? '—'}</td>
+                    <td className="px-6 py-3 text-slate-600">{d.source_number ?? '—'}</td>
                     <td className="px-6 py-3 text-slate-600">{d.customer ?? '—'}</td>
                     <td className="px-6 py-3 text-slate-600">{d.location ?? '—'}</td>
                     <td className="px-6 py-3">
@@ -107,7 +131,7 @@ export default function DeliveryList() {
                     <td className="px-6 py-3">
                       <div className="flex justify-end">
                         <Link
-                          to={`/admin/outbound/sales-order/delivery/${d.id}`}
+                          to={`${basePath}/delivery/${d.id}`}
                           className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
                         >
                           Detail

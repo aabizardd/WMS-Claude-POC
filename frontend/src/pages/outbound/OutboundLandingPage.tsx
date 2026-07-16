@@ -28,12 +28,13 @@ const OUTBOUND_TYPES: OutboundType[] = [
   {
     key: 'transfer-stock',
     title: 'Outbound from Transfer Stock',
-    description: 'Transfer stock out to another warehouse.',
+    description: 'Transfer Order → Picking → Packing → Delivery to another warehouse.',
     accent: 'bg-violet-600',
     icon: (
       <path d="M4 7h13l-3-3m3 3l-3 3M20 17H7l3 3m-3-3l3-3" />
     ),
-    enabled: false,
+    to: '/admin/outbound/transfer-stock',
+    enabled: true,
   },
 ];
 

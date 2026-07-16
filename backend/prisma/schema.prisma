@@ -223,6 +223,7 @@ model Warehouse {
   complaints           Complaint[]
   inventoryAdjustments InventoryAdjustment[]
   purchaseOrders       PurchaseOrder[]
+  transferOrders       TransferOrder[]       @relation("TransferOrderFrom")
 
   @@index([subsidiaryId])
   @@index([parentId])
@@ -630,6 +631,83 @@ model PurchaseOrderLine {
   @@map("purchase_order_lines")
 }
 
+// ===================== Transfer Order (Outbound from Transfer Stock) =====================
+
+// Synced from Oracle "transfer-orders/get". Source doc for Outbound from
+// Transfer Stock (goods move from one warehouse to another). warehouseId is the
+// FROM location (outbound source) used for scoping; toWarehouseId is resolved
+// for the destination.
+model TransferOrder {
+  id       String  @id @default(uuid())
+  oracleId String  @unique @map("oracle_id") // Oracle transfer order id
+  tranId   String? @map("tran_id")
+  tranDate String? @map("tran_date")
+
+  statusCode String? @map("status_code")
+  statusName String? @map("status_name")
+
+  fromLocationOracleId String?    @map("from_location_oracle_id")
+  fromLocationName     String?    @map("from_location_name")
+  warehouseId          String?    @map("warehouse_id") // = FROM location's WMS warehouse (scope)
+  warehouse            Warehouse? @relation("TransferOrderFrom", fields: [warehouseId], references: [id])
+
+  toLocationOracleId String? @map("to_location_oracle_id")
+  toLocationName     String? @map("to_location_name")
+  toWarehouseId      String? @map("to_warehouse_id") // destination WMS warehouse (scalar)
+
+  memo         String?
+  lastModified DateTime? @map("last_modified")
+  dateCreated  String?   @map("date_created")
+
+  createdBy String?  @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  items    TransferOrderItem[]
+  pickings Picking[]
+
+  @@index([warehouseId])
+  @@index([statusName])
+  @@map("transfer_orders")
+}
+
+model TransferOrderItem {
+  id              String        @id @default(uuid())
+  transferOrderId String        @map("transfer_order_id")
+  transferOrder   TransferOrder @relation(fields: [transferOrderId], references: [id], onDelete: Cascade)
+
+  lineNumber   Int     @map("line_number")
+  itemOracleId String? @map("item_oracle_id") // Oracle item id (-> materials.erp_doc_id)
+  itemName     String? @map("item_name")
+  description  String?
+
+  quantity    Float @default(0)
+  committed   Float @default(0)
+  backordered Float @default(0)
+  shipped     Float @default(0)
+  picked      Float @default(0)
+  packed      Float @default(0)
+  fulfilled   Float @default(0)
+  received    Float @default(0)
+
+  // WMS-managed remaining-to-pick = committed at sync, decremented on picking.
+  remainingQty Float @default(0) @map("remaining_qty")
+
+  fromLocationOracleId String? @map("from_location_oracle_id")
+  fromLocationName     String? @map("from_location_name")
+
+  // Resolved WMS material (item_id -> materials.erp_doc_id). Optional.
+  materialId String? @map("material_id")
+
+  pickingItems  PickingItem[]
+  packingItems  PackingItem[]
+  deliveryItems DeliveryItem[]
+
+  @@unique([transferOrderId, lineNumber])
+  @@index([transferOrderId])
+  @@map("transfer_order_items")
+}
+
 // ===================== Inventory Management =====================
 
 // One row per material code per warehouse; quantities = sum of its bin stocks.
@@ -1007,13 +1085,25 @@ enum PickingStatus {
   Closed
 }
 
-// A Picking Document generated from a Sales Order (supports partial item/qty).
+// Outbound docs (Picking/Packing/Delivery) can originate from a Sales Order or
+// a Transfer Order. sourceType discriminates; the matching FK is set.
+enum OutboundSource {
+  SALES_ORDER
+  TRANSFER_ORDER
+}
+
+// A Picking Document generated from a Sales Order OR a Transfer Order.
 model Picking {
   id          String @id @default(uuid())
   pickingCode String @unique @map("picking_code") // PICK-YYYYMMDD-NNN
 
-  salesOrderId String     @map("sales_order_id")
-  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id])
+  sourceType OutboundSource @default(SALES_ORDER) @map("source_type")
+
+  salesOrderId String?     @map("sales_order_id")
+  salesOrder   SalesOrder? @relation(fields: [salesOrderId], references: [id])
+
+  transferOrderId String?        @map("transfer_order_id")
+  transferOrder   TransferOrder? @relation(fields: [transferOrderId], references: [id])
 
   warehouseId String?    @map("warehouse_id")
   warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
@@ -1025,11 +1115,21 @@ model Picking {
 
   items         PickingItem[]
   discrepancies Discrepancy[]
+  // Legacy 1:1 back-ref: set when this picking is the PRIMARY picking of a
+  // packing (Packing.pickingId). Kept for delivery/discrepancy traversal.
   packing       Packing?
 
+  // Membership: the packing this picking was packed into. Several pickings of
+  // the same SO/TO can merge into one packing, so this — not `packing` — is
+  // the field that decides whether a picking is still packable.
+  packingId  String?  @map("packing_id")
+  packingDoc Packing? @relation("PackingMembers", fields: [packingId], references: [id])
+
   @@index([salesOrderId])
+  @@index([transferOrderId])
   @@index([warehouseId])
   @@index([status])
+  @@index([packingId])
   @@map("pickings")
 }
 
@@ -1038,8 +1138,11 @@ model PickingItem {
   pickingId String  @map("picking_id")
   picking   Picking @relation(fields: [pickingId], references: [id], onDelete: Cascade)
 
-  salesOrderItemId String         @map("sales_order_item_id")
-  salesOrderItem   SalesOrderItem @relation(fields: [salesOrderItemId], references: [id])
+  salesOrderItemId String?         @map("sales_order_item_id")
+  salesOrderItem   SalesOrderItem? @relation(fields: [salesOrderItemId], references: [id])
+
+  transferOrderItemId String?            @map("transfer_order_item_id")
+  transferOrderItem   TransferOrderItem? @relation(fields: [transferOrderItemId], references: [id])
 
   materialId   String?   @map("material_id")
   material     Material? @relation(fields: [materialId], references: [id])
@@ -1067,6 +1170,7 @@ model PickingItem {
   @@index([pickingId])
   @@index([materialId])
   @@index([binId])
+  @@index([transferOrderItemId])
   @@map("picking_items")
 }
 
@@ -1077,13 +1181,23 @@ enum PackingStatus {
   Closed
 }
 
-// A Packing Document generated from a (Closed) Picking. One packing per picking.
+// A Packing Document generated from one or more (Closed) Pickings that share
+// the same source SO/TO. `pickingId` is the primary picking; `pickings` lists
+// every merged member.
 model Packing {
   id          String @id @default(uuid())
   packingCode String @unique @map("packing_code") // PACK-YYYYMMDD-NNN
 
+  // Inherited from the source picking (SO or TO).
+  sourceType OutboundSource @default(SALES_ORDER) @map("source_type")
+
+  // Primary picking (first selected). All member pickings share the same SO/TO,
+  // so source traversal through this one is representative.
   pickingId String  @unique @map("picking_id")
   picking   Picking @relation(fields: [pickingId], references: [id])
+
+  // All pickings merged into this packing (includes the primary).
+  pickings Picking[] @relation("PackingMembers")
 
   warehouseId String?    @map("warehouse_id")
   warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
@@ -1106,9 +1220,12 @@ model PackingItem {
   packingId String  @map("packing_id")
   packing   Packing @relation(fields: [packingId], references: [id], onDelete: Cascade)
 
-  // Origin Sales Order line (carried from picking) — for line_number mapping.
+  // Origin source line (SO or TO), carried from picking — for line mapping.
   salesOrderItemId String?         @map("sales_order_item_id")
   salesOrderItem   SalesOrderItem? @relation(fields: [salesOrderItemId], references: [id])
+
+  transferOrderItemId String?            @map("transfer_order_item_id")
+  transferOrderItem   TransferOrderItem? @relation(fields: [transferOrderItemId], references: [id])
 
   materialId   String?   @map("material_id")
   material     Material? @relation(fields: [materialId], references: [id])
@@ -1135,6 +1252,7 @@ model PackingItem {
   @@index([packingId])
   @@index([materialId])
   @@index([binId])
+  @@index([transferOrderItemId])
   @@map("packing_items")
 }
 
@@ -1150,7 +1268,10 @@ enum DeliveryDocStatus {
 model Delivery {
   id           String  @id @default(uuid())
   deliveryCode String  @unique @map("delivery_code") // DEL-YYYYMMDD-NNN
-  sdoId        String? @unique @map("sdo_id") // SDO-YYYYMMDD-NNN, set on shipment
+  sdoId        String? @unique @map("sdo_id") // Oracle fulfillment document_no, set on shipment (falls back to SDO-YYYYMMDD-NNN if the response omits it)
+
+  // Inherited from the source packing (SO or TO).
+  sourceType OutboundSource @default(SALES_ORDER) @map("source_type")
 
   // Oracle Item Fulfillment result (set on successful Generate Shipment).
   oracleFulfillmentId Int? @map("oracle_fulfillment_id")
@@ -1179,9 +1300,12 @@ model DeliveryItem {
   deliveryId String   @map("delivery_id")
   delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
 
-  // Origin Sales Order line (carried from packing) — for line_number mapping.
+  // Origin source line (SO or TO), carried from packing — for line mapping.
   salesOrderItemId String?         @map("sales_order_item_id")
   salesOrderItem   SalesOrderItem? @relation(fields: [salesOrderItemId], references: [id])
+
+  transferOrderItemId String?            @map("transfer_order_item_id")
+  transferOrderItem   TransferOrderItem? @relation(fields: [transferOrderItemId], references: [id])
 
   materialId   String?   @map("material_id")
   material     Material? @relation(fields: [materialId], references: [id])
@@ -1201,6 +1325,7 @@ model DeliveryItem {
   @@index([deliveryId])
   @@index([materialId])
   @@index([binId])
+  @@index([transferOrderItemId])
   @@map("delivery_items")
 }
 

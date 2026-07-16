@@ -38,6 +38,16 @@ export class PickingController {
     return this.service.getPickable(salesOrderId, user);
   }
 
+  // Data for the Generate Picking form from a Transfer Order source.
+  @Get('pickable-transfer/:transferOrderId')
+  @RequirePermissions('picking:create')
+  pickableTransfer(
+    @Param('transferOrderId') transferOrderId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.service.getPickableTransfer(transferOrderId, user);
+  }
+
   @Get(':id')
   @RequirePermissions('picking:read')
   findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {

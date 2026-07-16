@@ -13,6 +13,25 @@ interface RowInput {
   quality: number;
 }
 
+// Rows are grouped per material (a merged packing can carry the same material
+// from several pickings/bins); target & remaining are summed per group.
+function groupKey(it: { material_code: string | null; material_name: string | null; id: string }) {
+  return it.material_code ?? it.material_name ?? it.id;
+}
+
+interface MaterialGroup {
+  key: string;
+  material_code: string | null;
+  material_name: string | null;
+  bins: string[];
+  items: PackingDetail['items'];
+  qty: number;
+  actual: number;
+  qtyIssue: number;
+  quality: number;
+  remaining: number;
+}
+
 function statusBadge(status: string) {
   const map: Record<string, string> = {
     Open: 'bg-amber-50 text-amber-700',
@@ -35,10 +54,10 @@ export default function PackingDetailPage() {
   const [saving, setSaving] = useState(false);
 
   function resetInputs(data: PackingDetail) {
+    // Inputs are keyed per material group, not per underlying packing item.
+    const keys = new Set(data.items.map((it) => groupKey(it)));
     setInputs(
-      Object.fromEntries(
-        data.items.map((it) => [it.id, { actual: 0, qtyIssue: 0, quality: 0 }]),
-      ),
+      Object.fromEntries([...keys].map((k) => [k, { actual: 0, qtyIssue: 0, quality: 0 }])),
     );
   }
 
@@ -60,9 +79,43 @@ export default function PackingDetailPage() {
 
   const editable = canUpdate && pk?.status !== 'Closed';
 
-  function patch(itemId: string, p: Partial<RowInput>) {
-    setInputs((s) => ({ ...s, [itemId]: { ...s[itemId], ...p } }));
+  function patch(key: string, p: Partial<RowInput>) {
+    setInputs((s) => ({ ...s, [key]: { ...s[key], ...p } }));
   }
+
+  // Material groups: same material merged into one display row, target &
+  // remaining summed. Underlying packing items are kept for save distribution.
+  const groups = useMemo<MaterialGroup[]>(() => {
+    if (!pk) return [];
+    const map = new Map<string, MaterialGroup>();
+    for (const it of pk.items) {
+      const key = groupKey(it);
+      let g = map.get(key);
+      if (!g) {
+        g = {
+          key,
+          material_code: it.material_code,
+          material_name: it.material_name,
+          bins: [],
+          items: [],
+          qty: 0,
+          actual: 0,
+          qtyIssue: 0,
+          quality: 0,
+          remaining: 0,
+        };
+        map.set(key, g);
+      }
+      g.items.push(it);
+      if (it.bin_label && !g.bins.includes(it.bin_label)) g.bins.push(it.bin_label);
+      g.qty += it.qty;
+      g.actual += it.actual_qty;
+      g.qtyIssue += it.qty_issue;
+      g.quality += it.quality_issue;
+      g.remaining += it.remaining_qty;
+    }
+    return [...map.values()];
+  }, [pk]);
 
   // Realtime totals = stored totals +/- current inputs.
   const live = useMemo(() => {
@@ -70,8 +123,8 @@ export default function PackingDetailPage() {
     let a = 0,
       qi = 0,
       ql = 0;
-    for (const it of pk.items) {
-      const f = inputs[it.id];
+    for (const g of groups) {
+      const f = inputs[g.key];
       if (!f) continue;
       a += Number(f.actual) || 0;
       qi += Number(f.qtyIssue) || 0;
@@ -83,35 +136,44 @@ export default function PackingDetailPage() {
       quality: pk.totals.quality_issue + ql,
       remaining: pk.totals.remaining - (a + qi + ql),
     };
-  }, [pk, inputs]);
+  }, [pk, groups, inputs]);
 
   async function handleSave() {
     if (!pk) return;
-    const items = pk.items
-      .map((it) => {
-        const f = inputs[it.id] ?? { actual: 0, qtyIssue: 0, quality: 0 };
-        return {
-          id: it.id,
-          actualQty: Number(f.actual) || 0,
-          qtyIssue: Number(f.qtyIssue) || 0,
-          qualityIssue: Number(f.quality) || 0,
-        };
-      })
-      .filter((x) => x.actualQty + x.qtyIssue + x.qualityIssue > 0);
+    // Distribute each group's input across its underlying packing items (fill
+    // one item's remaining before moving to the next) — the progress API is
+    // unchanged and still works per item.
+    const items: { id: string; actualQty: number; qtyIssue: number; qualityIssue: number }[] = [];
+    for (const g of groups) {
+      const f = inputs[g.key];
+      if (!f) continue;
+      let a = Number(f.actual) || 0;
+      let qi = Number(f.qtyIssue) || 0;
+      let ql = Number(f.quality) || 0;
+      if (a + qi + ql <= 0) continue;
+      if (a + qi + ql > g.remaining + 1e-9) {
+        toast.error(`Input exceeds remaining for "${g.material_name ?? g.material_code}".`);
+        return;
+      }
+      for (const it of g.items) {
+        let cap = it.remaining_qty;
+        const ta = Math.min(cap, a);
+        cap -= ta;
+        a -= ta;
+        const tq = Math.min(cap, qi);
+        cap -= tq;
+        qi -= tq;
+        const tl = Math.min(cap, ql);
+        ql -= tl;
+        if (ta + tq + tl > 0) {
+          items.push({ id: it.id, actualQty: ta, qtyIssue: tq, qualityIssue: tl });
+        }
+      }
+    }
 
     if (items.length === 0) {
       toast.error('Enter at least one quantity.');
       return;
-    }
-    // Client-side guard: per-item input must not exceed its remaining.
-    for (const it of pk.items) {
-      const f = inputs[it.id];
-      if (!f) continue;
-      const sum = (Number(f.actual) || 0) + (Number(f.qtyIssue) || 0) + (Number(f.quality) || 0);
-      if (sum > it.remaining_qty + 1e-9) {
-        toast.error(`Input exceeds remaining for "${it.material_name ?? it.material_code}".`);
-        return;
-      }
     }
 
     const ok = await confirm({
@@ -161,7 +223,7 @@ export default function PackingDetailPage() {
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <Link
-            to="/admin/outbound/sales-order/packing"
+            to={`${pk.source_type === 'TRANSFER_ORDER' ? '/admin/outbound/transfer-stock' : '/admin/outbound/sales-order'}/packing`}
             className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
             aria-label="Back"
           >
@@ -186,20 +248,38 @@ export default function PackingDetailPage() {
         <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
           <Meta label="Packing ID" value={pk.packing_id} />
           <Meta label="Picking ID" value={pk.picking_id} />
-          <Meta
-            label="SO Number"
-            value={
-              pk.so_id ? (
-                <Link to={`/admin/outbound/sales-order/list/${pk.so_id}`} className="text-brand-700 hover:underline">
-                  {pk.so_number ?? '—'}
-                </Link>
-              ) : (
-                pk.so_number
-              )
-            }
-          />
+          {pk.source_type === 'TRANSFER_ORDER' ? (
+            <Meta
+              label="TO Number"
+              value={
+                pk.to_id ? (
+                  <Link to={`/admin/outbound/transfer-stock/list/${pk.to_id}`} className="text-brand-700 hover:underline">
+                    {pk.to_number ?? '—'}
+                  </Link>
+                ) : (
+                  pk.to_number
+                )
+              }
+            />
+          ) : (
+            <Meta
+              label="SO Number"
+              value={
+                pk.so_id ? (
+                  <Link to={`/admin/outbound/sales-order/list/${pk.so_id}`} className="text-brand-700 hover:underline">
+                    {pk.so_number ?? '—'}
+                  </Link>
+                ) : (
+                  pk.so_number
+                )
+              }
+            />
+          )}
           <Meta label="Location" value={pk.location} />
-          <Meta label="Customer" value={pk.customer} />
+          <Meta
+            label={pk.source_type === 'TRANSFER_ORDER' ? 'Warehouse Destination' : 'Customer'}
+            value={pk.customer}
+          />
           <Meta label="Status" value={pk.status} />
         </dl>
       </div>
@@ -239,30 +319,32 @@ export default function PackingDetailPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {pk.items.length === 0 ? (
+              {groups.length === 0 ? (
                 <tr>
                   <td colSpan={editable ? 8 : 7} className="px-5 py-8 text-center text-slate-400">
                     No items.
                   </td>
                 </tr>
               ) : (
-                pk.items.map((it) => {
-                  const f = inputs[it.id] ?? { actual: 0, qtyIssue: 0, quality: 0 };
+                groups.map((g) => {
+                  const f = inputs[g.key] ?? { actual: 0, qtyIssue: 0, quality: 0 };
                   const rowInput =
                     (Number(f.actual) || 0) + (Number(f.qtyIssue) || 0) + (Number(f.quality) || 0);
-                  const rowRemaining = it.remaining_qty - rowInput;
-                  const rowEditable = editable && it.remaining_qty > 0;
+                  const rowRemaining = g.remaining - rowInput;
+                  const rowEditable = editable && g.remaining > 0;
                   return (
-                    <tr key={it.id} className="hover:bg-slate-50">
+                    <tr key={g.key} className="hover:bg-slate-50">
                       <td className="px-4 py-3">
-                        <div className="font-medium text-slate-800">{it.material_code ?? '—'}</div>
-                        <div className="text-xs text-slate-400">{it.material_name ?? ''}</div>
+                        <div className="font-medium text-slate-800">{g.material_code ?? '—'}</div>
+                        <div className="text-xs text-slate-400">{g.material_name ?? ''}</div>
                       </td>
-                      <td className="px-4 py-3 text-slate-600">{it.bin_label ?? '—'}</td>
-                      <td className="px-4 py-3 text-right text-slate-600">{it.qty}</td>
-                      <td className="px-4 py-3 text-right text-slate-600">{it.actual_qty}</td>
-                      <td className="px-4 py-3 text-right text-slate-600">{it.qty_issue}</td>
-                      <td className="px-4 py-3 text-right text-slate-600">{it.quality_issue}</td>
+                      <td className="px-4 py-3 text-slate-600">
+                        {g.bins.length > 0 ? g.bins.join(', ') : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right text-slate-600">{g.qty}</td>
+                      <td className="px-4 py-3 text-right text-slate-600">{g.actual}</td>
+                      <td className="px-4 py-3 text-right text-slate-600">{g.qtyIssue}</td>
+                      <td className="px-4 py-3 text-right text-slate-600">{g.quality}</td>
                       <td className={`px-4 py-3 text-right font-medium ${rowRemaining < 0 ? 'text-rose-600' : 'text-slate-800'}`}>
                         {rowRemaining}
                       </td>
@@ -274,19 +356,19 @@ export default function PackingDetailPage() {
                                 type="number" step="any" min={0}
                                 className="input w-16 text-right text-xs"
                                 value={f.actual}
-                                onChange={(e) => patch(it.id, { actual: Number(e.target.value) })}
+                                onChange={(e) => patch(g.key, { actual: Number(e.target.value) })}
                               />
                               <input
                                 type="number" step="any" min={0}
                                 className="input w-16 text-right text-xs"
                                 value={f.qtyIssue}
-                                onChange={(e) => patch(it.id, { qtyIssue: Number(e.target.value) })}
+                                onChange={(e) => patch(g.key, { qtyIssue: Number(e.target.value) })}
                               />
                               <input
                                 type="number" step="any" min={0}
                                 className="input w-16 text-right text-xs"
                                 value={f.quality}
-                                onChange={(e) => patch(it.id, { quality: Number(e.target.value) })}
+                                onChange={(e) => patch(g.key, { quality: Number(e.target.value) })}
                               />
                             </div>
                           ) : (

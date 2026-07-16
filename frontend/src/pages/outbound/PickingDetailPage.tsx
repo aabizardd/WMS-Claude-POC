@@ -165,7 +165,7 @@ export default function PickingDetailPage() {
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <Link
-            to="/admin/outbound/sales-order/picking"
+            to={`${pk.source_type === 'TRANSFER_ORDER' ? '/admin/outbound/transfer-stock' : '/admin/outbound/sales-order'}/picking`}
             className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
             aria-label="Back"
           >
@@ -189,20 +189,41 @@ export default function PickingDetailPage() {
         </h3>
         <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
           <Meta label="Picking ID" value={pk.picking_id} />
-          <Meta
-            label="SO Number"
-            value={
-              pk.so_id ? (
-                <Link to={`/admin/outbound/sales-order/list/${pk.so_id}`} className="text-brand-700 hover:underline">
-                  {pk.so_number ?? '—'}
-                </Link>
-              ) : (
-                pk.so_number
-              )
-            }
-          />
+          {pk.source_type === 'TRANSFER_ORDER' ? (
+            <Meta
+              label="TO Number"
+              value={
+                pk.to_id ? (
+                  <Link
+                    to={`/admin/outbound/transfer-stock/list/${pk.to_id}`}
+                    className="text-brand-700 hover:underline"
+                  >
+                    {pk.to_number ?? '—'}
+                  </Link>
+                ) : (
+                  pk.to_number
+                )
+              }
+            />
+          ) : (
+            <Meta
+              label="SO Number"
+              value={
+                pk.so_id ? (
+                  <Link to={`/admin/outbound/sales-order/list/${pk.so_id}`} className="text-brand-700 hover:underline">
+                    {pk.so_number ?? '—'}
+                  </Link>
+                ) : (
+                  pk.so_number
+                )
+              }
+            />
+          )}
           <Meta label="Location" value={pk.location} />
-          <Meta label="Customer" value={pk.customer} />
+          <Meta
+            label={pk.source_type === 'TRANSFER_ORDER' ? 'Warehouse Destination' : 'Customer'}
+            value={pk.customer}
+          />
           <Meta label="Status" value={statusLabel(pk.status)} />
         </dl>
       </div>

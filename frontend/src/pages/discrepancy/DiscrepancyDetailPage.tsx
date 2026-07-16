@@ -99,6 +99,11 @@ export default function DiscrepancyDetailPage() {
           <Meta label="Discrepancy ID" value={disc.discrepancy_id} />
           <Meta label="Source Number" value={disc.source_number} />
           <Meta label="Source" value={disc.source} />
+          {/* Detail-only: which process raised it, and its picking document. */}
+          <Meta label="Source Process" value={disc.source_process} />
+          {disc.picking_code && (
+            <Meta label="Picking ID" value={disc.picking_code} />
+          )}
           <Meta label="Type" value={disc.discrepancy_type} />
           <Meta label="From" value={disc.discrepancy_from} />
           <Meta label="Reported By" value={disc.reported_by} />

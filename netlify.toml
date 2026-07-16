@@ -16,6 +16,21 @@
   to = "/index.html"
   status = 200
 
+# ── Security headers ───────────────────────────────────────────────────────
+# Mirrors frontend/nginx-security-headers.conf — keep the two in sync.
+# NOTE: connect-src must list the API origin here, because Netlify is a
+# split-origin deploy (VITE_API_URL points at the backend). Replace the
+# placeholder below with your backend origin, or the app cannot call the API.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+    Strict-Transport-Security = "max-age=31536000"
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://REPLACE-WITH-BACKEND-ORIGIN; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+
 # ── Optional: same-origin API proxy (no CORS) ──────────────────────────────
 # Instead of setting VITE_API_URL, forward /api to the backend here and leave
 # VITE_API_URL empty (frontend defaults to "/api"). Note: Netlify proxies have

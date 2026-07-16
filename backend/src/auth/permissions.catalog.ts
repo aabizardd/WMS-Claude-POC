@@ -56,6 +56,8 @@ const RESOURCES: { resource: string; label: string; actions: string[] }[] = [
   { resource: 'putaway', label: 'Putaway', actions: ['read', 'create', 'update'] },
   // Outbound — Sales Orders mirror Oracle — read/sync only.
   { resource: 'sales-orders', label: 'Sales Orders', actions: ['read', 'sync'] },
+  // Outbound (Transfer Stock) — Transfer Orders mirror Oracle — read/sync.
+  { resource: 'transfer-orders', label: 'Transfer Orders', actions: ['read', 'sync'] },
   // Outbound — Picking generated from Sales Order — read, create (generate).
   { resource: 'picking', label: 'Picking', actions: ['read', 'create', 'update', 'delete'] },
   // Outbound — Packing generated from (Closed) Picking — read, create, update (progress).
@@ -103,6 +105,7 @@ export const STAFF_PERMISSION_KEYS = [
   'discrepancy:read',
   'putaway:read',
   'sales-orders:read',
+  'transfer-orders:read',
   'picking:read',
   'packing:read',
   'delivery:read',

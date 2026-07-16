@@ -452,6 +452,72 @@ export interface PurchaseOrderSyncResult {
   durationMs: number;
 }
 
+// ===== Transfer Order (Outbound from Transfer Stock) =====
+
+export interface TransferOrderRow {
+  id: string;
+  oracle_id: string;
+  tran_id: string | null;
+  tran_date: string | null;
+  status_code: string | null;
+  status_name: string | null;
+  from_location_name: string | null;
+  to_location_name: string | null;
+  warehouse: { id: string; name: string } | null;
+  item_count: number;
+  last_modified: string | null;
+  created_at: string;
+}
+
+export interface TransferOrderLine {
+  id: string;
+  line_number: number;
+  item_oracle_id: string | null;
+  item_name: string | null;
+  material_name: string | null;
+  material_code: string | null;
+  description: string | null;
+  quantity: number;
+  committed: number;
+  backordered: number;
+  shipped: number;
+  picked: number;
+  packed: number;
+  fulfilled: number;
+  received: number;
+  from_location_name: string | null;
+  material_id: string | null;
+}
+
+export interface TransferOrderDetail {
+  id: string;
+  oracle_id: string;
+  tran_id: string | null;
+  tran_date: string | null;
+  status_code: string | null;
+  status_name: string | null;
+  from_location_name: string | null;
+  to_location_name: string | null;
+  warehouse: { id: string; name: string } | null;
+  memo: string | null;
+  date_created: string | null;
+  last_modified: string | null;
+  created_at: string;
+  items: TransferOrderLine[];
+}
+
+export interface TransferOrderSyncResult {
+  fullSync: boolean;
+  lastModified: string | null;
+  totalRecords: number;
+  totalPages: number;
+  pagesFetched: number;
+  upserted: number;
+  skipped: number;
+  failed: number;
+  durationMs: number;
+}
+
 export interface ErpSyncResult {
   fullSync: boolean;
   lastModified: string | null;
@@ -676,10 +742,15 @@ export interface Bin {
 export interface DiscrepancyRow {
   id: string;
   discrepancy_id: string;
+  // Which document the discrepancy originates from — drives the source filter.
+  source_type: 'SO' | 'TO' | 'GR' | null;
+  // Outbound: the originating SO/TO number. Inbound: the GR number.
   source_number: string | null;
   source: string | null;
-  // Sales Order number for outbound discrepancies (null for inbound).
+  // Sales Order / Transfer Order number for outbound discrepancies — exactly one
+  // is set (null for inbound). Used to group the list per source document.
   so_number: string | null;
+  to_number: string | null;
   discrepancy_type: string;
   discrepancy_from: string;
   reported_by: string | null;
@@ -700,10 +771,16 @@ export interface DiscrepancyDetailItem {
 export interface DiscrepancyDetail {
   id: string;
   discrepancy_id: string;
+  source_type: 'SO' | 'TO' | 'GR' | null;
+  // Outbound: the originating SO/TO number. Inbound: the GR number.
   source_number: string | null;
   source: string | null;
-  // Sales Order number for outbound discrepancies (null for inbound).
   so_number: string | null;
+  to_number: string | null;
+  // Detail-only: the process that raised it ('Picking' | 'Packing' | 'Goods
+  // Receive') and the linked picking document.
+  source_process: string | null;
+  picking_code: string | null;
   discrepancy_type: string;
   discrepancy_from: string;
   reported_by: string | null;
@@ -816,8 +893,12 @@ export interface SalesOrderSyncResult extends ErpSyncResult {
 export interface PickingRow {
   id: string;
   picking_id: string;
+  source_type: 'SALES_ORDER' | 'TRANSFER_ORDER';
   so_id: string | null;
   so_number: string | null;
+  to_id: string | null;
+  to_number: string | null;
+  source_number: string | null;
   location: string | null;
   customer: string | null;
   status: string;
@@ -852,8 +933,11 @@ export interface PickingTotals {
 export interface PickingDetail {
   id: string;
   picking_id: string;
+  source_type: 'SALES_ORDER' | 'TRANSFER_ORDER';
   so_id: string | null;
   so_number: string | null;
+  to_id: string | null;
+  to_number: string | null;
   location: string | null;
   customer: string | null;
   status: string;
@@ -877,8 +961,11 @@ export interface AvailablePickingRow {
 export interface PackingRow {
   id: string;
   packing_id: string;
+  source_type: 'SALES_ORDER' | 'TRANSFER_ORDER';
   picking_id: string | null;
   so_number: string | null;
+  to_number: string | null;
+  source_number: string | null;
   customer: string | null;
   location: string | null;
   status: string;
@@ -910,9 +997,12 @@ export interface PackingTotals {
 export interface PackingDetail {
   id: string;
   packing_id: string;
+  source_type: 'SALES_ORDER' | 'TRANSFER_ORDER';
   picking_id: string | null;
   so_id: string | null;
   so_number: string | null;
+  to_id: string | null;
+  to_number: string | null;
   customer: string | null;
   location: string | null;
   status: string;
@@ -927,8 +1017,11 @@ export interface DeliveryRow {
   id: string;
   delivery_id: string;
   sdo_id: string | null;
+  source_type: 'SALES_ORDER' | 'TRANSFER_ORDER';
   packing_id: string | null;
   so_number: string | null;
+  to_number: string | null;
+  source_number: string | null;
   customer: string | null;
   location: string | null;
   status: string;
@@ -937,8 +1030,13 @@ export interface DeliveryRow {
 }
 
 export interface DeliveryTracking {
+  // Step 1 of the chain is the Sales Order or the Transfer Order, per source_type.
+  source_type: 'SALES_ORDER' | 'TRANSFER_ORDER';
   so_id: string | null;
   so_number: string | null;
+  to_id: string | null;
+  to_number: string | null;
+  // Customer for SO; destination warehouse for TO.
   customer: string | null;
   picking_id: string | null;
   picking_code: string | null;
@@ -965,10 +1063,14 @@ export interface DeliveryDetail {
   id: string;
   delivery_id: string;
   sdo_id: string | null;
+  source_type: 'SALES_ORDER' | 'TRANSFER_ORDER';
   packing_id: string | null;
   so_id: string | null;
   so_oracle_id: string | null;
   so_number: string | null;
+  to_id: string | null;
+  to_oracle_id: string | null;
+  to_number: string | null;
   customer: string | null;
   location: string | null;
   status: string;

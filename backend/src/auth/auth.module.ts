@@ -5,6 +5,7 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { LoginThrottleService } from './login-throttle.service';
+import { PermissionSyncService } from './permission-sync.service';
 import { getJwtSecret } from './jwt-secret.util';
 
 @Module({
@@ -16,6 +17,6 @@ import { getJwtSecret } from './jwt-secret.util';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, LoginThrottleService],
+  providers: [AuthService, JwtStrategy, LoginThrottleService, PermissionSyncService],
 })
 export class AuthModule {}

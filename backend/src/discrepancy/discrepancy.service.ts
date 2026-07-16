@@ -18,11 +18,17 @@ const DISCREPANCY_SORTABLE: Record<string, (d: SortDir) => DiscrepancyOrder> = {
   created_at: (d) => ({ createdAt: d }),
 };
 
+// The picking carries the outbound source doc (Sales Order or Transfer Order).
+const pickingSelect = {
+  pickingCode: true,
+  sourceType: true,
+  salesOrder: { select: { tranId: true } },
+  transferOrder: { select: { tranId: true } },
+} satisfies Prisma.PickingSelect;
+
 const listInclude = {
   goodsReceive: { select: { grNumber: true } },
-  picking: {
-    select: { pickingCode: true, salesOrder: { select: { tranId: true } } },
-  },
+  picking: { select: pickingSelect },
   reportedBy: { select: { id: true, name: true } },
   warehouse: { select: { id: true, name: true } },
   _count: { select: { details: true } },
@@ -30,39 +36,66 @@ const listInclude = {
 
 const detailInclude = {
   goodsReceive: { select: { grNumber: true } },
-  picking: {
-    select: { pickingCode: true, salesOrder: { select: { tranId: true } } },
-  },
+  picking: { select: pickingSelect },
   reportedBy: { select: { id: true, name: true } },
   warehouse: { select: { id: true, name: true } },
   details: { orderBy: { createdAt: 'asc' as const } },
 } satisfies Prisma.DiscrepancyInclude;
 
-// Header "Source Number" + "Source" label, derived from the linked document.
-// so_number is the Sales Order number (tranId) for outbound discrepancies — used
-// by the FE to group outbound discrepancies per Sales Order.
-function sourceOf(d: {
+type SourceDoc = {
   goodsReceive?: { grNumber: string } | null;
-  picking?: { pickingCode: string; salesOrder?: { tranId: string | null } | null } | null;
-}) {
+  picking?: {
+    pickingCode: string;
+    sourceType: string;
+    salesOrder?: { tranId: string | null } | null;
+    transferOrder?: { tranId: string | null } | null;
+  } | null;
+};
+
+// Header "Source Number" + "Source" label, derived from the linked document.
+// For outbound the source number is the originating SO/TO number (NOT the
+// picking code) so the list identifies the order the discrepancy belongs to;
+// the picking/packing process is exposed on the detail only (see processOf).
+function sourceOf(d: SourceDoc) {
   if (d.goodsReceive) {
     return {
+      source_type: 'GR' as string | null,
       source_number: d.goodsReceive.grNumber,
       source: 'Inbound - Goods Receive',
       so_number: null as string | null,
+      to_number: null as string | null,
     };
   }
   if (d.picking) {
+    const isTransfer = d.picking.sourceType === 'TRANSFER_ORDER';
+    const soNumber = d.picking.salesOrder?.tranId ?? null;
+    const toNumber = d.picking.transferOrder?.tranId ?? null;
     return {
-      source_number: d.picking.pickingCode,
-      source: 'Outbound - Picking',
-      so_number: d.picking.salesOrder?.tranId ?? null,
+      source_type: (isTransfer ? 'TO' : 'SO') as string | null,
+      source_number: (isTransfer ? toNumber : soNumber) ?? null,
+      source: isTransfer ? 'Outbound - Transfer Order' : 'Outbound - Sales Order',
+      so_number: soNumber,
+      to_number: toNumber,
     };
   }
   return {
+    source_type: null as string | null,
     source_number: null as string | null,
     source: null as string | null,
     so_number: null as string | null,
+    to_number: null as string | null,
+  };
+}
+
+// Detail-only: which process raised the discrepancy. A header is created by a
+// single process, so every detail row shares one sourceFrom ('Picking' |
+// 'Packing' | 'GR') — take it from the first row.
+function processOf(d: SourceDoc & { details: { sourceFrom: string }[] }) {
+  const raw = d.details[0]?.sourceFrom ?? null;
+  const label = raw === 'GR' ? 'Goods Receive' : raw;
+  return {
+    source_process: label,
+    picking_code: d.picking?.pickingCode ?? null,
   };
 }
 
@@ -90,6 +123,7 @@ export class DiscrepancyService {
       limit?: number;
       search?: string;
       type?: string;
+      source_type?: string;
       sort_by?: string;
       sort_order?: string;
     },
@@ -108,6 +142,16 @@ export class DiscrepancyService {
     if (query.type === 'quantity' || query.type === 'quality') {
       where.discrepancyType = query.type;
     }
+    // Source document filter. Omitted → all sources.
+    if (query.source_type === 'GR') {
+      where.goodsReceive = { isNot: null };
+    } else if (query.source_type === 'SO' || query.source_type === 'TO') {
+      where.picking = {
+        is: {
+          sourceType: query.source_type === 'TO' ? 'TRANSFER_ORDER' : 'SALES_ORDER',
+        },
+      };
+    }
     if (query.search) {
       where.OR = [
         { discrepancyId: { contains: query.search, mode: 'insensitive' } },
@@ -119,6 +163,17 @@ export class DiscrepancyService {
         {
           picking: {
             pickingCode: { contains: query.search, mode: 'insensitive' },
+          },
+        },
+        // The list shows the SO/TO number, so it must be searchable too.
+        {
+          picking: {
+            salesOrder: { tranId: { contains: query.search, mode: 'insensitive' } },
+          },
+        },
+        {
+          picking: {
+            transferOrder: { tranId: { contains: query.search, mode: 'insensitive' } },
           },
         },
       ];
@@ -142,6 +197,7 @@ export class DiscrepancyService {
         page,
         limit,
         type: query.type ?? null,
+        source_type: query.source_type ?? null,
         sort_by: query.sort_by ?? null,
         sort_order: query.sort_order ?? null,
       },
@@ -245,6 +301,8 @@ export class DiscrepancyService {
       id: d.id,
       discrepancy_id: d.discrepancyId,
       ...sourceOf(d),
+      // Detail-only: the process (Picking/Packing) the discrepancy came from.
+      ...processOf(d),
       discrepancy_type: d.discrepancyType,
       discrepancy_from: d.discrepancyFrom,
       reported_by: d.reportedBy?.name ?? null,

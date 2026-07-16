@@ -44,6 +44,9 @@ const PERMISSION_TREE: TreeNode[] = [
       },
       { label: 'Vendors', resource: 'vendors' },
       { label: 'Customers', resource: 'customers' },
+      { label: 'Departments', resource: 'departments' },
+      { label: 'Classes', resource: 'classes' },
+      { label: 'Subsidiaries', resource: 'subsidiaries' },
       {
         label: 'User Management',
         children: [
@@ -73,24 +76,33 @@ const PERMISSION_TREE: TreeNode[] = [
     ],
   },
   {
+    // Flat on purpose: only the source lists are per-document (SO vs TO).
+    // Picking/Packing/Delivery are a single shared resource each, serving both
+    // sources — nesting them under a source would imply a per-source permission
+    // that does not exist and would render the same checkbox twice.
     label: 'Outbound',
     children: [
-      {
-        label: 'Sales Order',
-        children: [
-          { label: 'List Outbound', resource: 'sales-orders' },
-          { label: 'Picking', resource: 'picking' },
-          { label: 'Packing', resource: 'packing' },
-          { label: 'Delivery', resource: 'delivery' },
-        ],
-      },
-      { label: 'Transfer Stock', comingSoon: true },
+      { label: 'List SO (Sales Order)', resource: 'sales-orders' },
+      { label: 'List TO (Transfer Order)', resource: 'transfer-orders' },
+      { label: 'Picking', resource: 'picking' },
+      { label: 'Packing', resource: 'packing' },
+      { label: 'Delivery', resource: 'delivery' },
     ],
   },
-  { label: 'Inventory', resource: 'inventory' },
+  {
+    label: 'Inventory',
+    children: [
+      { label: 'Inventory Management', resource: 'inventory' },
+      { label: 'Inventory Adjustment', resource: 'inventory-adjustments' },
+    ],
+  },
   { label: 'Discrepancy', resource: 'discrepancy' },
   { label: 'Complaint', resource: 'complaints' },
   { label: 'Report', comingSoon: true },
+  {
+    label: 'System',
+    children: [{ label: 'Sync Logs', resource: 'sync-logs' }],
+  },
 ];
 
 function treeResources(nodes: TreeNode[]): string[] {

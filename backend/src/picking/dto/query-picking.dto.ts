@@ -18,4 +18,9 @@ export class QueryPickingDto extends SortableQueryDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  // SALES_ORDER | TRANSFER_ORDER — filters the picking list by source.
+  @IsOptional()
+  @IsString()
+  source?: string;
 }

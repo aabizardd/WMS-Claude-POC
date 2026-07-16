@@ -107,7 +107,7 @@ export default function DeliveryDetailPage() {
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <Link
-            to="/admin/outbound/sales-order/delivery"
+            to={`${dl.source_type === 'TRANSFER_ORDER' ? '/admin/outbound/transfer-stock' : '/admin/outbound/sales-order'}/delivery`}
             className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
             aria-label="Back"
           >
@@ -166,21 +166,44 @@ export default function DeliveryDetailPage() {
           <Meta label="Delivery ID" value={dl.delivery_id} />
           <Meta label="SDO ID" value={dl.sdo_id} />
           <Meta label="Packing ID" value={dl.packing_id} />
-          <Meta
-            label="SO Number"
-            value={
-              dl.so_id ? (
-                <Link to={`/admin/outbound/sales-order/list/${dl.so_id}`} className="text-brand-700 hover:underline">
-                  {dl.so_number ?? '—'}
-                </Link>
-              ) : (
-                dl.so_number
-              )
-            }
-          />
-          <Meta label="Sales Order (Oracle ID)" value={dl.so_oracle_id} />
+          {dl.source_type === 'TRANSFER_ORDER' ? (
+            <>
+              <Meta
+                label="TO Number"
+                value={
+                  dl.to_id ? (
+                    <Link to={`/admin/outbound/transfer-stock/list/${dl.to_id}`} className="text-brand-700 hover:underline">
+                      {dl.to_number ?? '—'}
+                    </Link>
+                  ) : (
+                    dl.to_number
+                  )
+                }
+              />
+              <Meta label="Transfer Order (Oracle ID)" value={dl.to_oracle_id} />
+            </>
+          ) : (
+            <>
+              <Meta
+                label="SO Number"
+                value={
+                  dl.so_id ? (
+                    <Link to={`/admin/outbound/sales-order/list/${dl.so_id}`} className="text-brand-700 hover:underline">
+                      {dl.so_number ?? '—'}
+                    </Link>
+                  ) : (
+                    dl.so_number
+                  )
+                }
+              />
+              <Meta label="Sales Order (Oracle ID)" value={dl.so_oracle_id} />
+            </>
+          )}
           <Meta label="Location" value={dl.location} />
-          <Meta label="Customer" value={dl.customer} />
+          <Meta
+            label={dl.source_type === 'TRANSFER_ORDER' ? 'Warehouse Destination' : 'Customer'}
+            value={dl.customer}
+          />
           <Meta label="Status" value={dl.status} />
         </dl>
       </div>

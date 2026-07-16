@@ -20,10 +20,28 @@ async function bootstrap() {
   app.use(json({ limit: '10mb' }));
   app.use(urlencoded({ extended: true, limit: '10mb' }));
 
-  app.enableCors({
-    origin: process.env.FRONTEND_ORIGIN?.split(',') ?? 'http://localhost:5173',
-    credentials: true,
-  });
+  // CORS allow-list from FRONTEND_ORIGIN (comma-separated). Parsed defensively:
+  // `''?.split(',')` yields [''] — an allow-list matching nothing — which would
+  // reject every browser request, and untrimmed entries never match a real
+  // Origin header.
+  const origins = (process.env.FRONTEND_ORIGIN ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+  const isProd = process.env.NODE_ENV === 'production';
+  if (origins.length > 0) {
+    app.enableCors({ origin: origins, credentials: true });
+  } else if (!isProd) {
+    // Dev convenience only — never fall back to localhost in production.
+    app.enableCors({ origin: 'http://localhost:5173', credentials: true });
+  } else {
+    // No allow-list in production: correct for a same-origin deploy (the nginx
+    // in front forwards /api). Split-origin deploys MUST set FRONTEND_ORIGIN.
+    console.warn(
+      '[CORS] FRONTEND_ORIGIN is not set — CORS disabled (same-origin mode). ' +
+        'Set it if the frontend is served from a different origin.',
+    );
+  }
 
   app.useGlobalPipes(
     new ValidationPipe({

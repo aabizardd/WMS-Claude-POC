@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../lib/api';
 import type { DiscrepancyRow, Paginated } from '../../types';
@@ -30,6 +30,8 @@ export default function DiscrepancyPage() {
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('quantity');
+  // Source document filter. '' = all sources (default).
+  const [sourceFilter, setSourceFilter] = useState<string>('');
   const { sort, toggle, params } = useSort();
   const onSort = (col: string) => {
     setPage(1);
@@ -44,6 +46,7 @@ export default function DiscrepancyPage() {
         limit: LIMIT,
         search: search || undefined,
         type: typeFilter || undefined,
+        source_type: sourceFilter || undefined,
         ...params(),
       },
     });
@@ -54,7 +57,7 @@ export default function DiscrepancyPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, typeFilter, sort.sortBy, sort.order]);
+  }, [page, search, typeFilter, sourceFilter, sort.sortBy, sort.order]);
 
   function onSearch(e: FormEvent) {
     e.preventDefault();
@@ -64,24 +67,7 @@ export default function DiscrepancyPage() {
 
   const totalPage = data?.total_page ?? 0;
 
-  // Group (within the current page): outbound discrepancies that carry a Sales
-  // Order number are grouped per SO; inbound (no SO) render in a separate group.
   const rows = data?.rows ?? [];
-  const withSo = rows
-    .filter((r) => r.so_number)
-    .sort((a, b) => (a.so_number ?? '').localeCompare(b.so_number ?? ''));
-  const withoutSo = rows.filter((r) => !r.so_number);
-
-  const groupHeader = (label: string) => (
-    <tr className="bg-brand-50/50">
-      <td
-        colSpan={9}
-        className="px-6 py-2 text-xs font-semibold uppercase tracking-wide text-brand-700"
-      >
-        {label}
-      </td>
-    </tr>
-  );
 
   const discRow = (d: DiscrepancyRow) => (
     <tr key={d.id} className="hover:bg-slate-50">
@@ -137,7 +123,7 @@ export default function DiscrepancyPage() {
         <form onSubmit={onSearch} className="flex gap-2">
           <input
             className="input max-w-xs"
-            placeholder="Search discrepancy / GR number…"
+            placeholder="Search discrepancy / SO / TO / GR number…"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
           />
@@ -181,6 +167,36 @@ export default function DiscrepancyPage() {
             Quality
           </button>
         </div>
+
+        {/* Source document filter — default "All". */}
+        <div className="flex items-center rounded-lg border border-slate-200 bg-white p-0.5">
+          {[
+            { value: '', label: 'All Sources' },
+            { value: 'SO', label: 'SO' },
+            { value: 'TO', label: 'TO' },
+            { value: 'GR', label: 'GR' },
+          ].map((opt) => (
+            <button
+              key={opt.value || 'all'}
+              title={
+                { SO: 'Sales Order', TO: 'Transfer Order', GR: 'Goods Receive' }[
+                  opt.value
+                ] ?? 'All sources'
+              }
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                sourceFilter === opt.value
+                  ? 'bg-brand-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-800'
+              }`}
+              onClick={() => {
+                setPage(1);
+                setSourceFilter(opt.value);
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="card overflow-hidden">
@@ -210,27 +226,7 @@ export default function DiscrepancyPage() {
                   </td>
                 </tr>
               ) : rows.length > 0 ? (
-                <>
-                  {/* Outbound discrepancies grouped per Sales Order. */}
-                  {withSo.map((d, i) => {
-                    const newGroup =
-                      i === 0 || withSo[i - 1].so_number !== d.so_number;
-                    return (
-                      <Fragment key={d.id}>
-                        {newGroup && groupHeader(`Sales Order: ${d.so_number}`)}
-                        {discRow(d)}
-                      </Fragment>
-                    );
-                  })}
-                  {/* Inbound / no Sales Order. */}
-                  {withoutSo.length > 0 && (
-                    <Fragment key="__no_so__">
-                      {withSo.length > 0 &&
-                        groupHeader('Other (inbound / no Sales Order)')}
-                      {withoutSo.map((d) => discRow(d))}
-                    </Fragment>
-                  )}
-                </>
+                rows.map((d) => discRow(d))
               ) : (
                 <tr>
                   <td

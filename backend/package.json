@@ -18,6 +18,7 @@
     "sync:mrn": "ts-node src/scripts/sync-mrn.ts",
     "sync:sales-orders": "ts-node src/scripts/sync-sales-orders.ts",
     "sync:purchase-orders": "ts-node src/scripts/sync-purchase-orders.ts",
+    "sync:transfer-orders": "ts-node src/scripts/sync-transfer-orders.ts",
     "so:reset": "ts-node src/scripts/reset-sales-orders.ts",
     "seed:outbound-test": "ts-node src/scripts/seed-outbound-test.ts",
     "db:reset": "prisma migrate reset --force"

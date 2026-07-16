@@ -33,6 +33,7 @@ const listInclude = {
     select: {
       pickingCode: true,
       salesOrder: { select: { id: true, tranId: true, customerName: true } },
+      transferOrder: { select: { id: true, tranId: true, toLocationName: true } },
     },
   },
   _count: { select: { items: true } },
@@ -44,6 +45,7 @@ const detailInclude = {
     select: {
       pickingCode: true,
       salesOrder: { select: { id: true, tranId: true, customerName: true } },
+      transferOrder: { select: { id: true, tranId: true, toLocationName: true } },
     },
   },
   items: {
@@ -82,6 +84,7 @@ export class PackingService {
       page?: number;
       limit?: number;
       search?: string;
+      source?: string;
       sort_by?: string;
       sort_order?: string;
     },
@@ -99,6 +102,9 @@ export class PackingService {
       ...this.scopeWhere(scope),
       delivery: { is: null },
     };
+    if (query.source === 'SALES_ORDER' || query.source === 'TRANSFER_ORDER') {
+      where.sourceType = query.source;
+    }
     if (query.search) {
       where.OR = [
         { packingCode: { contains: query.search, mode: 'insensitive' } },
@@ -106,6 +112,11 @@ export class PackingService {
         {
           picking: {
             salesOrder: { tranId: { contains: query.search, mode: 'insensitive' } },
+          },
+        },
+        {
+          picking: {
+            transferOrder: { tranId: { contains: query.search, mode: 'insensitive' } },
           },
         },
       ];
@@ -206,11 +217,29 @@ export class PackingService {
           `Only Closed pickings can be packed (${p.pickingCode} is ${p.status})`,
         );
       }
-      if (p.packing) {
+      // packingId covers merged membership; p.packing covers being a primary.
+      if (p.packingId || p.packing) {
         throw new BadRequestException(
           `Picking ${p.pickingCode} already has a packing document`,
         );
       }
+    }
+
+    // All selected pickings must come from the SAME source document (one SO or
+    // one TO) — they merge into a single packing.
+    const first = byId.get(dto.pickingIds[0])!;
+    const sameSource = dto.pickingIds.every((id) => {
+      const p = byId.get(id)!;
+      return (
+        p.sourceType === first.sourceType &&
+        p.salesOrderId === first.salesOrderId &&
+        p.transferOrderId === first.transferOrderId
+      );
+    });
+    if (!sameSource) {
+      throw new BadRequestException(
+        'All selected pickings must belong to the same Sales Order / Transfer Order',
+      );
     }
 
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -220,35 +249,41 @@ export class PackingService {
 
     const createdCodes: string[] = [];
     await this.prisma.$transaction(async (tx) => {
-      let seq = baseCount;
-      for (const id of dto.pickingIds) {
-        const p = byId.get(id)!;
-        seq += 1;
-        const packingCode = `PACK-${today}-${String(seq).padStart(3, '0')}`;
-        // Carry only the actually-picked qty into packing detail.
-        const items = p.items
-          .filter((it) => it.actualQty > 0)
-          .map((it) => ({
-            salesOrderItemId: it.salesOrderItemId, // carry SO line reference
-            materialId: it.materialId,
-            materialCode: it.materialCode,
-            materialName: it.materialName,
-            qty: it.actualQty, // base = picking actual qty
-            remainingQty: it.actualQty, // nothing packed yet
-            binId: it.binId,
-            pickerId: it.pickerId,
-          }));
-        await tx.packing.create({
-          data: {
-            packingCode,
-            pickingId: p.id,
-            warehouseId: p.warehouseId,
-            status: 'Open',
-            items: { create: items },
-          },
-        });
-        createdCodes.push(packingCode);
-      }
+      const packingCode = `PACK-${today}-${String(baseCount + 1).padStart(3, '0')}`;
+      // One packing for all selected pickings; detail = union of their items,
+      // carrying only the actually-picked qty.
+      const items = dto.pickingIds
+        .flatMap((id) => byId.get(id)!.items)
+        .filter((it) => it.actualQty > 0)
+        .map((it) => ({
+          // Carry the source line reference (SO or TO) through from picking.
+          salesOrderItemId: it.salesOrderItemId,
+          transferOrderItemId: it.transferOrderItemId,
+          materialId: it.materialId,
+          materialCode: it.materialCode,
+          materialName: it.materialName,
+          qty: it.actualQty, // base = picking actual qty
+          remainingQty: it.actualQty, // nothing packed yet
+          binId: it.binId,
+          pickerId: it.pickerId,
+        }));
+      const packing = await tx.packing.create({
+        data: {
+          packingCode,
+          sourceType: first.sourceType, // inherit source (same for all members)
+          pickingId: first.id, // primary picking (first selected)
+          warehouseId: first.warehouseId,
+          status: 'Open',
+          items: { create: items },
+        },
+      });
+      // Mark every selected picking as a member of this packing — this is what
+      // removes them from the "packable" picking list.
+      await tx.picking.updateMany({
+        where: { id: { in: dto.pickingIds } },
+        data: { packingId: packing.id },
+      });
+      createdCodes.push(packingCode);
     });
 
     this.logger.log(
@@ -425,9 +460,18 @@ export class PackingService {
     return {
       id: p.id,
       packing_id: p.packingCode,
+      source_type: p.sourceType,
       picking_id: p.picking?.pickingCode ?? null,
       so_number: p.picking?.salesOrder?.tranId ?? null,
-      customer: p.picking?.salesOrder?.customerName ?? null,
+      to_number: p.picking?.transferOrder?.tranId ?? null,
+      source_number:
+        p.picking?.salesOrder?.tranId ??
+        p.picking?.transferOrder?.tranId ??
+        null,
+      customer:
+        p.picking?.salesOrder?.customerName ??
+        p.picking?.transferOrder?.toLocationName ??
+        null,
       location: p.warehouse?.name ?? null,
       status: p.status,
       item_count: p._count.items,
@@ -449,10 +493,20 @@ export class PackingService {
     return {
       id: p.id,
       packing_id: p.packingCode,
+      source_type: p.sourceType,
       picking_id: p.picking?.pickingCode ?? null,
       so_id: p.picking?.salesOrder?.id ?? null,
       so_number: p.picking?.salesOrder?.tranId ?? null,
-      customer: p.picking?.salesOrder?.customerName ?? null,
+      to_id: p.picking?.transferOrder?.id ?? null,
+      to_number: p.picking?.transferOrder?.tranId ?? null,
+      source_number:
+        p.picking?.salesOrder?.tranId ??
+        p.picking?.transferOrder?.tranId ??
+        null,
+      customer:
+        p.picking?.salesOrder?.customerName ??
+        p.picking?.transferOrder?.toLocationName ??
+        null,
       location: p.warehouse?.name ?? null,
       status: p.status,
       created_at: p.createdAt,

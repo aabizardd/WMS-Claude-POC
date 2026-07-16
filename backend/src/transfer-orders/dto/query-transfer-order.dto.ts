@@ -1,8 +1,8 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { SortableQueryDto } from '../../common/dto/sortable-query.dto';
 
-export class QueryPackingDto extends SortableQueryDto {
+export class QueryTransferOrderDto extends SortableQueryDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -13,14 +13,14 @@ export class QueryPackingDto extends SortableQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(100)
   limit?: number = 10;
 
   @IsOptional()
   @IsString()
   search?: string;
 
-  // SALES_ORDER | TRANSFER_ORDER — filters the packing list by source.
   @IsOptional()
   @IsString()
-  source?: string;
+  status?: string;
 }

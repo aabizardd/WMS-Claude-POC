@@ -9,6 +9,7 @@ import { SubsidiariesModule } from '../subsidiaries/subsidiaries.module';
 import { MrnModule } from '../mrn/mrn.module';
 import { SalesOrdersModule } from '../sales-orders/sales-orders.module';
 import { PurchaseOrdersModule } from '../purchase-orders/purchase-orders.module';
+import { TransferOrdersModule } from '../transfer-orders/transfer-orders.module';
 import { OracleSyncScheduler } from './oracle-sync.scheduler';
 import { SyncRunnerService } from './sync-runner.service';
 import { SyncLogController } from './sync-log.controller';
@@ -27,6 +28,7 @@ import { SyncLogController } from './sync-log.controller';
     MrnModule,
     SalesOrdersModule,
     PurchaseOrdersModule,
+    TransferOrdersModule,
   ],
   controllers: [SyncLogController],
   providers: [OracleSyncScheduler, SyncRunnerService],

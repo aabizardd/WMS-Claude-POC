@@ -59,6 +59,9 @@ import DeliveryDetailPage from './pages/outbound/DeliveryDetailPage';
 import HistoryList from './pages/outbound/HistoryList';
 import HistoryDetailPage from './pages/outbound/HistoryDetailPage';
 import SalesOrderDetailPage from './pages/outbound/SalesOrderDetailPage';
+import TransferStockLayout from './pages/outbound/TransferStockLayout';
+import TransferOrderTab from './pages/outbound/TransferOrderTab';
+import TransferOrderDetailPage from './pages/outbound/TransferOrderDetailPage';
 import ComplaintsPage from './pages/complaint/ComplaintsPage';
 import ComplaintDetailPage from './pages/complaint/ComplaintDetailPage';
 
@@ -449,7 +452,7 @@ export default function App() {
               path="picking"
               element={
                 <RequirePermission permission="picking:read">
-                  <PickingList />
+                  <PickingList source="SALES_ORDER" />
                 </RequirePermission>
               }
             />
@@ -457,7 +460,7 @@ export default function App() {
               path="packing"
               element={
                 <RequirePermission permission="packing:read">
-                  <PackingList />
+                  <PackingList source="SALES_ORDER" />
                 </RequirePermission>
               }
             />
@@ -465,7 +468,7 @@ export default function App() {
               path="delivery"
               element={
                 <RequirePermission permission="delivery:read">
-                  <DeliveryList />
+                  <DeliveryList source="SALES_ORDER" />
                 </RequirePermission>
               }
             />
@@ -473,7 +476,7 @@ export default function App() {
               path="history"
               element={
                 <RequirePermission permission="delivery:read">
-                  <HistoryList />
+                  <HistoryList source="SALES_ORDER" />
                 </RequirePermission>
               }
             />
@@ -512,6 +515,103 @@ export default function App() {
           />
           <Route
             path="outbound/sales-order/history/:id"
+            element={
+              <RequirePermission permission="delivery:read">
+                <HistoryDetailPage />
+              </RequirePermission>
+            }
+          />
+
+          {/* Outbound from Transfer Stock (tabbed) — source is Transfer Order */}
+          <Route path="outbound/transfer-stock" element={<TransferStockLayout />}>
+            <Route index element={<Navigate to="list" replace />} />
+            <Route
+              path="list"
+              element={
+                <RequirePermission permission="transfer-orders:read">
+                  <TransferOrderTab />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="picking"
+              element={
+                <RequirePermission permission="picking:read">
+                  <PickingList
+                    source="TRANSFER_ORDER"
+                    basePath="/admin/outbound/transfer-stock"
+                  />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="packing"
+              element={
+                <RequirePermission permission="packing:read">
+                  <PackingList
+                    source="TRANSFER_ORDER"
+                    basePath="/admin/outbound/transfer-stock"
+                  />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="delivery"
+              element={
+                <RequirePermission permission="delivery:read">
+                  <DeliveryList
+                    source="TRANSFER_ORDER"
+                    basePath="/admin/outbound/transfer-stock"
+                  />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="history"
+              element={
+                <RequirePermission permission="delivery:read">
+                  <HistoryList
+                    source="TRANSFER_ORDER"
+                    basePath="/admin/outbound/transfer-stock"
+                  />
+                </RequirePermission>
+              }
+            />
+          </Route>
+          <Route
+            path="outbound/transfer-stock/list/:id"
+            element={
+              <RequirePermission permission="transfer-orders:read">
+                <TransferOrderDetailPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="outbound/transfer-stock/picking/:id"
+            element={
+              <RequirePermission permission="picking:read">
+                <PickingDetailPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="outbound/transfer-stock/packing/:id"
+            element={
+              <RequirePermission permission="packing:read">
+                <PackingDetailPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="outbound/transfer-stock/delivery/:id"
+            element={
+              <RequirePermission permission="delivery:read">
+                <DeliveryDetailPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="outbound/transfer-stock/history/:id"
             element={
               <RequirePermission permission="delivery:read">
                 <HistoryDetailPage />
