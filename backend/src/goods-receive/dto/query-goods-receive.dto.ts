@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { SortableQueryDto } from '../../common/dto/sortable-query.dto';
 
 export class QueryGoodsReceiveDto extends SortableQueryDto {
@@ -19,4 +19,10 @@ export class QueryGoodsReceiveDto extends SortableQueryDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  // Source filter: PIB (Inbound from PIB tab) vs PO (Local Vendor tab).
+  // Omitted → all sources.
+  @IsOptional()
+  @IsIn(['PIB', 'PO', 'CUSTOMER_RETURN', 'TRANSFER_RETURN'])
+  source?: string;
 }

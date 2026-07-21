@@ -45,7 +45,8 @@ const RESOURCES: { resource: string; label: string; actions: string[] }[] = [
   { resource: 'mrn', label: 'MRN', actions: ['read', 'sync'] },
   // Inbound (Local Vendor) — Purchase Orders mirror Oracle (read/sync).
   { resource: 'purchase-orders', label: 'Purchase Orders', actions: ['read', 'sync'] },
-  { resource: 'goods-receive', label: 'Goods Receive', actions: ['read', 'update'] },
+  // create = Generate GR from PO (Inbound from Local Vendor).
+  { resource: 'goods-receive', label: 'Goods Receive', actions: ['read', 'create', 'update'] },
   // Inventory is generated automatically on receive; manual bin adjustment adds update.
   { resource: 'inventory', label: 'Inventory', actions: ['read', 'update'] },
   // Inventory Adjustment — manual qty/quality issue adjustment (create + view).

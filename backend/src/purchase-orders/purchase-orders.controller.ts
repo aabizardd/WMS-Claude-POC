@@ -35,6 +35,16 @@ export class PurchaseOrdersController {
     });
   }
 
+  // Refresh ONE PO (header + lines) from Oracle by its Oracle id — receipts
+  // change line qty without bumping lastmodified, so incremental sync misses it.
+  @Post(':oracleId/refresh')
+  @HttpCode(200)
+  @RequirePermissions('purchase-orders:sync')
+  async refreshOne(@Param('oracleId') oracleId: string) {
+    const refreshed = await this.sync.syncOne(oracleId);
+    return { refreshed };
+  }
+
   @Get()
   @RequirePermissions('purchase-orders:read')
   findAll(@Query() query: QueryPurchaseOrderDto, @CurrentUser() user: AuthUser) {

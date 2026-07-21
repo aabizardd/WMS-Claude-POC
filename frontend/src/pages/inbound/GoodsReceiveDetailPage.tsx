@@ -320,6 +320,110 @@ export default function GoodsReceiveDetailPage() {
     );
   }
 
+  // PO-sourced GR: a read-only view — PO header + the received lines that were
+  // submitted to Oracle. The MRN receive/putaway flow below is PIB-only.
+  if (gr.source_type === 'PO') {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <Link
+              to="/admin/inbound/local/goods-receive"
+              className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              aria-label="Back"
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+            </Link>
+            <div>
+              <h1 className="page-title">{gr.gr_number}</h1>
+              <p className="page-subtitle">
+                {gr.po?.po_number ?? '—'} · {gr.po?.vendor_name ?? '—'}
+              </p>
+            </div>
+          </div>
+          <span className={`badge ${statusBadgeClass(gr.status)}`}>
+            {grStatusLabel(gr.status)}
+          </span>
+        </div>
+
+        <div className="card p-5">
+          <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
+            Purchase Order Information
+          </h3>
+          <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
+            <Meta label="GR Number" value={gr.gr_number} />
+            <Meta
+              label="PO Number"
+              value={
+                gr.po ? (
+                  <Link
+                    to={`/admin/inbound/local/po/${gr.po.id}`}
+                    className="text-brand-700 hover:underline"
+                  >
+                    {gr.po.po_number ?? gr.po.oracle_id}
+                  </Link>
+                ) : (
+                  gr.shipment_number
+                )
+              }
+            />
+            <Meta label="PO (Oracle ID)" value={gr.po?.oracle_id} />
+            <Meta label="Vendor" value={gr.po?.vendor_name} />
+            <Meta label="PO Date" value={gr.po?.po_date} />
+            <Meta label="PO Status" value={gr.po?.po_status_label ?? gr.po?.po_status} />
+            <Meta label="Location" value={gr.po?.location_name} />
+            <Meta label="Warehouse" value={gr.warehouse?.name} />
+            <Meta label="Created" value={new Date(gr.created_at).toLocaleString()} />
+          </dl>
+        </div>
+
+        <div className="card overflow-hidden">
+          <div className="border-b border-slate-200 px-5 py-3">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+              Received Items
+            </h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-200 text-sm">
+              <thead className="table-head">
+                <tr>
+                  <th className="px-5 py-3 text-right">Line #</th>
+                  <th className="px-5 py-3">Material</th>
+                  <th className="px-5 py-3 text-right">Actual Qty Received</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {gr.po_items.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="px-5 py-8 text-center text-slate-400">
+                      No items.
+                    </td>
+                  </tr>
+                ) : (
+                  gr.po_items.map((it) => (
+                    <tr key={it.id} className="hover:bg-slate-50">
+                      <td className="px-5 py-3 text-right text-slate-600">
+                        {it.line_number ?? '—'}
+                      </td>
+                      <td className="px-5 py-3 font-medium text-slate-800">
+                        {it.item_display ?? '—'}
+                      </td>
+                      <td className="px-5 py-3 text-right text-slate-600">
+                        {it.qty_actual.toLocaleString()}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const mrn = gr.mrn;
   const warehouseId = gr.warehouse?.id;
   const isOpen = gr.status === 'Open';

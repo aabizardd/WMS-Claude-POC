@@ -14,9 +14,21 @@ function statusBadge(status: string) {
   return status === 'Syncing' ? `${base} animate-pulse` : base;
 }
 
-export default function GoodsReceiveTab() {
+interface Props {
+  // GR source served by this tab: 'PIB' (Inbound from PIB) or 'PO' (Local
+  // Vendor). Omitted → all sources.
+  source?: 'PIB' | 'PO';
+  // Base path for detail links (default: the PIB inbound section).
+  basePath?: string;
+}
+
+export default function GoodsReceiveTab({
+  source,
+  basePath = '/admin/inbound/pib',
+}: Props) {
   const { has } = useAuth();
   const canUpdate = has('goods-receive:update');
+  const isPo = source === 'PO';
 
   const [data, setData] = useState<Paginated<GoodsReceiveRow> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -32,7 +44,13 @@ export default function GoodsReceiveTab() {
   async function load() {
     setLoading(true);
     const r = await api.get<Paginated<GoodsReceiveRow>>('/goods-receive', {
-      params: { page, limit: LIMIT, search: search || undefined, ...params() },
+      params: {
+        page,
+        limit: LIMIT,
+        search: search || undefined,
+        source: source || undefined,
+        ...params(),
+      },
     });
     setData(r.data);
     setLoading(false);
@@ -70,14 +88,16 @@ export default function GoodsReceiveTab() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-500">
-        {data ? `${data.total_data} documents` : 'Goods Receive'} · fill the actual
-        received quantity per item.
+        {data ? `${data.total_data} documents` : 'Goods Receive'} ·{' '}
+        {isPo
+          ? 'generated from PO item receipts (Oracle).'
+          : 'fill the actual received quantity per item.'}
       </p>
 
       <form onSubmit={onSearch} className="flex gap-2">
         <input
           className="input max-w-xs"
-          placeholder="Search GR / shipment number…"
+          placeholder={isPo ? 'Search GR / PO number…' : 'Search GR / shipment number…'}
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
         />
@@ -105,8 +125,17 @@ export default function GoodsReceiveTab() {
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <SortableTh label="GR Number" col="gr_number" sort={sort} onSort={onSort} />
-                <SortableTh label="Shipment No." col="shipment_number" sort={sort} onSort={onSort} />
-                <SortableTh label="Receiving Location" col="receiving_location" sort={sort} onSort={onSort} />
+                <SortableTh
+                  label={isPo ? 'PO Number' : 'Shipment No.'}
+                  col="shipment_number"
+                  sort={sort}
+                  onSort={onSort}
+                />
+                {isPo ? (
+                  <th className="px-6 py-3">Warehouse</th>
+                ) : (
+                  <SortableTh label="Receiving Location" col="receiving_location" sort={sort} onSort={onSort} />
+                )}
                 <th className="px-6 py-3">Items</th>
                 <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Actions</th>
@@ -129,7 +158,7 @@ export default function GoodsReceiveTab() {
                       {g.shipment_number ?? '—'}
                     </td>
                     <td className="px-6 py-3 text-slate-600">
-                      {g.receiving_location_name ?? '—'}
+                      {isPo ? g.warehouse?.name ?? '—' : g.receiving_location_name ?? '—'}
                     </td>
                     <td className="px-6 py-3 text-slate-600">{g.item_count}</td>
                     <td className="px-6 py-3">
@@ -145,10 +174,11 @@ export default function GoodsReceiveTab() {
                     <td className="px-6 py-3">
                       <div className="flex justify-end">
                         <Link
-                          to={`/admin/inbound/pib/goods-receive/${g.id}`}
+                          to={`${basePath}/goods-receive/${g.id}`}
                           className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
                         >
-                          {canUpdate ? 'Receive' : 'View'}
+                          {/* PO GRs are read-only (received via Oracle at creation). */}
+                          {!isPo && canUpdate ? 'Receive' : 'View'}
                         </Link>
                       </div>
                     </td>

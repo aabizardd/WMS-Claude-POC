@@ -196,6 +196,7 @@ export default function PoTab() {
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <SortableTh label="PO Number" col="po_number" sort={sort} onSort={onSort} />
+                <th className="px-6 py-3">Oracle ID</th>
                 <SortableTh label="PO Date" col="po_date" sort={sort} onSort={onSort} />
                 <SortableTh label="Vendor" col="vendor_name" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3">Warehouse</th>
@@ -207,7 +208,7 @@ export default function PoTab() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-10 text-center text-slate-400">
+                  <td colSpan={8} className="px-6 py-10 text-center text-slate-400">
                     Loading…
                   </td>
                 </tr>
@@ -217,6 +218,7 @@ export default function PoTab() {
                     <td className="px-6 py-3 font-medium text-slate-800">
                       {po.po_number ?? po.oracle_id}
                     </td>
+                    <td className="px-6 py-3 text-slate-600">{po.oracle_id}</td>
                     <td className="px-6 py-3 text-slate-600">{po.po_date ?? '—'}</td>
                     <td className="px-6 py-3 text-slate-600">
                       {po.vendor_name ?? '—'}
@@ -244,7 +246,7 @@ export default function PoTab() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={7} className="px-6 py-10 text-center text-slate-400">
+                  <td colSpan={8} className="px-6 py-10 text-center text-slate-400">
                     No purchase orders. Click “Sync from ERP” to pull PO data.
                   </td>
                 </tr>

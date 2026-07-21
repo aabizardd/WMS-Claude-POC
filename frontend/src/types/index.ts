@@ -222,12 +222,38 @@ export interface GoodsReceiveDetail {
   id: string;
   gr_number: string;
   status: string;
+  source_type: string;
   shipment_number: string | null;
   receiving_location_name: string | null;
   warehouse: { id: string; name: string } | null;
   mrn: GoodsReceiveDetailMrn;
   items: GoodsReceiveItem[];
+  // PO source only: PO header + the received lines submitted to Oracle.
+  po: {
+    id: string;
+    oracle_id: string;
+    po_number: string | null;
+    po_date: string | null;
+    vendor_name: string | null;
+    po_status: string | null;
+    po_status_label: string | null;
+    location_name: string | null;
+  } | null;
+  po_items: {
+    id: string;
+    line_number: number | null;
+    item_display: string | null;
+    qty_actual: number;
+  }[];
   created_at: string;
+}
+
+// Result of POST /goods-receive/generate-from-po.
+export interface GenerateGrFromPoResult {
+  id: string;
+  gr_number: string;
+  oracle_receipt_id: number | null;
+  po_number: string | null;
 }
 
 export interface GoodsReceiptResultItem {
@@ -399,6 +425,8 @@ export interface PurchaseOrderRow {
 export interface PurchaseOrderLine {
   id: string;
   line_id: string;
+  // Oracle line number (1..n) — the "line" used for item-receipt.
+  line_number: number | null;
   item_oracle_id: string | null;
   item_display: string | null;
   item_type: string | null;

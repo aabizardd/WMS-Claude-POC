@@ -302,7 +302,7 @@ export default function App() {
               path="goods-receive"
               element={
                 <RequirePermission permission="goods-receive:read">
-                  <GoodsReceiveTab />
+                  <GoodsReceiveTab source="PIB" />
                 </RequirePermission>
               }
             />
@@ -339,6 +339,15 @@ export default function App() {
                 </RequirePermission>
               }
             />
+            {/* Local Vendor GR detail — same page, renders the PO variant. */}
+            <Route
+              path="inbound/local/goods-receive/:id"
+              element={
+                <RequirePermission permission="goods-receive:read">
+                  <GoodsReceiveDetailPage />
+                </RequirePermission>
+              }
+            />
             <Route
               path="inbound/pib/putaway/:id"
               element={
@@ -363,7 +372,7 @@ export default function App() {
               path="goods-receive"
               element={
                 <RequirePermission permission="goods-receive:read">
-                  <InboundPlaceholder title="Goods Receive (Local Vendor)" />
+                  <GoodsReceiveTab source="PO" basePath="/admin/inbound/local" />
                 </RequirePermission>
               }
             />

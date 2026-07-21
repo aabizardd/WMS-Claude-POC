@@ -160,6 +160,7 @@ export class PurchaseOrdersService {
     return {
       id: l.id,
       line_id: l.lineId,
+      line_number: l.lineNumber,
       item_oracle_id: l.itemOracleId,
       item_display: l.itemDisplay,
       item_type: l.itemType,

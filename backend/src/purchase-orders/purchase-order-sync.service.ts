@@ -6,6 +6,7 @@ import { ErpHttpService } from '../erp/erp-http.service';
 interface OraclePoLine {
   item?: string | number | null;
   line_id?: string | number | null;
+  linesequencenumber?: string | number | null;
   itemtype?: string | null;
   quantity?: number | string | null;
   committed?: number | string | null;
@@ -97,6 +98,28 @@ export class PurchaseOrderSyncService {
       sort_order: 'desc',
       filters,
     });
+  }
+
+  // Refresh ONE PO (header + lines) from the bridge by its Oracle id. Needed
+  // because Oracle does NOT bump the PO's lastmodified when an item receipt
+  // changes line quantities — the incremental (lastmodified-filtered) sync
+  // skips such POs and their lines go stale.
+  async syncOne(poOracleId: string): Promise<boolean> {
+    const res = await this.erp.post<OraclePoResponse>('/purchase-orders/get-list', {
+      page: 1,
+      page_size: 1,
+      sort_by: 'lastmodifieddate',
+      sort_order: 'desc',
+      filters: { po_id: poOracleId },
+    });
+    const po = (res?.data ?? [])[0];
+    if (!po || po.po_id == null || String(po.po_id) !== String(poOracleId)) {
+      this.logger.warn(`syncOne: PO ${poOracleId} not returned by the bridge`);
+      return false;
+    }
+    await this.upsert(po);
+    this.logger.log(`syncOne: PO ${poOracleId} refreshed (header + lines)`);
+    return true;
   }
 
   async sync(options: SyncOptions = {}): Promise<SyncResult> {
@@ -227,6 +250,9 @@ export class PurchaseOrderSyncService {
       }
 
       const lineData = {
+        // Oracle line number (1..n) — sent as "line" in the item-receipt call.
+        lineNumber:
+          ln.linesequencenumber != null ? Number(ln.linesequencenumber) : null,
         itemOracleId: ln.item != null ? String(ln.item) : null,
         itemDisplay: ln.item_display ?? null,
         itemType: ln.itemtype ?? null,

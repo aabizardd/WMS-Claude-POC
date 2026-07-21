@@ -537,12 +537,36 @@ model GoodsReceive {
 
   discrepancies Discrepancy[]
   putaways      Putaway[]
+  // Received lines (PO source): the exact items+qty submitted to Oracle
+  // item-receipt. PIB GRs keep using MRN items and leave this empty.
+  items         GoodsReceiveItem[]
 
-  @@unique([sourceType, sourceDocId])
+  // NOT unique: a PO can be received partially several times (one GR per Oracle
+  // item receipt). PIB still creates at most one GR per MRN, enforced in code
+  // (mrn-sync findFirst check), not by a constraint.
+  @@index([sourceType, sourceDocId])
   @@index([warehouseId])
   @@index([status])
   @@index([sourceDocId])
   @@map("goods_receives")
+}
+
+// One received line of a Goods Receive (PO source): mirrors what was sent to
+// the Oracle item-receipt endpoint.
+model GoodsReceiveItem {
+  id             String       @id @default(uuid())
+  goodsReceiveId String       @map("goods_receive_id")
+  goodsReceive   GoodsReceive @relation(fields: [goodsReceiveId], references: [id], onDelete: Cascade)
+
+  lineNumber  Int?    @map("line_number") // PO line number sent as "line"
+  itemDisplay String? @map("item_display")
+  materialId  String? @map("material_id")
+  qty         Float   @default(0) // actual received qty sent to Oracle
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([goodsReceiveId])
+  @@map("goods_receive_items")
 }
 
 // ===================== Purchase Order (Local Vendor inbound) =====================
@@ -598,7 +622,8 @@ model PurchaseOrderLine {
   purchaseOrderId String        @map("purchase_order_id")
   purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
 
-  lineId       String  @map("line_id") // Oracle line_id
+  lineId       String  @map("line_id") // Oracle line_id (internal id, NOT the 1..n line number)
+  lineNumber   Int?    @map("line_number") // Oracle linesequencenumber — used as "line" in item-receipt
   itemOracleId String? @map("item_oracle_id") // Oracle item id (-> materials.erp_doc_id)
   itemDisplay  String? @map("item_display")
   itemType     String? @map("item_type")

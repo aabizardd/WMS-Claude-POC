@@ -26,7 +26,22 @@ const GR_SORTABLE: Record<string, (d: SortDir) => GrOrder> = {
 
 const grInclude = {
   warehouse: { select: { id: true, name: true } },
+  // Own received lines (PO source). Empty for PIB (which uses MRN items).
+  items: { orderBy: { lineNumber: 'asc' as const } },
 } satisfies Prisma.GoodsReceiveInclude;
+
+// PO header shown on a PO-sourced GR detail.
+const poHeaderSelect = {
+  id: true,
+  oracleId: true,
+  poNumber: true,
+  poDate: true,
+  vendorName: true,
+  poStatus: true,
+  poStatusLabel: true,
+  locationName: true,
+} satisfies Prisma.PurchaseOrderSelect;
+type PoHeader = Prisma.PurchaseOrderGetPayload<{ select: typeof poHeaderSelect }>;
 
 type GrRow = Prisma.GoodsReceiveGetPayload<{ include: typeof grInclude }>;
 // A GR with its source document (MRN for PIB) attached.
@@ -48,6 +63,7 @@ export class GoodsReceiveService {
       page?: number;
       limit?: number;
       search?: string;
+      source?: string;
       sort_by?: string;
       sort_order?: string;
     },
@@ -55,11 +71,19 @@ export class GoodsReceiveService {
   ) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
-    const orderBy = buildOrderBy(query.sort_by, query.sort_order, GR_SORTABLE, {
-      sourceDocNumber: 'desc',
-    });
+    // Default order: PO tab shows the newest GR first (createdAt); the PIB tab
+    // keeps its shipment-number ordering.
+    const orderBy = buildOrderBy(
+      query.sort_by,
+      query.sort_order,
+      GR_SORTABLE,
+      query.source === 'PO' ? { createdAt: 'desc' } : { sourceDocNumber: 'desc' },
+    );
 
     const where: Prisma.GoodsReceiveWhereInput = { ...this.scopeWhere(scope) };
+    if (query.source) {
+      where.sourceType = query.source as Prisma.GoodsReceiveWhereInput['sourceType'];
+    }
     if (query.search) {
       where.OR = [
         { grNumber: { contains: query.search, mode: 'insensitive' } },
@@ -107,7 +131,15 @@ export class GoodsReceiveService {
 
   async findOne(id: string, scope: WarehouseScope) {
     const gr = await this.getScoped(id, scope);
-    return this.serializeDetail(gr);
+    // PO source: attach the PO header (the GR detail shows it instead of MRN).
+    const po =
+      gr.sourceType === 'PO'
+        ? await this.prisma.purchaseOrder.findUnique({
+            where: { id: gr.sourceDocId },
+            select: poHeaderSelect,
+          })
+        : null;
+    return this.serializeDetail(gr, po);
   }
 
   // Fill the actual received quantity for the GR's items.
@@ -182,13 +214,13 @@ export class GoodsReceiveService {
       shipment_number: gr.sourceDocNumber,
       receiving_location_name: mrn?.receivingLocationName ?? null,
       warehouse: gr.warehouse,
-      item_count: mrn?.items.length ?? 0,
+      item_count: mrn?.items.length ?? gr.items.length,
       created_at: gr.createdAt,
     };
   }
 
   // Goods Receive hides shipment amount and all *_id fields (names only).
-  private serializeDetail(gr: GrWithSource) {
+  private serializeDetail(gr: GrWithSource, po: PoHeader | null = null) {
     const m = gr.mrn;
     return {
       id: gr.id,
@@ -196,6 +228,25 @@ export class GoodsReceiveService {
       status: gr.status,
       source_type: gr.sourceType,
       warehouse: gr.warehouse,
+      // PO header (PO source only) + the received lines submitted to Oracle.
+      po: po
+        ? {
+            id: po.id,
+            oracle_id: po.oracleId,
+            po_number: po.poNumber,
+            po_date: po.poDate,
+            vendor_name: po.vendorName,
+            po_status: po.poStatus,
+            po_status_label: po.poStatusLabel,
+            location_name: po.locationName,
+          }
+        : null,
+      po_items: gr.items.map((it) => ({
+        id: it.id,
+        line_number: it.lineNumber,
+        item_display: it.itemDisplay,
+        qty_actual: it.qty,
+      })),
       // MRN information shown on the Goods Receive screen (PIB source).
       mrn: m
         ? {
