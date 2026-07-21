@@ -43,11 +43,12 @@ set +e
 git reset --hard origin/main >> "$LOG_FILE" 2>&1
 log "Pull done: $REMOTE"
 
-docker compose -p wms-poc build --pull >> "$LOG_FILE" 2>&1
+podman-compose -p wms-poc down >> "$LOG_FILE" 2>&1
+podman-compose -p wms-poc build --pull >> "$LOG_FILE" 2>&1
 BUILD_EXIT=$?
 log "Build exit code: $BUILD_EXIT"
 
-docker compose -p wms-poc up -d >> "$LOG_FILE" 2>&1
+podman-compose -p wms-poc up -d >> "$LOG_FILE" 2>&1
 DEPLOY_EXIT=$?
 log "Deploy exit code: $DEPLOY_EXIT"
 set -e
@@ -68,8 +69,9 @@ fi
 log "FAILED, rolling back..."
 git reset --hard "$PREV" >> "$LOG_FILE" 2>&1
 set +e
-docker compose -p wms-poc build >> "$LOG_FILE" 2>&1
-docker compose -p wms-poc up -d >> "$LOG_FILE" 2>&1
+podman-compose -p wms-poc down >> "$LOG_FILE" 2>&1
+podman-compose -p wms-poc build >> "$LOG_FILE" 2>&1
+podman-compose -p wms-poc up -d >> "$LOG_FILE" 2>&1
 set -e
 sleep 10
 RB_HEALTH=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:3081/api/health 2>/dev/null || echo "FAIL")
