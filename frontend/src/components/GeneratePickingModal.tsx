@@ -39,7 +39,7 @@ interface Props {
 }
 
 function newAlloc(it: PickableItem, qty: number): Alloc {
-  return { binId: it.available_bins[0]?.bin_id ?? '', qty, pickerId: '' };
+  return { binId: (it.available_bins ?? [])[0]?.bin_id ?? '', qty, pickerId: '' };
 }
 
 export default function GeneratePickingModal({
@@ -85,7 +85,7 @@ export default function GeneratePickingModal({
   }
   function binAvail(it: PickableItem, binId: string): number | null {
     if (!binId) return null;
-    return it.available_bins.find((b) => b.bin_id === binId)?.avail_qty ?? null;
+    return (it.available_bins ?? []).find((b) => b.bin_id === binId)?.avail_qty ?? null;
   }
 
   async function handleSubmit() {
@@ -191,7 +191,7 @@ export default function GeneratePickingModal({
 
                     {f.selected && (
                       <div className="mt-3 space-y-2">
-                        {it.available_bins.length === 0 && (
+                        {(it.available_bins ?? []).length === 0 && (
                           <p className="text-[11px] text-amber-600">
                             No bin with stock for this material.
                           </p>
@@ -211,7 +211,7 @@ export default function GeneratePickingModal({
                                   onChange={(v) => patchAlloc(it.id, idx, { binId: v })}
                                   placeholder="— Select —"
                                   searchPlaceholder="Search bin…"
-                                  options={it.available_bins.map((b) => ({
+                                  options={(it.available_bins ?? []).map((b) => ({
                                     value: b.bin_id ?? '',
                                     label: `${b.bin_label ?? '—'} (avail ${b.avail_qty})`,
                                   }))}
