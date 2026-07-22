@@ -47,7 +47,7 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
       .get<WarehouseOption[]>('/warehouses/options')
       .then((r) => {
         if (!active) return;
-        const list = r.data ?? [];
+        const list = Array.isArray(r.data) ? r.data : [];
         setWarehouses(list);
 
         if (isAdmin) {
@@ -87,7 +87,7 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
   }
 
   const activeWarehouseName = useMemo(
-    () => warehouses.find((w) => w.id === activeWarehouseId)?.name ?? null,
+    () => (Array.isArray(warehouses) ? warehouses : []).find((w) => w.id === activeWarehouseId)?.name ?? null,
     [warehouses, activeWarehouseId],
   );
 
