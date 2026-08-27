@@ -23,6 +23,9 @@ const PACKING_SORTABLE: Record<string, (d: SortDir) => PackingOrder> = {
 };
 
 export interface WarehouseScope {
+  // Controllers pass the full AuthUser, so the acting user is available for the
+  // stock ledger; optional because older call sites do not set it.
+  userId?: number;
   role: string;
   warehouseId: string | null;
 }
@@ -376,6 +379,13 @@ export class PackingService {
           inv.id,
           it.binId,
           { reserved: -gap, qtyIssue: it.qtyIssue, quality: it.qualityIssue },
+          {
+            module: 'packing',
+            id: pk.id,
+            number: pk.packingCode,
+            actorId: scope.userId,
+            note: 'Packing discrepancy moved out of reserved',
+          },
           tx,
         );
       }

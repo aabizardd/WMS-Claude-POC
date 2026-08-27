@@ -72,6 +72,8 @@ export interface Uom {
   uomName: string;
   uomCode: string;
   isActive: boolean;
+  /** FR-IA-11 rule 4: false = whole-unit measure, decimals rejected. */
+  allowsDecimal?: boolean;
 }
 
 export interface MaterialCategory {
@@ -741,6 +743,8 @@ export interface AdjDiscrepancyOption {
   discrepancy_id: string;
   type: string;
   from: string;
+  /** false = matched on the material only; this discrepancy has no bin reference. */
+  bin_matched: boolean;
   created_at: string;
 }
 
@@ -757,6 +761,20 @@ export interface InventoryAdjustmentItemRow {
   avail_at_create: number;
   qty_issue_at_create: number;
   quality_issue_at_create: number;
+}
+
+/** FR-IA-13 rule 8 / FR-IA-16 rule 6: one Oracle call, recorded verbatim. */
+export interface InventoryAdjustmentIntegrationLog {
+  id: string;
+  operation: 'post' | 'status_check';
+  endpoint: string;
+  request: unknown;
+  response: unknown;
+  http_status: number | null;
+  ok: boolean;
+  error: string | null;
+  duration_ms: number | null;
+  created_at: string;
 }
 
 /** FR-IA-15: one entry of the append-only audit trail. */
@@ -800,6 +818,7 @@ export interface InventoryAdjustmentDetail {
   items: InventoryAdjustmentItemRow[];
   discrepancies: { id: string; discrepancy_id: string; type: string; from: string }[];
   events: InventoryAdjustmentEvent[];
+  integration_logs: InventoryAdjustmentIntegrationLog[];
 }
 
 /** Response of PUT /inventory-adjustments/:id/check-oracle. */

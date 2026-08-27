@@ -13,6 +13,7 @@ import type {
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpHttpService } from '../erp/erp-http.service';
+import { InventoryService } from '../inventory/inventory.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import {
   IA_TYPES,
@@ -86,6 +87,7 @@ const detailInclude = {
     include: { actor: { select: { id: true, name: true } } },
     orderBy: { createdAt: 'asc' as const },
   },
+  integrationLogs: { orderBy: { createdAt: 'asc' as const } },
 } satisfies Prisma.InventoryAdjustmentInclude;
 
 type AdjList = Prisma.InventoryAdjustmentGetPayload<{
@@ -128,6 +130,7 @@ export class InventoryAdjustmentsService {
   constructor(
     private prisma: PrismaService,
     private erp: ErpHttpService,
+    private inventory: InventoryService,
   ) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.InventoryAdjustmentWhereInput {
@@ -244,12 +247,22 @@ export class InventoryAdjustmentsService {
   }
 
   /**
-   * FR-IA-10: discrepancies that may be attached as a reference, restricted to
-   * the type's discrepancy kind and to the materials/bins already on the document.
+   * FR-IA-10 / UAC-IA-09 / UAC-IA-14: discrepancies offered as a reference,
+   * restricted to the type's discrepancy kind and to the material AND bin
+   * combinations already on the document.
+   *
+   * The link to a bin is indirect, because r_discrepancy_detail stores neither a
+   * material id nor a bin:
+   *   outbound -> Discrepancy.pickingId -> PickingItem(materialId, binId)
+   *   inbound  -> DiscrepancyDetail.mrnItemId -> MrnItem(itemId, binId)
+   * A discrepancy that carries no bin reference at all (an inbound one whose
+   * details predate the MRN link) cannot be bin-filtered; it still matches on the
+   * material name so it is not silently hidden, and is flagged bin_matched=false.
    */
   async discrepancyOptions(
     type: string | undefined,
     materialIds: string[],
+    binIds: string[],
     scope: WarehouseScope,
   ) {
     const warehouseId = this.requireWarehouse(scope);
@@ -258,11 +271,9 @@ export class InventoryAdjustmentsService {
     if (!kind) return [];
     if (!materialIds.length) return [];
 
-    // r_discrepancy_detail stores the item by NAME, not by material id, so the
-    // link back to the picked materials goes through their name/code.
     const materials = await this.prisma.material.findMany({
       where: { id: { in: materialIds } },
-      select: { materialName: true, materialCode: true },
+      select: { materialName: true, materialCode: true, erpDocId: true },
     });
     const names = [
       ...new Set(
@@ -270,29 +281,64 @@ export class InventoryAdjustmentsService {
       ),
     ] as string[];
     if (!names.length) return [];
+    const erpIds = materials
+      .map((m) => Number(m.erpDocId))
+      .filter((n) => Number.isFinite(n));
+
+    // Bin-aware matches, only when the document already names some bins.
+    let pickingIds: string[] = [];
+    let mrnItemIds: string[] = [];
+    if (binIds.length) {
+      const [pickingItems, mrnItems] = await Promise.all([
+        this.prisma.pickingItem.findMany({
+          where: { materialId: { in: materialIds }, binId: { in: binIds } },
+          select: { pickingId: true },
+        }),
+        erpIds.length
+          ? this.prisma.mrnItem.findMany({
+              where: { itemId: { in: erpIds }, binId: { in: binIds } },
+              select: { id: true },
+            })
+          : Promise.resolve([] as { id: string }[]),
+      ]);
+      pickingIds = [...new Set(pickingItems.map((p) => p.pickingId))];
+      mrnItemIds = mrnItems.map((m) => m.id);
+    }
+
+    const or: Prisma.DiscrepancyWhereInput[] = [];
+    if (pickingIds.length) or.push({ pickingId: { in: pickingIds } });
+    if (mrnItemIds.length) {
+      or.push({ details: { some: { mrnItemId: { in: mrnItemIds } } } });
+    }
+    // Fallback for documents with no bin trace of their own.
+    or.push({
+      pickingId: null,
+      details: { some: { itemName: { in: names }, mrnItemId: null } },
+    });
 
     const rows = await this.prisma.discrepancy.findMany({
-      where: {
-        warehouseId,
-        discrepancyType: kind,
-        details: { some: { itemName: { in: names } } },
-      },
+      where: { warehouseId, discrepancyType: kind, OR: or },
       select: {
         id: true,
         discrepancyId: true,
         discrepancyType: true,
         discrepancyFrom: true,
+        pickingId: true,
         createdAt: true,
       },
       orderBy: { createdAt: 'desc' },
       take: 200,
     });
 
+    const binMatched = new Set(pickingIds);
     return rows.map((d) => ({
       id: d.id,
       discrepancy_id: d.discrepancyId,
       type: d.discrepancyType,
       from: d.discrepancyFrom,
+      // false = matched on the material only, because this discrepancy has no
+      // bin reference to check against.
+      bin_matched: d.pickingId != null && binMatched.has(d.pickingId),
       created_at: d.createdAt,
     }));
   }
@@ -317,6 +363,40 @@ export class InventoryAdjustmentsService {
     const seen = new Set<string>();
     const prepared: PreparedLine[] = [];
 
+    // NFR-IA-T-02: a document may carry hundreds of lines, so everything the
+    // loop needs is fetched in two queries up front rather than two per line.
+    const materialIds = [...new Set(items.map((i) => i.material_id))];
+    const binIds = [...new Set(items.map((i) => i.bin_id))];
+
+    const inventories = await this.prisma.inventoryManagement.findMany({
+      where: { warehouseId, materialId: { in: materialIds } },
+      select: {
+        materialId: true,
+        materialCode: true,
+        material: {
+          select: {
+            materialName: true,
+            primaryUom: { select: { allowsDecimal: true } },
+          },
+        },
+      },
+    });
+    const invByMaterial = new Map(inventories.map((i) => [i.materialId!, i]));
+
+    const stocks = await this.prisma.inventoryBinStock.findMany({
+      where: {
+        binId: { in: binIds },
+        inventory: { warehouseId, materialId: { in: materialIds } },
+      },
+      include: {
+        bin: { select: { binLabel: true } },
+        inventory: { select: { materialId: true } },
+      },
+    });
+    const stockByKey = new Map(
+      stocks.map((st) => [`${st.inventory.materialId}|${st.binId}`, st]),
+    );
+
     for (const line of items) {
       const key = `${line.material_id}|${line.bin_id}`;
       if (seen.has(key)) {
@@ -326,31 +406,14 @@ export class InventoryAdjustmentsService {
       }
       seen.add(key);
 
-      const inv = await this.prisma.inventoryManagement.findFirst({
-        where: { warehouseId, materialId: line.material_id },
-        select: {
-          materialCode: true,
-          material: {
-            select: {
-              materialName: true,
-              primaryUom: { select: { allowsDecimal: true } },
-            },
-          },
-        },
-      });
+      const inv = invByMaterial.get(line.material_id);
       if (!inv) {
         throw new BadRequestException(
           'Material is not in inventory for this warehouse',
         );
       }
 
-      const stock = await this.prisma.inventoryBinStock.findFirst({
-        where: {
-          binId: line.bin_id,
-          inventory: { warehouseId, materialId: line.material_id },
-        },
-        include: { bin: { select: { binLabel: true } } },
-      });
+      const stock = stockByKey.get(key);
       if (!stock) {
         throw new BadRequestException(
           'Selected bin does not hold this material in this warehouse',
@@ -515,6 +578,44 @@ export class InventoryAdjustmentsService {
     });
   }
 
+  // ---------- integration log (FR-IA-13 rule 8, FR-IA-16 rule 6) ----------
+
+  /**
+   * Record one Oracle call verbatim. Logging must never be the reason an
+   * adjustment fails, so a write error here is swallowed and only warned about.
+   */
+  private async logIntegration(entry: {
+    adjustmentId: string;
+    operation: 'post' | 'status_check';
+    endpoint: string;
+    request: unknown;
+    response?: unknown;
+    httpStatus?: number | null;
+    ok: boolean;
+    error?: string | null;
+    durationMs: number;
+  }) {
+    try {
+      await this.prisma.inventoryAdjustmentIntegrationLog.create({
+        data: {
+          adjustmentId: entry.adjustmentId,
+          operation: entry.operation,
+          endpoint: entry.endpoint,
+          request: (entry.request ?? {}) as Prisma.InputJsonValue,
+          response: (entry.response ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+          httpStatus: entry.httpStatus ?? null,
+          ok: entry.ok,
+          error: entry.error?.slice(0, 2000) ?? null,
+          durationMs: entry.durationMs,
+        },
+      });
+    } catch (e) {
+      this.logger.warn(
+        `Could not write the integration log for ${entry.adjustmentId}: ${(e as Error).message}`,
+      );
+    }
+  }
+
   // ---------- create (FR-IA-11 / FR-IA-12) ----------
 
   /**
@@ -539,9 +640,7 @@ export class InventoryAdjustmentsService {
       scope,
     );
 
-    const adjustmentNumber = await this.nextNumber();
-
-    const created = await this.prisma.$transaction(async (tx) => {
+    const created = await this.createWithNumber(async (adjustmentNumber, tx) => {
       const row = await tx.inventoryAdjustment.create({
         data: {
           adjustmentNumber,
@@ -564,8 +663,9 @@ export class InventoryAdjustmentsService {
       return row;
     });
 
+
     this.logger.log(
-      `Inventory adjustment ${adjustmentNumber} created and submitted for approval`,
+      `Inventory adjustment ${created.adjustmentNumber} created and submitted for approval`,
     );
     return this.findOne(created.id, scope);
   }
@@ -586,12 +686,54 @@ export class InventoryAdjustmentsService {
     };
   }
 
+  /**
+   * Allocate a document number and run `build` inside a transaction, retrying on
+   * the unique-number constraint so two documents created at the same moment do
+   * not fail the second caller.
+   */
+  private async createWithNumber<T>(
+    build: (
+      adjustmentNumber: string,
+      tx: Prisma.TransactionClient,
+    ) => Promise<T>,
+  ): Promise<T> {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const adjustmentNumber = await this.nextNumber();
+      try {
+        return await this.prisma.$transaction((tx) => build(adjustmentNumber, tx));
+      } catch (e) {
+        const isDuplicateNumber =
+          e instanceof Prisma.PrismaClientKnownRequestError &&
+          e.code === 'P2002' &&
+          String(e.meta?.target ?? '').includes('adjustment_number');
+        if (!isDuplicateNumber) throw e;
+        this.logger.warn(
+          `Adjustment number ${adjustmentNumber} was taken; retrying (${attempt + 1}/5)`,
+        );
+      }
+    }
+    throw new BadRequestException(
+      'Could not allocate an adjustment number — please try again',
+    );
+  }
+
+  /**
+   * Next document number for today. Derived from the highest suffix in use, not
+   * from the row count: counting collides as soon as a document is removed (five
+   * rows numbered 001-004 and 007 would propose 006, then 007 again).
+   */
   private async nextNumber(): Promise<string> {
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const count = await this.prisma.inventoryAdjustment.count({
-      where: { adjustmentNumber: { startsWith: `ADJ-${today}` } },
+    const prefix = `ADJ-${today}-`;
+    const rows = await this.prisma.inventoryAdjustment.findMany({
+      where: { adjustmentNumber: { startsWith: prefix } },
+      select: { adjustmentNumber: true },
     });
-    return `ADJ-${today}-${String(count + 1).padStart(3, '0')}`;
+    const highest = rows.reduce((max, r) => {
+      const n = Number(r.adjustmentNumber.slice(prefix.length));
+      return Number.isFinite(n) && n > max ? n : max;
+    }, 0);
+    return `${prefix}${String(highest + 1).padStart(3, '0')}`;
   }
 
   private async mustFind(id: string, scope: WarehouseScope) {
@@ -614,7 +756,10 @@ export class InventoryAdjustmentsService {
   ) {
     const a = await this.prisma.inventoryAdjustment.findUnique({
       where: { id },
-      include: { items: true },
+      include: {
+        items: true,
+        createdBy: { select: { id: true, role: { select: { name: true } } } },
+      },
     });
     if (!a || (scope.role !== 'admin' && a.warehouseId !== scope.warehouseId)) {
       throw new NotFoundException(`Inventory adjustment ${id} not found`);
@@ -651,10 +796,18 @@ export class InventoryAdjustmentsService {
       return this.findOne(id, scope);
     }
 
-    // NFR-IA-P-02 / FR-IA-12 rule 2: the approver must not be the creator.
+    // FR-IA-12 rule 2 / NFR-IA-P-02: segregation of duties. The approver must be
+    // a different person AND hold a different role from the document's creator,
+    // so one role cannot both raise and approve a stock change.
     if (a.createdById && a.createdById === scope.userId) {
       throw new ForbiddenException(
         'The approver must be a different user from the one who created the document',
+      );
+    }
+    const creatorRole = a.createdBy?.role?.name ?? null;
+    if (creatorRole && creatorRole === scope.role) {
+      throw new ForbiddenException(
+        `The approver must hold a different role from the creator (both are "${creatorRole}")`,
       );
     }
 
@@ -801,7 +954,7 @@ export class InventoryAdjustmentsService {
 
     let display: string | null;
     try {
-      display = await this.fetchOracleStatus(a.oracleId);
+      display = await this.fetchOracleStatus(id, a.oracleId);
     } catch (e) {
       throw new ServiceUnavailableException(
         `Could not read the Oracle status: ${(e as Error).message}`,
@@ -869,16 +1022,46 @@ export class InventoryAdjustmentsService {
    *   POST /inventory/adjustments/get-status  { "id": [66444] }
    * Returns null when the id is not known to Oracle.
    */
-  private async fetchOracleStatus(oracleId: string): Promise<string | null> {
+  private async fetchOracleStatus(
+    adjustmentId: string,
+    oracleId: string,
+  ): Promise<string | null> {
     const numeric = Number(oracleId);
-    const res = await this.erp.post<OracleAdjustmentStatusResponse>(
-      '/inventory/adjustments/get-status',
-      { id: [Number.isFinite(numeric) ? numeric : oracleId] },
-    );
+    const endpoint = '/inventory/adjustments/get-status';
+    const request = { id: [Number.isFinite(numeric) ? numeric : oracleId] };
+    const startedAt = Date.now();
+
+    let res: OracleAdjustmentStatusResponse;
+    try {
+      res = await this.erp.post<OracleAdjustmentStatusResponse>(endpoint, request);
+    } catch (e) {
+      await this.logIntegration({
+        adjustmentId,
+        operation: 'status_check',
+        endpoint,
+        request,
+        ok: false,
+        error: (e as Error).message,
+        durationMs: Date.now() - startedAt,
+      });
+      throw e;
+    }
 
     const hit = (res?.data ?? []).find(
       (r) => r?.id != null && String(r.id) === String(oracleId),
     );
+
+    await this.logIntegration({
+      adjustmentId,
+      operation: 'status_check',
+      endpoint,
+      request,
+      response: res,
+      ok: true,
+      error: hit ? null : 'Document not present in the response',
+      durationMs: Date.now() - startedAt,
+    });
+
     if (!hit) return null;
 
     return (
@@ -888,8 +1071,10 @@ export class InventoryAdjustmentsService {
     );
   }
 
-  // Build the Oracle Inventory Adjustment payload and POST it.
+  // Build the Oracle Inventory Adjustment payload and POST it. Every attempt is
+  // written to the integration log, successful or not.
   private async postToOracle(a: {
+    id: string;
     adjustmentNumber: string;
     warehouse: { oracleId: string | null } | null;
     class: { oracleId: string } | null;
@@ -965,22 +1150,42 @@ export class InventoryAdjustmentsService {
       lines,
     };
 
+    const endpoint = '/inventory/adjustments';
+    const startedAt = Date.now();
     let res: { ok: boolean; status: number; body: OracleAdjustmentResponse | null };
     try {
-      res = await this.erp.postRaw<OracleAdjustmentResponse>(
-        '/inventory/adjustments',
-        payload,
-      );
+      res = await this.erp.postRaw<OracleAdjustmentResponse>(endpoint, payload);
     } catch (e) {
-      throw new ServiceUnavailableException(
-        `Failed to reach Oracle Inventory Adjustment: ${(e as Error).message}`,
-      );
+      const msg = `Failed to reach Oracle Inventory Adjustment: ${(e as Error).message}`;
+      await this.logIntegration({
+        adjustmentId: a.id,
+        operation: 'post',
+        endpoint,
+        request: payload,
+        ok: false,
+        error: msg,
+        durationMs: Date.now() - startedAt,
+      });
+      throw new ServiceUnavailableException(msg);
     }
 
     const body = res.body;
     const invId = body?.inventory_adjustment_id;
     const ok =
       (body?.status === 'success' || body?.success === true) && invId != null;
+
+    await this.logIntegration({
+      adjustmentId: a.id,
+      operation: 'post',
+      endpoint,
+      request: payload,
+      response: body,
+      httpStatus: res.status,
+      ok,
+      error: ok ? null : (body?.message ?? `HTTP ${res.status}`),
+      durationMs: Date.now() - startedAt,
+    });
+
     if (!ok) {
       throw new ServiceUnavailableException(
         body?.message ?? `Oracle Inventory Adjustment failed (HTTP ${res.status})`,
@@ -1011,15 +1216,40 @@ export class InventoryAdjustmentsService {
         });
         if (a.status === 'Completed') return; // idempotent
 
-        for (const it of a.items) {
-          if (!it.binId || !it.materialId) continue;
+        const lines = a.items.filter((it) => it.binId && it.materialId);
 
-          const stock = await tx.inventoryBinStock.findFirst({
-            where: {
-              binId: it.binId,
-              inventory: { warehouseId: a.warehouseId, materialId: it.materialId },
+        // NFR-IA-T-02: read every bin once, then write every bin in a single
+        // statement, so a 300-line document is 2 round-trips instead of 600.
+        const stocks = await tx.inventoryBinStock.findMany({
+          where: {
+            binId: { in: lines.map((it) => it.binId!) },
+            inventory: {
+              warehouseId: a.warehouseId,
+              materialId: { in: lines.map((it) => it.materialId!) },
             },
-          });
+          },
+          include: { inventory: { select: { materialId: true } } },
+        });
+        const stockByKey = new Map(
+          stocks.map((st) => [`${st.inventory.materialId}|${st.binId}`, st]),
+        );
+
+        const updates: {
+          id: string;
+          inventoryId: string;
+          binId: string | null;
+          avail: number;
+          quality: number;
+          qtyIssue: number;
+          deltaAvail: number;
+          deltaQuality: number;
+          deltaQtyIssue: number;
+          reservedAfter: number;
+          inTransitAfter: number;
+        }[] = [];
+
+        for (const it of lines) {
+          const stock = stockByKey.get(`${it.materialId}|${it.binId}`);
           if (!stock) {
             throw new Error(
               `Bin stock for ${it.materialCode} @ ${it.binLabel} no longer exists`,
@@ -1044,14 +1274,69 @@ export class InventoryAdjustmentsService {
             );
           }
 
-          await tx.inventoryBinStock.update({
-            where: { id: stock.id },
-            data: {
-              availQty: nextAvail,
-              qualityIssue: nextQuality,
-              qtyIssue: nextQtyIssue,
-            },
+          updates.push({
+            id: stock.id,
+            inventoryId: stock.inventoryId,
+            binId: stock.binId,
+            avail: nextAvail,
+            quality: nextQuality,
+            qtyIssue: nextQtyIssue,
+            deltaAvail: nextAvail - stock.availQty,
+            deltaQuality: nextQuality - stock.qualityIssue,
+            deltaQtyIssue: nextQtyIssue - stock.qtyIssue,
+            reservedAfter: stock.reservedQty,
+            inTransitAfter: stock.inTransitQty,
           });
+        }
+
+        if (updates.length > 0) {
+          // updated_at is maintained by Prisma on normal writes, so a raw update
+          // has to set it explicitly.
+          const values = Prisma.join(
+            updates.map(
+              (u) =>
+                Prisma.sql`(${u.id}::text, ${u.avail}::double precision, ${u.quality}::double precision, ${u.qtyIssue}::double precision)`,
+            ),
+          );
+          await tx.$executeRaw`
+            UPDATE "inventory_bin_stocks" AS bs
+            SET "avail_qty" = v.avail,
+                "quality_issue" = v.quality,
+                "qty_issue" = v.qty_issue,
+                "updated_at" = NOW()
+            FROM (VALUES ${values}) AS v(id, avail, quality, qty_issue)
+            WHERE bs."id" = v.id
+          `;
+
+          // FR-IA-14 rule 4 / NFR-IA-L-05: one ledger row per bin touched.
+          for (const u of updates) {
+            await this.inventory.recordMovement(
+              tx,
+              u.inventoryId,
+              u.binId,
+              {
+                avail: u.deltaAvail,
+                reserved: 0,
+                inTransit: 0,
+                quality: u.deltaQuality,
+                qtyIssue: u.deltaQtyIssue,
+              },
+              {
+                avail: u.avail,
+                reserved: u.reservedAfter,
+                inTransit: u.inTransitAfter,
+                quality: u.quality,
+                qtyIssue: u.qtyIssue,
+              },
+              {
+                module: 'inventory-adjustment',
+                id: a.id,
+                number: a.adjustmentNumber,
+                actorId,
+                note: `${ruleFor(a.adjustmentType).oracleLabel} — ${note}`,
+              },
+            );
+          }
         }
 
         await tx.inventoryAdjustment.update({
@@ -1069,7 +1354,10 @@ export class InventoryAdjustmentsService {
           actorId,
           message: note,
         });
-      });
+      },
+      // Prisma's default interactive-transaction budget is 5s; a document with
+      // hundreds of lines needs more headroom.
+      { maxWait: 10_000, timeout: 60_000 });
     } catch (e) {
       const msg = (e as Error).message?.slice(0, 1000) ?? 'Stock update failed';
       // FR-IA-14 rule 5: flag the document so it can be followed up; no partial
@@ -1258,6 +1546,19 @@ export class InventoryAdjustmentsService {
         discrepancy_id: d.discrepancy.discrepancyId,
         type: d.discrepancy.discrepancyType,
         from: d.discrepancy.discrepancyFrom,
+      })),
+      // FR-IA-13 rule 8 / FR-IA-16 rule 6: raw Oracle traffic for reconciliation.
+      integration_logs: a.integrationLogs.map((l) => ({
+        id: l.id,
+        operation: l.operation,
+        endpoint: l.endpoint,
+        request: l.request,
+        response: l.response,
+        http_status: l.httpStatus,
+        ok: l.ok,
+        error: l.error,
+        duration_ms: l.durationMs,
+        created_at: l.createdAt,
       })),
       // FR-IA-15: the audit trail.
       events: a.events.map((e) => ({

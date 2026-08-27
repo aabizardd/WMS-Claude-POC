@@ -96,6 +96,11 @@ export default function InventoryAdjustmentCreatePage() {
 
   const materialIds = useMemo(() => groups.map((g) => g.material_id), [groups]);
   const materialIdsKey = materialIds.join(',');
+  const binIds = useMemo(
+    () => [...new Set(groups.flatMap((g) => g.lines.map((l) => l.bin_id)))],
+    [groups],
+  );
+  const binIdsKey = binIds.join(',');
 
   // FR-IA-10: the discrepancy list follows the picked materials, and only exists
   // for the two Discrepancy types.
@@ -106,12 +111,16 @@ export default function InventoryAdjustmentCreatePage() {
     }
     api
       .get<AdjDiscrepancyOption[]>('/inventory-adjustments/discrepancies', {
-        params: { adjustment_type: type, material_ids: materialIds.join(',') },
+        params: {
+          adjustment_type: type,
+          material_ids: materialIds.join(','),
+          bin_ids: binIds.join(','),
+        },
       })
       .then((r) => setDiscrepancies(r.data))
       .catch(() => setDiscrepancies([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [type, rule?.discrepancy_list, materialIdsKey]);
+  }, [type, rule?.discrepancy_list, materialIdsKey, binIdsKey]);
 
   useEffect(loadDiscrepancies, [loadDiscrepancies]);
 
@@ -206,13 +215,19 @@ export default function InventoryAdjustmentCreatePage() {
     );
   }
 
+  /**
+   * UAC-IA-07: removing the last bin of a material removes the material from the
+   * document too, so an empty material row can never be left behind.
+   */
   function removeBin(materialId: string, key: string) {
     setGroups((gs) =>
-      gs.map((g) =>
-        g.material_id === materialId
-          ? { ...g, lines: g.lines.filter((l) => l.key !== key) }
-          : g,
-      ),
+      gs
+        .map((g) =>
+          g.material_id === materialId
+            ? { ...g, lines: g.lines.filter((l) => l.key !== key) }
+            : g,
+        )
+        .filter((g) => g.material_id !== materialId || g.lines.length > 0),
     );
   }
 
@@ -544,8 +559,8 @@ export default function InventoryAdjustmentCreatePage() {
                   </div>
 
                   {g.lines.length === 0 ? (
-                    <div className="px-4 py-3 text-xs text-amber-600">
-                      No bin selected for this material — add one or remove the material.
+                    <div className="px-4 py-3 text-xs text-slate-400">
+                      Choose a bin for this material.
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
@@ -704,8 +719,9 @@ export default function InventoryAdjustmentCreatePage() {
             Discrepancy References
           </h3>
           <p className="mb-3 text-xs text-slate-400">
-            Optional. Only {rule.discrepancy_list} discrepancies for the materials above are listed. Selecting one
-            attaches it to the document as a reference — it does not change the discrepancy's own status.
+            Optional. Only {rule.discrepancy_list} discrepancies for the materials and bins above are listed.
+            Selecting one attaches it to the document as a reference — it does not change the discrepancy's own
+            status.
           </p>
           {groups.length === 0 ? (
             <p className="text-sm text-slate-400">Add a material to see related discrepancies.</p>
@@ -725,7 +741,17 @@ export default function InventoryAdjustmentCreatePage() {
                           onChange={() => toggleDisc(d.id)}
                         />
                       </td>
-                      <td className="px-4 py-2 font-medium text-slate-800">{d.discrepancy_id}</td>
+                      <td className="px-4 py-2 font-medium text-slate-800">
+                        {d.discrepancy_id}
+                        {!d.bin_matched && (
+                          <span
+                            className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-normal text-slate-500"
+                            title="This discrepancy has no bin reference, so it was matched on the material only"
+                          >
+                            material only
+                          </span>
+                        )}
+                      </td>
                       <td className="px-4 py-2 text-slate-600">{d.from ?? '—'}</td>
                       <td className="px-4 py-2 text-right">
                         <a

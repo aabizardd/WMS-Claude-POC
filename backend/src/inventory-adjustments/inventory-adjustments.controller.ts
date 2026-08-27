@@ -47,13 +47,15 @@ export class InventoryAdjustmentsController {
   discrepancyOptions(
     @Query('adjustment_type') type: string,
     @Query('material_ids') materialIds: string,
+    @Query('bin_ids') binIds: string,
     @CurrentUser() user: AuthUser,
   ) {
-    const ids = (materialIds ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    return this.service.discrepancyOptions(type, ids, user);
+    const split = (v: string) =>
+      (v ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    return this.service.discrepancyOptions(type, split(materialIds), split(binIds), user);
   }
 
   @Get()

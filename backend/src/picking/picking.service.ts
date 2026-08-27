@@ -21,6 +21,9 @@ const PICKING_SORTABLE: Record<string, (d: SortDir) => PickingOrder> = {
 };
 
 export interface WarehouseScope {
+  // Controllers pass the full AuthUser, so the acting user is available for the
+  // stock ledger; optional because older call sites do not set it.
+  userId?: number;
   role: string;
   warehouseId: string | null;
 }
@@ -364,6 +367,13 @@ export class PickingService {
           p.inventoryId,
           p.binId,
           { avail: -p.qty, reserved: p.qty },
+          {
+            module: 'picking',
+            id: picking.id,
+            number: picking.pickingCode,
+            actorId: scope.userId,
+            note: 'Reserved for picking',
+          },
           tx,
         );
       }
@@ -584,6 +594,13 @@ export class PickingService {
           p.inventoryId,
           p.binId,
           { avail: -p.qty, reserved: p.qty },
+          {
+            module: 'picking',
+            id: picking.id,
+            number: picking.pickingCode,
+            actorId: scope.userId,
+            note: 'Reserved for transfer picking',
+          },
           tx,
         );
       }
@@ -642,6 +659,13 @@ export class PickingService {
               inv.id,
               it.binId,
               { avail: it.requestQty, reserved: -it.requestQty },
+              {
+                module: 'picking',
+                id: pk.id,
+                number: pk.pickingCode,
+                actorId: scope.userId,
+                note: 'Picking deleted — reservation returned to available',
+              },
               tx,
             );
           }
@@ -761,6 +785,13 @@ export class PickingService {
             inv.id,
             it.binId,
             { reserved: -gap, qtyIssue: it.qtyIssue, quality: it.qualityIssue },
+            {
+              module: 'picking',
+              id: pk.id,
+              number: pk.pickingCode,
+              actorId: scope.userId,
+              note: 'Picking discrepancy moved out of reserved',
+            },
             tx,
           );
         }

@@ -80,6 +80,7 @@ model User {
   inventoryAdjustments InventoryAdjustment[]      @relation("AdjustmentCreator")
   approvedAdjustments  InventoryAdjustment[]      @relation("AdjustmentApprover")
   adjustmentEvents     InventoryAdjustmentEvent[]
+  stockMovements       StockMovement[]
 
   @@index([warehouseId])
   @@index([roleId])
@@ -311,6 +312,7 @@ model Bin {
   packingItems       PackingItem[]
   deliveryItems      DeliveryItem[]
   adjustmentItems    InventoryAdjustmentItem[]
+  stockMovements     StockMovement[]
 
   @@index([warehouseId])
   @@index([aisleId])
@@ -758,7 +760,8 @@ model InventoryManagement {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  binStocks InventoryBinStock[]
+  binStocks      InventoryBinStock[]
+  stockMovements StockMovement[]
 
   @@unique([materialCode, warehouseId])
   @@index([warehouseId])
@@ -858,9 +861,10 @@ model InventoryAdjustment {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  items         InventoryAdjustmentItem[]
-  discrepancies InventoryAdjustmentDiscrepancy[]
-  events        InventoryAdjustmentEvent[]
+  items           InventoryAdjustmentItem[]
+  discrepancies   InventoryAdjustmentDiscrepancy[]
+  events          InventoryAdjustmentEvent[]
+  integrationLogs InventoryAdjustmentIntegrationLog[]
 
   @@index([warehouseId])
   @@index([status])
@@ -916,6 +920,78 @@ model InventoryAdjustmentDiscrepancy {
 
 // FR-IA-15. Append-only audit trail: every lifecycle event of an IA document
 // with who did it and when. Never updated or deleted through the application.
+// FR-IA-13 rule 8 / FR-IA-16 rule 6: the full request and response of every
+// Oracle call made for a document, kept for reconciliation and troubleshooting.
+// FR-IA-14 rule 4 / NFR-IA-L-05: an append-only ledger of every bucket movement
+// on a bin, with the document that caused it. Written from InventoryService
+// .adjustBinStock (the single choke point for GR, putaway, picking, packing and
+// delivery), from the manual bin editor, and from Inventory Adjustment.
+//
+// The value BEFORE a movement is (after - delta) for each bucket.
+model StockMovement {
+  id String @id @default(uuid())
+
+  inventoryId String              @map("inventory_id")
+  inventory   InventoryManagement @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  binId       String?             @map("bin_id")
+  bin         Bin?                @relation(fields: [binId], references: [id])
+
+  warehouseId  String? @map("warehouse_id")
+  materialId   String? @map("material_id")
+  materialCode String? @map("material_code")
+
+  deltaAvail     Float @default(0) @map("delta_avail")
+  deltaReserved  Float @default(0) @map("delta_reserved")
+  deltaInTransit Float @default(0) @map("delta_in_transit")
+  deltaQuality   Float @default(0) @map("delta_quality")
+  deltaQtyIssue  Float @default(0) @map("delta_qty_issue")
+
+  availAfter     Float @default(0) @map("avail_after")
+  reservedAfter  Float @default(0) @map("reserved_after")
+  inTransitAfter Float @default(0) @map("in_transit_after")
+  qualityAfter   Float @default(0) @map("quality_after")
+  qtyIssueAfter  Float @default(0) @map("qty_issue_after")
+
+  // inventory-adjustment | goods-receive | putaway | picking | packing |
+  // delivery | manual | erp-sync
+  sourceModule String  @map("source_module")
+  sourceId     String? @map("source_id")
+  sourceNumber String? @map("source_number")
+  note         String?
+
+  actorId Int?  @map("actor_id")
+  actor   User? @relation(fields: [actorId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([inventoryId, createdAt])
+  @@index([binId])
+  @@index([materialId, createdAt])
+  @@index([sourceModule, sourceId])
+  @@map("stock_movements")
+}
+
+model InventoryAdjustmentIntegrationLog {
+  id           String              @id @default(uuid())
+  adjustmentId String              @map("adjustment_id")
+  adjustment   InventoryAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
+
+  // post | status_check
+  operation  String
+  endpoint   String
+  request    Json
+  response   Json?
+  httpStatus Int?    @map("http_status")
+  ok         Boolean @default(false)
+  error      String?
+  durationMs Int?    @map("duration_ms")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([adjustmentId])
+  @@map("inventory_adjustment_integration_logs")
+}
+
 model InventoryAdjustmentEvent {
   id           String              @id @default(uuid())
   adjustmentId String              @map("adjustment_id")

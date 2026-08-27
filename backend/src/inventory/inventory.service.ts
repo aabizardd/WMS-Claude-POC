@@ -24,6 +24,9 @@ const INVENTORY_SORTABLE: Record<string, (d: SortDir) => InvOrder> = {
 };
 
 export interface WarehouseScope {
+  // Controllers pass the full AuthUser, so the acting user is available for the
+  // stock ledger; optional because older call sites do not set it.
+  userId?: number;
   role: string;
   warehouseId: string | null;
 }
@@ -73,6 +76,25 @@ interface StockDelta {
   inTransit?: number;
   quality?: number;
   qtyIssue?: number;
+}
+
+/** Who/what caused a stock movement — required on every adjustBinStock call. */
+export interface StockMovementSource {
+  module:
+    | 'inventory-adjustment'
+    | 'goods-receive'
+    | 'putaway'
+    | 'picking'
+    | 'packing'
+    | 'delivery'
+    | 'manual'
+    | 'erp-sync';
+  /** Primary key of the source document. */
+  id?: string | null;
+  /** Human-readable document number, so the ledger reads without a join. */
+  number?: string | null;
+  actorId?: number | null;
+  note?: string | null;
 }
 
 @Injectable()
@@ -229,6 +251,16 @@ export class InventoryService {
     const existingByBin = new Map(
       inv.binStocks.map((bs) => [bs.binId ?? '__null__', bs]),
     );
+    // The manual editor sets availQty to an absolute value, so the ledger delta
+    // is (new - old); every other bucket is left untouched.
+    const manualSource = {
+      module: 'manual' as const,
+      id,
+      note: 'Bin quantities edited manually',
+      actorId: scope.userId ?? null,
+    };
+    const noChange = { reserved: 0, inTransit: 0, quality: 0, qtyIssue: 0 };
+
     await this.prisma.$transaction(async (tx) => {
       // Update / create the submitted bins.
       for (const l of lines) {
@@ -236,28 +268,70 @@ export class InventoryService {
         const existing = existingByBin.get(key);
         if (existing) {
           if (existing.availQty !== l.avail_qty) {
-            await tx.inventoryBinStock.update({
+            const row = await tx.inventoryBinStock.update({
               where: { id: existing.id },
               data: { availQty: l.avail_qty },
             });
+            await this.recordMovement(
+              tx,
+              id,
+              l.bin_id ?? null,
+              { ...noChange, avail: l.avail_qty - existing.availQty },
+              {
+                avail: row.availQty,
+                reserved: row.reservedQty,
+                inTransit: row.inTransitQty,
+                quality: row.qualityIssue,
+                qtyIssue: row.qtyIssue,
+              },
+              manualSource,
+            );
           }
         } else {
-          await tx.inventoryBinStock.create({
+          const row = await tx.inventoryBinStock.create({
             data: {
               inventoryId: id,
               binId: l.bin_id ?? null,
               availQty: l.avail_qty,
             },
           });
+          await this.recordMovement(
+            tx,
+            id,
+            l.bin_id ?? null,
+            { ...noChange, avail: l.avail_qty },
+            {
+              avail: row.availQty,
+              reserved: row.reservedQty,
+              inTransit: row.inTransitQty,
+              quality: row.qualityIssue,
+              qtyIssue: row.qtyIssue,
+            },
+            manualSource,
+          );
         }
       }
       // Zero out availQty on existing bins that were dropped from the list.
       for (const [key, bs] of existingByBin) {
         if (!seen.has(key) && bs.availQty !== 0) {
-          await tx.inventoryBinStock.update({
+          const row = await tx.inventoryBinStock.update({
             where: { id: bs.id },
             data: { availQty: 0 },
           });
+          await this.recordMovement(
+            tx,
+            id,
+            bs.binId,
+            { ...noChange, avail: -bs.availQty },
+            {
+              avail: row.availQty,
+              reserved: row.reservedQty,
+              inTransit: row.inTransitQty,
+              quality: row.qualityIssue,
+              qtyIssue: row.qtyIssue,
+            },
+            { ...manualSource, note: 'Bin removed from the manual list' },
+          );
         }
       }
     });
@@ -325,6 +399,12 @@ export class InventoryService {
           invId,
           item.binId ?? null,
           { avail: item.qtyActual, qtyIssue: gap },
+          {
+            module: 'goods-receive',
+            id: goodsReceiveId,
+            number: gr.grNumber,
+            note: 'Inventory generated from Goods Receive',
+          },
           tx,
         );
         await tx.mrnItem.update({
@@ -342,39 +422,141 @@ export class InventoryService {
 
   // Increment a bin's stock by the given deltas (negative = decrease),
   // creating the (inventory, bin) row if needed. Accepts a tx client.
+  //
+  // Every caller must say which document caused the movement: this is the single
+  // choke point for GR, putaway, picking, packing and delivery, so it is also
+  // where the stock ledger is written (FR-IA-14 rule 4 / NFR-IA-L-05).
   async adjustBinStock(
     inventoryId: string,
     binId: string | null,
     d: StockDelta,
+    source: StockMovementSource,
     client?: Prisma.TransactionClient,
   ) {
     const c = client ?? this.prisma;
     const existing = await c.inventoryBinStock.findFirst({
       where: { inventoryId, binId },
     });
+
+    const delta = {
+      avail: d.avail ?? 0,
+      reserved: d.reserved ?? 0,
+      inTransit: d.inTransit ?? 0,
+      quality: d.quality ?? 0,
+      qtyIssue: d.qtyIssue ?? 0,
+    };
+
+    let after: {
+      avail: number;
+      reserved: number;
+      inTransit: number;
+      quality: number;
+      qtyIssue: number;
+    };
+
     if (existing) {
-      await c.inventoryBinStock.update({
+      const row = await c.inventoryBinStock.update({
         where: { id: existing.id },
         data: {
-          availQty: { increment: d.avail ?? 0 },
-          reservedQty: { increment: d.reserved ?? 0 },
-          inTransitQty: { increment: d.inTransit ?? 0 },
-          qualityIssue: { increment: d.quality ?? 0 },
-          qtyIssue: { increment: d.qtyIssue ?? 0 },
+          availQty: { increment: delta.avail },
+          reservedQty: { increment: delta.reserved },
+          inTransitQty: { increment: delta.inTransit },
+          qualityIssue: { increment: delta.quality },
+          qtyIssue: { increment: delta.qtyIssue },
         },
       });
+      after = {
+        avail: row.availQty,
+        reserved: row.reservedQty,
+        inTransit: row.inTransitQty,
+        quality: row.qualityIssue,
+        qtyIssue: row.qtyIssue,
+      };
     } else {
-      await c.inventoryBinStock.create({
+      const row = await c.inventoryBinStock.create({
         data: {
           inventoryId,
           binId,
-          availQty: d.avail ?? 0,
-          reservedQty: d.reserved ?? 0,
-          inTransitQty: d.inTransit ?? 0,
-          qualityIssue: d.quality ?? 0,
-          qtyIssue: d.qtyIssue ?? 0,
+          availQty: delta.avail,
+          reservedQty: delta.reserved,
+          inTransitQty: delta.inTransit,
+          qualityIssue: delta.quality,
+          qtyIssue: delta.qtyIssue,
         },
       });
+      after = {
+        avail: row.availQty,
+        reserved: row.reservedQty,
+        inTransit: row.inTransitQty,
+        quality: row.qualityIssue,
+        qtyIssue: row.qtyIssue,
+      };
+    }
+
+    await this.recordMovement(c, inventoryId, binId, delta, after, source);
+  }
+
+  /**
+   * Append one ledger row. A movement that changes nothing is not recorded, and
+   * a ledger failure never rolls back the stock change it describes.
+   */
+  async recordMovement(
+    c: Prisma.TransactionClient | PrismaService,
+    inventoryId: string,
+    binId: string | null,
+    delta: {
+      avail: number;
+      reserved: number;
+      inTransit: number;
+      quality: number;
+      qtyIssue: number;
+    },
+    after: {
+      avail: number;
+      reserved: number;
+      inTransit: number;
+      quality: number;
+      qtyIssue: number;
+    },
+    source: StockMovementSource,
+  ) {
+    const moved =
+      delta.avail || delta.reserved || delta.inTransit || delta.quality || delta.qtyIssue;
+    if (!moved) return;
+
+    try {
+      const inv = await c.inventoryManagement.findUnique({
+        where: { id: inventoryId },
+        select: { warehouseId: true, materialId: true, materialCode: true },
+      });
+      await c.stockMovement.create({
+        data: {
+          inventoryId,
+          binId,
+          warehouseId: inv?.warehouseId ?? null,
+          materialId: inv?.materialId ?? null,
+          materialCode: inv?.materialCode ?? null,
+          deltaAvail: delta.avail,
+          deltaReserved: delta.reserved,
+          deltaInTransit: delta.inTransit,
+          deltaQuality: delta.quality,
+          deltaQtyIssue: delta.qtyIssue,
+          availAfter: after.avail,
+          reservedAfter: after.reserved,
+          inTransitAfter: after.inTransit,
+          qualityAfter: after.quality,
+          qtyIssueAfter: after.qtyIssue,
+          sourceModule: source.module,
+          sourceId: source.id ?? null,
+          sourceNumber: source.number ?? null,
+          note: source.note ?? null,
+          actorId: source.actorId ?? null,
+        },
+      });
+    } catch (e) {
+      this.logger.warn(
+        `Could not write the stock ledger for inventory ${inventoryId}: ${(e as Error).message}`,
+      );
     }
   }
 
