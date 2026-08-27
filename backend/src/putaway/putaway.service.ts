@@ -382,10 +382,16 @@ export class PutawayService {
         if (inv) {
           const putawayTotal = row.actualQty + row.qualityIssue + row.qtyIssue;
           // Source bin (receive bin): remove the whole putaway amount.
+          const putawaySource = {
+            module: 'putaway' as const,
+            id: putaway.id,
+            number: putaway.putawayCode,
+          };
           await this.inventory.adjustBinStock(
             inv.id,
             mrnItem.binId ?? null,
             { avail: -putawayTotal },
+            { ...putawaySource, note: 'Moved out of the receive bin' },
             tx,
           );
           // Destination bin: good qty + accumulated issues.
@@ -397,6 +403,7 @@ export class PutawayService {
               quality: row.qualityIssue,
               qtyIssue: row.qtyIssue,
             },
+            { ...putawaySource, note: 'Put away into the destination bin' },
             tx,
           );
         }

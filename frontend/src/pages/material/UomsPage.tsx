@@ -16,9 +16,10 @@ interface FormState {
   uomName: string;
   uomCode: string;
   isActive: boolean;
+  allowsDecimal: boolean;
 }
 
-const emptyForm: FormState = { uomName: '', uomCode: '', isActive: true };
+const emptyForm: FormState = { uomName: '', uomCode: '', isActive: true, allowsDecimal: true };
 
 export default function UomsPage() {
   const { has } = useAuth();
@@ -70,7 +71,12 @@ export default function UomsPage() {
   }
   function openEdit(it: Uom) {
     setEditing(it);
-    setForm({ uomName: it.uomName, uomCode: it.uomCode, isActive: it.isActive });
+    setForm({
+      uomName: it.uomName,
+      uomCode: it.uomCode,
+      isActive: it.isActive,
+      allowsDecimal: it.allowsDecimal ?? true,
+    });
     setError('');
     setFieldErrors({});
     setModalOpen(true);
@@ -180,6 +186,7 @@ export default function UomsPage() {
               <tr>
                 <SortableTh label="Code" col="code" sort={sort} onSort={onSort} />
                 <SortableTh label="Name" col="name" sort={sort} onSort={onSort} />
+                <th className="px-6 py-3">Decimals</th>
                 <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
@@ -204,6 +211,13 @@ export default function UomsPage() {
                       {it.uomCode}
                     </td>
                     <td className="px-6 py-3 text-slate-600">{it.uomName}</td>
+                    <td className="px-6 py-3">
+                      {it.allowsDecimal ?? true ? (
+                        <span className="text-slate-500">Allowed</span>
+                      ) : (
+                        <span className="font-medium text-slate-700">Whole numbers only</span>
+                      )}
+                    </td>
                     <td className="px-6 py-3">
                       {it.isActive ? (
                         <span className="text-xs font-medium text-emerald-600">
@@ -313,6 +327,21 @@ export default function UomsPage() {
               onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
             />
             Active
+          </label>
+          <label className="flex items-start gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+              checked={form.allowsDecimal}
+              onChange={(e) => setForm({ ...form, allowsDecimal: e.target.checked })}
+            />
+            <span>
+              Allow decimal quantities
+              <span className="mt-0.5 block text-xs text-slate-400">
+                Uncheck for whole-unit measures such as pcs or box. Inventory Adjustment
+                rejects decimal quantities for materials using this UoM.
+              </span>
+            </span>
           </label>
           <div className="flex justify-end gap-2 pt-2">
             <button

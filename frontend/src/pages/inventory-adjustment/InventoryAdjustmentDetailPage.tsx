@@ -10,6 +10,7 @@ import { adjStatusBadge, adjStatusLabel } from './InventoryAdjustmentsPage';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import Modal from '../../components/Modal';
+import Collapsible from '../../components/Collapsible';
 
 type PendingAction = 'approve' | 'reject' | 'send' | null;
 
@@ -39,6 +40,7 @@ export default function InventoryAdjustmentDetailPage() {
   const [checking, setChecking] = useState(false);
   // Which material is on screen in the inventory slider.
   const [slide, setSlide] = useState(0);
+  const [logsOpen, setLogsOpen] = useState(false);
 
   function load() {
     setLoading(true);
@@ -421,6 +423,62 @@ export default function InventoryAdjustmentDetailPage() {
             ))}
           </div>
         </div>
+      )}
+
+      {/* FR-IA-13 rule 8 / FR-IA-16 rule 6: raw Oracle traffic for reconciliation. */}
+      {a.integration_logs.length > 0 && (
+        <Collapsible
+          title="Oracle Integration Log"
+          subtitle={`${a.integration_logs.length} call(s)`}
+          open={logsOpen}
+          onToggle={() => setLogsOpen((v) => !v)}
+        >
+          <div className="space-y-3 px-4 pb-4">
+            {a.integration_logs.map((l) => (
+              <div key={l.id} className="rounded-lg border border-slate-200">
+                <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-3 py-2 text-xs">
+                  <span
+                    className={`badge ${l.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}
+                  >
+                    {l.ok ? 'OK' : 'FAILED'}
+                  </span>
+                  <span className="font-medium text-slate-700">
+                    {l.operation === 'post' ? 'Send adjustment' : 'Check status'}
+                  </span>
+                  <span className="font-mono text-slate-400">{l.endpoint}</span>
+                  {l.http_status != null && (
+                    <span className="text-slate-400">HTTP {l.http_status}</span>
+                  )}
+                  {l.duration_ms != null && (
+                    <span className="text-slate-400">{l.duration_ms} ms</span>
+                  )}
+                  <span className="ml-auto text-slate-400">
+                    {new Date(l.created_at).toLocaleString()}
+                  </span>
+                </div>
+                {l.error && (
+                  <div className="border-b border-slate-100 bg-rose-50 px-3 py-1.5 text-xs text-rose-700">
+                    {l.error}
+                  </div>
+                )}
+                <div className="grid gap-3 p-3 md:grid-cols-2">
+                  <div>
+                    <div className="mb-1 text-xs text-slate-400">Request</div>
+                    <pre className="max-h-48 overflow-auto rounded bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-600">
+                      {JSON.stringify(l.request, null, 2)}
+                    </pre>
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs text-slate-400">Response</div>
+                    <pre className="max-h-48 overflow-auto rounded bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-600">
+                      {l.response == null ? '—' : JSON.stringify(l.response, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Collapsible>
       )}
 
       {/* FR-IA-15: audit trail */}

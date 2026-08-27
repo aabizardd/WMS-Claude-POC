@@ -32,6 +32,9 @@ interface ItemFulfillmentResponse {
 }
 
 export interface WarehouseScope {
+  // Controllers pass the full AuthUser, so the acting user is available for the
+  // stock ledger; optional because older call sites do not set it.
+  userId?: number;
   role: string;
   warehouseId: string | null;
 }
@@ -489,6 +492,13 @@ export class DeliveryService {
           inv.id,
           it.binId,
           { reserved: -it.qty },
+          {
+            module: 'delivery',
+            id: d.id,
+            number: d.deliveryCode,
+            actorId: scope.userId,
+            note: 'Shipped — reservation released',
+          },
           tx,
         );
       }
