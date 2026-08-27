@@ -77,8 +77,9 @@ model User {
   packingAssignments   PackingItem[]
   deliveryAssignments  DeliveryItem[]
   complaints           Complaint[]
-  inventoryAdjustments InventoryAdjustment[] @relation("AdjustmentCreator")
-  approvedAdjustments  InventoryAdjustment[] @relation("AdjustmentApprover")
+  inventoryAdjustments InventoryAdjustment[]      @relation("AdjustmentCreator")
+  approvedAdjustments  InventoryAdjustment[]      @relation("AdjustmentApprover")
+  adjustmentEvents     InventoryAdjustmentEvent[]
 
   @@index([warehouseId])
   @@index([roleId])
@@ -92,9 +93,12 @@ model Uom {
   uomName String @map("uom_name")
   uomCode String @unique @map("uom_code")
 
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  isActive      Boolean  @default(true) @map("is_active")
+  // FR-IA-11 rule 4: qty inputs accept decimals only when the material's UoM
+  // allows them. Defaults to true so existing behaviour is unchanged.
+  allowsDecimal Boolean  @default(true) @map("allows_decimal")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
 
   // back-relations from Material (one UOM may be used by many materials in several slots)
   primaryForMaterials   Material[] @relation("PrimaryUom")
@@ -787,15 +791,31 @@ model InventoryBinStock {
 
 // ===================== Inventory Adjustment =====================
 
+// The 7 IA types from PRD-06. Grouped by behaviour:
+//   Discrepancy*      -> qty auto-filled negative, read-only, discrepancy list shown
+//   QualityAdjustment -> qtyPassed / qtyNonPassed, Oracle hit is conditional
+//   the rest          -> free signed qtyAdjustment, identical logic
 enum InventoryAdjustmentType {
-  qty_issue
-  quality_issue
+  DiscrepancyQuantity
+  DiscrepancyQuality
+  QualityAdjustment
+  Assembly
+  Disassembly
+  CycleCount
+  StockOpname
 }
 
+// PRD-06 FR-IA-12. A document is created straight into WaitingApproval — there is
+// no Draft stage; the confirmation dialog on the create form IS the submission.
+// Approved is a transient state for documents that still owe Oracle a post;
+// documents that skip Oracle go straight from Approved to Completed.
 enum InventoryAdjustmentStatus {
-  PendingApproval
+  WaitingApproval
   Approved
   Rejected
+  WaitingOracleApproval
+  Completed
+  RejectedByOracle
 }
 
 // Manual inventory adjustment. Created as Pending Approval (WH Manager); the
@@ -807,8 +827,9 @@ model InventoryAdjustment {
   warehouseId      String                    @map("warehouse_id")
   warehouse        Warehouse                 @relation(fields: [warehouseId], references: [id])
   adjustmentType   InventoryAdjustmentType   @map("adjustment_type")
-  status           InventoryAdjustmentStatus @default(PendingApproval)
-  note             String?
+  status           InventoryAdjustmentStatus @default(WaitingApproval)
+  // FR-IA-02. Free text, optional. Sent to Oracle as "{IA Type} | {memo}".
+  memo             String?
 
   // Header class chosen at create; its Class.oracleId is sent to Oracle.
   classId String? @map("class_id")
@@ -827,12 +848,19 @@ model InventoryAdjustment {
   approvalReason       String?   @map("approval_reason")
   // Oracle-side approval status; "-" until WMS-approved, then "Pending Approval Oracle".
   oracleApprovalStatus String    @default("-") @map("oracle_approval_status")
+  oracleSentAt         DateTime? @map("oracle_sent_at")
+  // FR-IA-16. Last send failure; cleared on a successful (re)send. The document
+  // stays Approved so it can be resent without creating a new one.
+  oracleError          String?   @map("oracle_error")
+  oracleRejectReason   String?   @map("oracle_reject_reason")
+  completedAt          DateTime? @map("completed_at")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   items         InventoryAdjustmentItem[]
   discrepancies InventoryAdjustmentDiscrepancy[]
+  events        InventoryAdjustmentEvent[]
 
   @@index([warehouseId])
   @@index([status])
@@ -854,11 +882,13 @@ model InventoryAdjustmentItem {
   bin      Bin?    @relation(fields: [binId], references: [id])
   binLabel String? @map("bin_label")
 
-  // qty_issue type
+  // Signed delta. Auto-filled negative for the two Discrepancy types (read-only),
+  // free +/- for Assembly / Disassembly / CycleCount / StockOpname.
   qtyAdjustment Float @default(0) @map("qty_adjustment")
-  // quality_issue type
-  qtyScrapped   Float @default(0) @map("qty_scrapped")
+  // QualityAdjustment only. Both positive; both reduce Quality Issue, but only
+  // qtyPassed adds back to available and requires an Oracle post.
   qtyPassed     Float @default(0) @map("qty_passed")
+  qtyNonPassed  Float @default(0) @map("qty_non_passed")
 
   // Snapshot of the bin's quantities at create time (informational context).
   availAtCreate        Float @default(0) @map("avail_at_create")
@@ -882,6 +912,31 @@ model InventoryAdjustmentDiscrepancy {
 
   @@id([adjustmentId, discrepancyId])
   @@map("inventory_adjustment_discrepancies")
+}
+
+// FR-IA-15. Append-only audit trail: every lifecycle event of an IA document
+// with who did it and when. Never updated or deleted through the application.
+model InventoryAdjustmentEvent {
+  id           String              @id @default(uuid())
+  adjustmentId String              @map("adjustment_id")
+  adjustment   InventoryAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
+
+  // created | submitted | approved | rejected | oracle_sent | oracle_failed
+  // | oracle_approved | oracle_rejected | completed | updated
+  action     String
+  fromStatus String? @map("from_status")
+  toStatus   String? @map("to_status")
+
+  actorId Int?  @map("actor_id")
+  actor   User? @relation(fields: [actorId], references: [id])
+
+  // Reason (reject), Oracle message, or error detail.
+  message String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([adjustmentId])
+  @@map("inventory_adjustment_events")
 }
 
 // ===================== Discrepancy =====================

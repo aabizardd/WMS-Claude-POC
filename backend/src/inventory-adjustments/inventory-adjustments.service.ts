@@ -1,14 +1,25 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import type {
+  InventoryAdjustmentStatus,
+  InventoryAdjustmentType,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpHttpService } from '../erp/erp-http.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import {
+  IA_TYPES,
+  buildOracleMemo,
+  ruleFor,
+  stockEffect,
+} from './ia-rules';
 import type { CreateInventoryAdjustmentDto } from './dto/create-inventory-adjustment.dto';
 import type { ApproveInventoryAdjustmentDto } from './dto/approve-inventory-adjustment.dto';
 
@@ -23,6 +34,8 @@ const ADJ_CUSTOMFORM = Number(process.env.ORACLE_ADJ_CUSTOMFORM ?? 112);
 const ADJ_SUBSIDIARY = Number(process.env.ORACLE_ADJ_SUBSIDIARY ?? 6);
 const ADJ_ACCOUNT = Number(process.env.ORACLE_ADJ_ACCOUNT ?? 53);
 
+const EPS = 1e-9;
+
 interface OracleAdjustmentResponse {
   status?: string;
   success?: boolean;
@@ -30,11 +43,16 @@ interface OracleAdjustmentResponse {
   inventory_adjustment_id?: number;
 }
 
-// Adjustment type -> the discrepancy type that may be attached as a memo.
-const DISCREPANCY_TYPE_FOR: Record<string, 'quantity' | 'quality'> = {
-  qty_issue: 'quantity',
-  quality_issue: 'quality',
-};
+// POST /inventory/adjustments/get-status with { id: [<oracle ids>] }.
+interface OracleAdjustmentStatusResponse {
+  success?: boolean;
+  total_records?: number;
+  data?: {
+    id?: string;
+    custbody_me_approval_status?: string;
+    custbody_me_approval_status_display?: string;
+  }[];
+}
 
 const listInclude = {
   warehouse: { select: { id: true, name: true } },
@@ -64,6 +82,10 @@ const detailInclude = {
       },
     },
   },
+  events: {
+    include: { actor: { select: { id: true, name: true } } },
+    orderBy: { createdAt: 'asc' as const },
+  },
 } satisfies Prisma.InventoryAdjustmentInclude;
 
 type AdjList = Prisma.InventoryAdjustmentGetPayload<{
@@ -83,6 +105,21 @@ const SORTABLE: Record<string, (d: SortDir) => AdjOrder> = {
   created_by: (d) => ({ createdBy: { name: d } }),
   created_at: (d) => ({ createdAt: d }),
 };
+
+// A line as accepted from the client, after server-side normalisation.
+interface PreparedLine {
+  materialId: string;
+  materialCode: string | null;
+  materialName: string | null;
+  binId: string;
+  binLabel: string | null;
+  qtyAdjustment: number;
+  qtyPassed: number;
+  qtyNonPassed: number;
+  avail: number;
+  qtyIssue: number;
+  qualityIssue: number;
+}
 
 @Injectable()
 export class InventoryAdjustmentsService {
@@ -110,100 +147,203 @@ export class InventoryAdjustmentsService {
     return scope.warehouseId;
   }
 
+  private parseType(value: string | undefined): InventoryAdjustmentType {
+    if (!value || !IA_TYPES.includes(value as InventoryAdjustmentType)) {
+      throw new BadRequestException(
+        `IA Type is required and must be one of: ${IA_TYPES.join(', ')}`,
+      );
+    }
+    return value as InventoryAdjustmentType;
+  }
+
+  // FR-IA-05: the bin-stock predicate for the type's source bucket.
+  private bucketWhere(
+    type: InventoryAdjustmentType,
+  ): Prisma.InventoryBinStockWhereInput {
+    switch (ruleFor(type).filterBucket) {
+      case 'qty_issue':
+        return { qtyIssue: { gt: 0 } };
+      case 'quality_issue':
+        return { qualityIssue: { gt: 0 } };
+      default:
+        return {};
+    }
+  }
+
   // ---------- lookups (create form) ----------
 
-  // Materials that have inventory in the active warehouse.
-  async materialOptions(scope: WarehouseScope) {
+  /** FR-IA-05: materials that have at least one bin matching the type's bucket. */
+  async materialOptions(type: string | undefined, scope: WarehouseScope) {
     const warehouseId = this.requireWarehouse(scope);
+    const iaType = this.parseType(type);
+
     const invs = await this.prisma.inventoryManagement.findMany({
-      where: { warehouseId, materialId: { not: null } },
+      where: {
+        warehouseId,
+        materialId: { not: null },
+        binStocks: { some: { binId: { not: null }, ...this.bucketWhere(iaType) } },
+      },
       select: {
         materialId: true,
         materialCode: true,
-        material: { select: { materialName: true } },
+        material: {
+          select: {
+            materialName: true,
+            primaryUom: { select: { uomCode: true, allowsDecimal: true } },
+          },
+        },
       },
       orderBy: { materialCode: 'asc' },
     });
+
     return invs.map((i) => ({
       material_id: i.materialId,
       material_code: i.materialCode,
       material_name: i.material?.materialName ?? null,
+      uom_code: i.material?.primaryUom?.uomCode ?? null,
+      allows_decimal: i.material?.primaryUom?.allowsDecimal ?? true,
     }));
   }
 
-  // Bins holding the given material (+ their current quantities) for context.
-  async binOptions(materialId: string, scope: WarehouseScope) {
+  /** FR-IA-05: bins of a material matching the type's bucket, with quantities. */
+  async binOptions(
+    materialId: string,
+    type: string | undefined,
+    scope: WarehouseScope,
+  ) {
     const warehouseId = this.requireWarehouse(scope);
+    const iaType = this.parseType(type);
+    if (!materialId) return [];
+
     const inv = await this.prisma.inventoryManagement.findFirst({
       where: { warehouseId, materialId },
       include: {
         binStocks: {
-          where: { binId: { not: null } },
+          where: { binId: { not: null }, ...this.bucketWhere(iaType) },
           include: { bin: { select: { binLabel: true } } },
           orderBy: { createdAt: 'asc' },
         },
       },
     });
     if (!inv) return [];
+
     return inv.binStocks.map((bs) => ({
       bin_id: bs.binId,
       bin_label: bs.bin?.binLabel ?? null,
       qty_available: bs.availQty,
       qty_issue: bs.qtyIssue,
       quality_issue: bs.qualityIssue,
+      // FR-IA-06/07: what the read-only qty will be for the Discrepancy types.
+      suggested_qty_adjustment:
+        ruleFor(iaType).qtyMode === 'auto_negative'
+          ? -(ruleFor(iaType).filterBucket === 'qty_issue'
+              ? bs.qtyIssue
+              : bs.qualityIssue)
+          : null,
     }));
   }
 
-  // ---------- create ----------
-
-  async create(dto: CreateInventoryAdjustmentDto, scope: WarehouseScope) {
+  /**
+   * FR-IA-10: discrepancies that may be attached as a reference, restricted to
+   * the type's discrepancy kind and to the materials/bins already on the document.
+   */
+  async discrepancyOptions(
+    type: string | undefined,
+    materialIds: string[],
+    scope: WarehouseScope,
+  ) {
     const warehouseId = this.requireWarehouse(scope);
-    const type = dto.adjustment_type;
-    if (!dto.items?.length) {
+    const iaType = this.parseType(type);
+    const kind = ruleFor(iaType).discrepancyList;
+    if (!kind) return [];
+    if (!materialIds.length) return [];
+
+    // r_discrepancy_detail stores the item by NAME, not by material id, so the
+    // link back to the picked materials goes through their name/code.
+    const materials = await this.prisma.material.findMany({
+      where: { id: { in: materialIds } },
+      select: { materialName: true, materialCode: true },
+    });
+    const names = [
+      ...new Set(
+        materials.flatMap((m) => [m.materialName, m.materialCode]).filter(Boolean),
+      ),
+    ] as string[];
+    if (!names.length) return [];
+
+    const rows = await this.prisma.discrepancy.findMany({
+      where: {
+        warehouseId,
+        discrepancyType: kind,
+        details: { some: { itemName: { in: names } } },
+      },
+      select: {
+        id: true,
+        discrepancyId: true,
+        discrepancyType: true,
+        discrepancyFrom: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+
+    return rows.map((d) => ({
+      id: d.id,
+      discrepancy_id: d.discrepancyId,
+      type: d.discrepancyType,
+      from: d.discrepancyFrom,
+      created_at: d.createdAt,
+    }));
+  }
+
+  // ---------- line preparation & validation (FR-IA-06..09, FR-IA-11) ----------
+
+  private async prepareLines(
+    type: InventoryAdjustmentType,
+    warehouseId: string,
+    items: {
+      material_id: string;
+      bin_id: string;
+      qty_adjustment?: number;
+      qty_passed?: number;
+      qty_non_passed?: number;
+    }[],
+  ): Promise<PreparedLine[]> {
+    if (!items?.length) {
       throw new BadRequestException('At least one material/bin line is required');
     }
-
-    // Header class (sent to Oracle on approval).
-    const klass = await this.prisma.class.findUnique({
-      where: { id: dto.class_id },
-      select: { id: true },
-    });
-    if (!klass) {
-      throw new BadRequestException('Selected class does not exist');
-    }
-
-    // Validate each line against the inventory bin stock and snapshot context.
+    const rule = ruleFor(type);
     const seen = new Set<string>();
-    const prepared: {
-      materialId: string;
-      materialCode: string | null;
-      materialName: string | null;
-      binId: string;
-      binLabel: string | null;
-      qtyAdjustment: number;
-      qtyScrapped: number;
-      qtyPassed: number;
-      avail: number;
-      qtyIssue: number;
-      qualityIssue: number;
-    }[] = [];
+    const prepared: PreparedLine[] = [];
 
-    for (const line of dto.items) {
+    for (const line of items) {
       const key = `${line.material_id}|${line.bin_id}`;
       if (seen.has(key)) {
-        throw new BadRequestException('Duplicate material/bin line');
+        throw new BadRequestException(
+          'The same material and bin appears more than once in this document',
+        );
       }
       seen.add(key);
 
       const inv = await this.prisma.inventoryManagement.findFirst({
         where: { warehouseId, materialId: line.material_id },
-        select: { materialCode: true, material: { select: { materialName: true } } },
+        select: {
+          materialCode: true,
+          material: {
+            select: {
+              materialName: true,
+              primaryUom: { select: { allowsDecimal: true } },
+            },
+          },
+        },
       });
       if (!inv) {
         throw new BadRequestException(
           'Material is not in inventory for this warehouse',
         );
       }
+
       const stock = await this.prisma.inventoryBinStock.findFirst({
         where: {
           binId: line.bin_id,
@@ -217,33 +357,62 @@ export class InventoryAdjustmentsService {
         );
       }
 
-      const qtyAdjustment = Number(line.qty_adjustment) || 0;
-      const qtyScrapped = Number(line.qty_scrapped) || 0;
-      const qtyPassed = Number(line.qty_passed) || 0;
+      const label = `${inv.materialCode ?? line.material_id} @ ${
+        stock.bin?.binLabel ?? line.bin_id
+      }`;
+      const allowsDecimal = inv.material?.primaryUom?.allowsDecimal ?? true;
 
-      if (type === 'qty_issue') {
-        // Signed delta: + adds to available, - reduces it. Must not zero-input
-        // and must not drive available below 0.
-        if (qtyAdjustment === 0) {
-          throw new BadRequestException('Qty adjustment cannot be 0');
-        }
-        if (stock.availQty + qtyAdjustment < -1e-9) {
+      let qtyAdjustment = 0;
+      let qtyPassed = 0;
+      let qtyNonPassed = 0;
+
+      if (rule.qtyMode === 'auto_negative') {
+        // FR-IA-06/07: the client's value is ignored; the whole bucket is taken.
+        const bucket =
+          rule.filterBucket === 'qty_issue' ? stock.qtyIssue : stock.qualityIssue;
+        if (!(bucket > 0)) {
           throw new BadRequestException(
-            `Adjustment (${qtyAdjustment}) would make available negative (current ${stock.availQty})`,
+            `${label}: this bin no longer has a ${
+              rule.filterBucket === 'qty_issue' ? 'Quantity' : 'Quality'
+            } Issue to adjust`,
           );
         }
-      } else {
-        const total = qtyScrapped + qtyPassed;
+        qtyAdjustment = -bucket;
+      } else if (rule.qtyMode === 'passed_non_passed') {
+        qtyPassed = this.num(line.qty_passed);
+        qtyNonPassed = this.num(line.qty_non_passed);
+        if (qtyPassed < 0 || qtyNonPassed < 0) {
+          throw new BadRequestException(
+            `${label}: Qty Passed and Qty Non-Passed must be positive`,
+          );
+        }
+        const total = qtyPassed + qtyNonPassed;
+        // FR-IA-08 rule 4.
         if (!(total > 0)) {
           throw new BadRequestException(
-            'Enter qty scrapped and/or qty passed (total must be > 0)',
+            `${label}: enter Qty Passed and/or Qty Non-Passed (total must be greater than 0)`,
           );
         }
-        if (total > stock.availQty + 1e-9) {
+        // FR-IA-08 rule 3 — against Quality Issue, not against available.
+        if (total > stock.qualityIssue + EPS) {
           throw new BadRequestException(
-            `Scrapped + passed (${total}) exceeds available (${stock.availQty})`,
+            `${label}: Qty Passed + Qty Non-Passed (${total}) exceeds Quality Issue (${stock.qualityIssue})`,
           );
         }
+        this.assertDecimals(label, allowsDecimal, qtyPassed, qtyNonPassed);
+      } else {
+        qtyAdjustment = this.num(line.qty_adjustment);
+        // FR-IA-09 rule 4.
+        if (Math.abs(qtyAdjustment) < EPS) {
+          throw new BadRequestException(`${label}: Qty Adjustment cannot be 0`);
+        }
+        // FR-IA-09 rule 3.
+        if (stock.availQty + qtyAdjustment < -EPS) {
+          throw new BadRequestException(
+            `${label}: a negative adjustment of ${qtyAdjustment} exceeds the available qty (${stock.availQty})`,
+          );
+        }
+        this.assertDecimals(label, allowsDecimal, qtyAdjustment);
       }
 
       prepared.push({
@@ -252,89 +421,298 @@ export class InventoryAdjustmentsService {
         materialName: inv.material?.materialName ?? null,
         binId: line.bin_id,
         binLabel: stock.bin?.binLabel ?? null,
-        qtyAdjustment: type === 'qty_issue' ? qtyAdjustment : 0,
-        qtyScrapped: type === 'quality_issue' ? qtyScrapped : 0,
-        qtyPassed: type === 'quality_issue' ? qtyPassed : 0,
+        qtyAdjustment,
+        qtyPassed,
+        qtyNonPassed,
         avail: stock.availQty,
         qtyIssue: stock.qtyIssue,
         qualityIssue: stock.qualityIssue,
       });
     }
 
-    // Validate attached discrepancy docs (memo). Must match the adjustment type
-    // and be visible in the same warehouse.
-    const discrepancyIds = [...new Set(dto.discrepancy_ids ?? [])];
-    if (discrepancyIds.length > 0) {
-      const wantType = DISCREPANCY_TYPE_FOR[type];
-      const found = await this.prisma.discrepancy.findMany({
-        where: { id: { in: discrepancyIds } },
-        select: { id: true, discrepancyType: true, warehouseId: true },
-      });
-      const byId = new Map(found.map((d) => [d.id, d]));
-      for (const id of discrepancyIds) {
-        const d = byId.get(id);
-        if (!d) throw new BadRequestException(`Discrepancy ${id} not found`);
-        if (d.discrepancyType !== wantType) {
-          throw new BadRequestException(
-            `Discrepancy must be of type "${wantType}" for this adjustment`,
-          );
-        }
-        if (
-          scope.role !== 'admin' &&
-          d.warehouseId !== scope.warehouseId
-        ) {
-          throw new BadRequestException(`Discrepancy ${id} not found`);
-        }
+    return prepared;
+  }
+
+  private num(v: unknown): number {
+    const n = Number(v);
+    // FR-IA-11 rule 3: letters and symbols are rejected rather than coerced to 0.
+    if (!Number.isFinite(n)) {
+      throw new BadRequestException('Qty must be a number');
+    }
+    return n;
+  }
+
+  // FR-IA-11 rule 4.
+  private assertDecimals(label: string, allows: boolean, ...values: number[]) {
+    if (allows) return;
+    for (const v of values) {
+      if (Math.abs(v - Math.round(v)) > EPS) {
+        throw new BadRequestException(
+          `${label}: the unit of measure does not allow decimal quantities`,
+        );
       }
     }
+  }
 
+  // FR-IA-10: validate attached discrepancy references.
+  private async validateDiscrepancies(
+    type: InventoryAdjustmentType,
+    ids: string[],
+    scope: WarehouseScope,
+  ): Promise<string[]> {
+    const unique = [...new Set(ids ?? [])];
+    if (!unique.length) return [];
+
+    const kind = ruleFor(type).discrepancyList;
+    if (!kind) {
+      throw new BadRequestException(
+        'Discrepancy references can only be attached to Discrepancy Quantity or Discrepancy Quality documents',
+      );
+    }
+
+    const found = await this.prisma.discrepancy.findMany({
+      where: { id: { in: unique } },
+      select: { id: true, discrepancyType: true, warehouseId: true },
+    });
+    const byId = new Map(found.map((d) => [d.id, d]));
+    for (const id of unique) {
+      const d = byId.get(id);
+      if (!d) throw new BadRequestException(`Discrepancy ${id} not found`);
+      if (d.discrepancyType !== kind) {
+        throw new BadRequestException(
+          `Discrepancy must be of type "${kind}" for this adjustment type`,
+        );
+      }
+      if (scope.role !== 'admin' && d.warehouseId !== scope.warehouseId) {
+        throw new BadRequestException(`Discrepancy ${id} not found`);
+      }
+    }
+    return unique;
+  }
+
+  // ---------- audit trail (FR-IA-15) ----------
+
+  private event(
+    tx: Prisma.TransactionClient | PrismaService,
+    adjustmentId: string,
+    action: string,
+    opts: {
+      from?: InventoryAdjustmentStatus | null;
+      to?: InventoryAdjustmentStatus | null;
+      actorId?: number | null;
+      message?: string | null;
+    } = {},
+  ) {
+    return tx.inventoryAdjustmentEvent.create({
+      data: {
+        adjustmentId,
+        action,
+        fromStatus: opts.from ?? null,
+        toStatus: opts.to ?? null,
+        actorId: opts.actorId ?? null,
+        message: opts.message ?? null,
+      },
+    });
+  }
+
+  // ---------- create (FR-IA-11 / FR-IA-12) ----------
+
+  /**
+   * There is no Draft stage: the confirmation dialog on the create form is the
+   * submission, so a document is born in Waiting Approval and is read-only from
+   * that moment on.
+   */
+  async create(dto: CreateInventoryAdjustmentDto, scope: WarehouseScope) {
+    const warehouseId = this.requireWarehouse(scope);
+    const type = this.parseType(dto.adjustment_type);
+
+    const klass = await this.prisma.class.findUnique({
+      where: { id: dto.class_id },
+      select: { id: true },
+    });
+    if (!klass) throw new BadRequestException('Selected class does not exist');
+
+    const prepared = await this.prepareLines(type, warehouseId, dto.items);
+    const discrepancyIds = await this.validateDiscrepancies(
+      type,
+      dto.discrepancy_ids ?? [],
+      scope,
+    );
+
+    const adjustmentNumber = await this.nextNumber();
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.inventoryAdjustment.create({
+        data: {
+          adjustmentNumber,
+          warehouseId,
+          classId: dto.class_id,
+          adjustmentType: type,
+          status: 'WaitingApproval',
+          memo: dto.memo ?? null,
+          createdById: scope.userId,
+          items: { create: prepared.map((p) => this.itemData(p)) },
+          discrepancies: {
+            create: discrepancyIds.map((id) => ({ discrepancyId: id })),
+          },
+        },
+      });
+      await this.event(tx, row.id, 'created', {
+        to: 'WaitingApproval',
+        actorId: scope.userId,
+      });
+      return row;
+    });
+
+    this.logger.log(
+      `Inventory adjustment ${adjustmentNumber} created and submitted for approval`,
+    );
+    return this.findOne(created.id, scope);
+  }
+
+  private itemData(p: PreparedLine) {
+    return {
+      materialId: p.materialId,
+      materialCode: p.materialCode,
+      materialName: p.materialName,
+      binId: p.binId,
+      binLabel: p.binLabel,
+      qtyAdjustment: p.qtyAdjustment,
+      qtyPassed: p.qtyPassed,
+      qtyNonPassed: p.qtyNonPassed,
+      availAtCreate: p.avail,
+      qtyIssueAtCreate: p.qtyIssue,
+      qualityIssueAtCreate: p.qualityIssue,
+    };
+  }
+
+  private async nextNumber(): Promise<string> {
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const count = await this.prisma.inventoryAdjustment.count({
       where: { adjustmentNumber: { startsWith: `ADJ-${today}` } },
     });
-    const adjustmentNumber = `ADJ-${today}-${String(count + 1).padStart(3, '0')}`;
-
-    const created = await this.prisma.inventoryAdjustment.create({
-      data: {
-        adjustmentNumber,
-        warehouseId,
-        classId: dto.class_id,
-        adjustmentType: type,
-        status: 'PendingApproval',
-        note: dto.note ?? null,
-        createdById: scope.userId,
-        items: {
-          create: prepared.map((p) => ({
-            materialId: p.materialId,
-            materialCode: p.materialCode,
-            materialName: p.materialName,
-            binId: p.binId,
-            binLabel: p.binLabel,
-            qtyAdjustment: p.qtyAdjustment,
-            qtyScrapped: p.qtyScrapped,
-            qtyPassed: p.qtyPassed,
-            availAtCreate: p.avail,
-            qtyIssueAtCreate: p.qtyIssue,
-            qualityIssueAtCreate: p.qualityIssue,
-          })),
-        },
-        discrepancies: {
-          create: discrepancyIds.map((id) => ({ discrepancyId: id })),
-        },
-      },
-    });
-
-    this.logger.log(`Inventory adjustment created: ${adjustmentNumber}`);
-    return this.findOne(created.id, scope);
+    return `ADJ-${today}-${String(count + 1).padStart(3, '0')}`;
   }
 
-  // ---------- approve / reject (WH Manager) ----------
+  private async mustFind(id: string, scope: WarehouseScope) {
+    const a = await this.prisma.inventoryAdjustment.findUnique({
+      where: { id },
+      include: { items: true },
+    });
+    if (!a || (scope.role !== 'admin' && a.warehouseId !== scope.warehouseId)) {
+      throw new NotFoundException(`Inventory adjustment ${id} not found`);
+    }
+    return a;
+  }
+
+  // ---------- approve / reject (FR-IA-12) ----------
 
   async approve(
     id: string,
     dto: ApproveInventoryAdjustmentDto,
     scope: WarehouseScope,
   ) {
+    const a = await this.prisma.inventoryAdjustment.findUnique({
+      where: { id },
+      include: { items: true },
+    });
+    if (!a || (scope.role !== 'admin' && a.warehouseId !== scope.warehouseId)) {
+      throw new NotFoundException(`Inventory adjustment ${id} not found`);
+    }
+    if (a.status !== 'WaitingApproval') {
+      throw new BadRequestException(
+        `Only documents waiting for approval can be decided (this one is ${a.status})`,
+      );
+    }
+
+    const reason = dto.reason?.trim() || null;
+
+    // FR-IA-12 rule 3.
+    if (dto.action === 'reject') {
+      if (!reason) throw new BadRequestException('A reason is required to reject');
+      await this.prisma.$transaction(async (tx) => {
+        await tx.inventoryAdjustment.update({
+          where: { id },
+          data: {
+            status: 'Rejected',
+            approvedById: scope.userId,
+            approvedAt: new Date(),
+            approvalReason: reason,
+          },
+        });
+        await this.event(tx, id, 'rejected', {
+          from: 'WaitingApproval',
+          to: 'Rejected',
+          actorId: scope.userId,
+          message: reason,
+        });
+      });
+      this.logger.log(`Adjustment ${a.adjustmentNumber} rejected internally`);
+      return this.findOne(id, scope);
+    }
+
+    // NFR-IA-P-02 / FR-IA-12 rule 2: the approver must not be the creator.
+    if (a.createdById && a.createdById === scope.userId) {
+      throw new ForbiddenException(
+        'The approver must be a different user from the one who created the document',
+      );
+    }
+
+    // Record the internal approval FIRST so that a later Oracle failure leaves a
+    // resendable document rather than losing the decision (FR-IA-16 rule 3).
+    await this.prisma.$transaction(async (tx) => {
+      await tx.inventoryAdjustment.update({
+        where: { id },
+        data: {
+          status: 'Approved',
+          approvedById: scope.userId,
+          approvedAt: new Date(),
+          approvalReason: reason,
+        },
+      });
+      await this.event(tx, id, 'approved', {
+        from: 'WaitingApproval',
+        to: 'Approved',
+        actorId: scope.userId,
+        message: reason,
+      });
+    });
+
+    return this.advanceAfterApproval(id, scope);
+  }
+
+  /**
+   * FR-IA-08 rule 7 / FR-IA-13 rule 3: a Quality Adjustment whose lines are all
+   * Non-Passed never reaches Oracle — its stock effect is applied straight away.
+   * Every other approved document is posted to Oracle.
+   */
+  private needsOracle(a: {
+    adjustmentType: InventoryAdjustmentType;
+    items: { qtyPassed: number }[];
+  }): boolean {
+    if (ruleFor(a.adjustmentType).oracleHit === 'always') return true;
+    return a.items.some((it) => it.qtyPassed > EPS);
+  }
+
+  private async advanceAfterApproval(id: string, scope: WarehouseScope) {
+    const a = await this.prisma.inventoryAdjustment.findUniqueOrThrow({
+      where: { id },
+      include: { items: true },
+    });
+
+    if (!this.needsOracle(a)) {
+      // FR-IA-08 rule 8: applied directly after internal approval.
+      await this.applyStockAndComplete(id, scope.userId, 'Not sent to Oracle (no Qty Passed)');
+      return this.findOne(id, scope);
+    }
+
+    return this.sendToOracle(id, scope);
+  }
+
+  // ---------- Oracle integration (FR-IA-13, FR-IA-16) ----------
+
+  /** Post to Oracle. Used by approval and by the manual resend of a failed send. */
+  async sendToOracle(id: string, scope: WarehouseScope) {
     const a = await this.prisma.inventoryAdjustment.findUnique({
       where: { id },
       include: {
@@ -347,75 +725,177 @@ export class InventoryAdjustmentsService {
         },
       },
     });
-    if (
-      !a ||
-      (scope.role !== 'admin' && a.warehouseId !== scope.warehouseId)
-    ) {
+    if (!a || (scope.role !== 'admin' && a.warehouseId !== scope.warehouseId)) {
       throw new NotFoundException(`Inventory adjustment ${id} not found`);
     }
-    if (a.status !== 'PendingApproval') {
+    if (a.status !== 'Approved') {
       throw new BadRequestException(
-        'This adjustment has already been processed',
+        `Only internally approved documents can be sent to Oracle (this one is ${a.status})`,
+      );
+    }
+    // FR-IA-13 rule 7 / FR-IA-16 rule 4: never post the same document twice.
+    if (a.oracleId && a.oracleId !== '-') {
+      throw new BadRequestException(
+        `This document was already sent to Oracle (id ${a.oracleId})`,
       );
     }
 
-    const reason = dto.reason?.trim() || null;
-
-    // Reject — no Oracle call.
-    if (dto.action === 'reject') {
-      if (!reason) {
-        throw new BadRequestException('A reason is required to reject');
-      }
-      await this.prisma.inventoryAdjustment.update({
-        where: { id },
-        data: {
-          status: 'Rejected',
-          approvedById: scope.userId,
-          approvedAt: new Date(),
-          approvalReason: reason,
-        },
+    try {
+      const oracle = await this.postToOracle(a);
+      await this.prisma.$transaction(async (tx) => {
+        await tx.inventoryAdjustment.update({
+          where: { id },
+          data: {
+            status: 'WaitingOracleApproval',
+            oracleId: String(oracle.inventoryAdjustmentId),
+            oracleApprovalStatus: 'Pending Approval',
+            oracleSentAt: new Date(),
+            oracleError: null,
+          },
+        });
+        await this.event(tx, id, 'oracle_sent', {
+          from: 'Approved',
+          to: 'WaitingOracleApproval',
+          actorId: scope.userId,
+          message: `Oracle IA ${oracle.inventoryAdjustmentId}: ${oracle.message}`,
+        });
       });
-      this.logger.log(`Adjustment ${id} rejected by user ${scope.userId}`);
-      return this.findOne(id, scope);
+      this.logger.log(
+        `Adjustment ${a.adjustmentNumber} sent to Oracle (IA ${oracle.inventoryAdjustmentId})`,
+      );
+    } catch (e) {
+      // FR-IA-16 rules 1-3: no stock change, document stays resendable.
+      const msg = (e as Error).message?.slice(0, 1000) ?? 'Oracle send failed';
+      await this.prisma.$transaction(async (tx) => {
+        await tx.inventoryAdjustment.update({
+          where: { id },
+          data: { oracleError: msg },
+        });
+        await this.event(tx, id, 'oracle_failed', {
+          from: 'Approved',
+          to: 'Approved',
+          actorId: scope.userId,
+          message: msg,
+        });
+      });
+      this.logger.warn(`Adjustment ${a.adjustmentNumber} failed to reach Oracle: ${msg}`);
     }
 
-    // Approve — post to Oracle FIRST. If it fails, nothing is committed (stays
-    // Pending Approval) so the user can retry.
-    const oracle = await this.postToOracle(a);
+    return this.findOne(id, scope);
+  }
 
+  /**
+   * FR-IA-13 rule 5/6: read the Oracle-side approval status and settle the
+   * document. Triggered manually from the detail page.
+   */
+  async checkOracle(id: string, scope: WarehouseScope) {
+    const a = await this.mustFind(id, scope);
+    if (a.status !== 'WaitingOracleApproval') {
+      throw new BadRequestException(
+        `Only documents waiting for the Oracle decision can be checked (this one is ${a.status})`,
+      );
+    }
+    if (!a.oracleId || a.oracleId === '-') {
+      throw new BadRequestException('This document has no Oracle id yet');
+    }
+
+    let display: string | null;
+    try {
+      display = await this.fetchOracleStatus(a.oracleId);
+    } catch (e) {
+      throw new ServiceUnavailableException(
+        `Could not read the Oracle status: ${(e as Error).message}`,
+      );
+    }
+
+    if (display == null) {
+      return {
+        ...(await this.findOne(id, scope)),
+        oracle_check: {
+          found: false,
+          message:
+            'The document was not found in the Oracle inventory adjustment list yet. Try again later.',
+        },
+      };
+    }
+
+    const normalized = display.trim().toLowerCase();
+
+    if (normalized === 'approved') {
+      await this.applyStockAndComplete(id, scope.userId, `Oracle: ${display}`);
+      return {
+        ...(await this.findOne(id, scope)),
+        oracle_check: { found: true, status: display, message: 'Approved by Oracle' },
+      };
+    }
+
+    if (normalized.includes('reject')) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.inventoryAdjustment.update({
+          where: { id },
+          data: {
+            status: 'RejectedByOracle',
+            oracleApprovalStatus: display!,
+            oracleRejectReason: display,
+          },
+        });
+        await this.event(tx, id, 'oracle_rejected', {
+          from: 'WaitingOracleApproval',
+          to: 'RejectedByOracle',
+          actorId: scope.userId,
+          message: `Oracle: ${display}`,
+        });
+      });
+      return {
+        ...(await this.findOne(id, scope)),
+        oracle_check: { found: true, status: display, message: 'Rejected by Oracle' },
+      };
+    }
+
+    // Still pending — record the label, leave the status alone.
     await this.prisma.inventoryAdjustment.update({
       where: { id },
-      data: {
-        status: 'Approved',
-        approvedById: scope.userId,
-        approvedAt: new Date(),
-        approvalReason: reason,
-        oracleApprovalStatus: 'Pending Approval Oracle',
-        oracleId: String(oracle.inventoryAdjustmentId),
-      },
+      data: { oracleApprovalStatus: display },
     });
-
-    this.logger.log(
-      `Adjustment ${id} approved by user ${scope.userId}; Oracle IA ${oracle.inventoryAdjustmentId}`,
-    );
-    const detail = await this.findOne(id, scope);
     return {
-      ...detail,
-      oracle: {
-        message: oracle.message,
-        inventory_adjustment_id: oracle.inventoryAdjustmentId,
-      },
+      ...(await this.findOne(id, scope)),
+      oracle_check: { found: true, status: display, message: 'Still awaiting the Oracle decision' },
     };
   }
 
-  // Build the Oracle Inventory Adjustment payload and POST it. Throws (503) with
-  // the bridge message on any failure so the caller can surface a retry.
+  /**
+   * Ask Oracle for this document's approval label. The bridge exposes a direct
+   * lookup that takes the ids returned when the adjustment was created:
+   *   POST /inventory/adjustments/get-status  { "id": [66444] }
+   * Returns null when the id is not known to Oracle.
+   */
+  private async fetchOracleStatus(oracleId: string): Promise<string | null> {
+    const numeric = Number(oracleId);
+    const res = await this.erp.post<OracleAdjustmentStatusResponse>(
+      '/inventory/adjustments/get-status',
+      { id: [Number.isFinite(numeric) ? numeric : oracleId] },
+    );
+
+    const hit = (res?.data ?? []).find(
+      (r) => r?.id != null && String(r.id) === String(oracleId),
+    );
+    if (!hit) return null;
+
+    return (
+      hit.custbody_me_approval_status_display?.trim() ||
+      hit.custbody_me_approval_status?.trim() ||
+      ''
+    );
+  }
+
+  // Build the Oracle Inventory Adjustment payload and POST it.
   private async postToOracle(a: {
+    adjustmentNumber: string;
     warehouse: { oracleId: string | null } | null;
     class: { oracleId: string } | null;
     createdBy: { department: { oracleId: string } | null } | null;
-    note: string | null;
-    adjustmentType: string;
+    memo: string | null;
+    adjustmentType: InventoryAdjustmentType;
     items: {
       qtyAdjustment: number;
       qtyPassed: number;
@@ -445,29 +925,26 @@ export class InventoryAdjustmentsService {
 
     const location = Number(locationOracle);
     const department = Number(deptOracle);
-    const isQty = a.adjustmentType === 'qty_issue';
+    const rule = ruleFor(a.adjustmentType);
 
-    // Group lines by item (erp_doc_id) so multiple bins of the same material go
-    // out as ONE line with the summed quantity (Oracle expects one line/item).
+    // Group lines by item so multiple bins of one material go out as ONE Oracle
+    // line with the summed quantity.
     const qtyByItem = new Map<number, number>();
     for (const it of a.items) {
       const item = Number(it.material?.erpDocId);
       if (!Number.isFinite(item)) continue;
-      const q = isQty ? it.qtyAdjustment : it.qtyPassed;
+      // Quality Adjustment only moves Qty Passed on the Oracle side.
+      const q = rule.qtyMode === 'passed_non_passed' ? it.qtyPassed : it.qtyAdjustment;
       qtyByItem.set(item, (qtyByItem.get(item) ?? 0) + q);
     }
     const lines = [...qtyByItem.entries()]
       .map(([item, quantity]) => ({ item, location, quantity, department }))
-      .filter((l) => l.quantity !== 0);
+      .filter((l) => Math.abs(l.quantity) > EPS);
     if (lines.length === 0) {
       throw new BadRequestException(
         'No postable lines (missing item erp id or zero quantity)',
       );
     }
-
-    const memo = a.discrepancies
-      .map((d) => d.discrepancy.discrepancyId)
-      .join(', ');
 
     const payload = {
       customform: ADJ_CUSTOMFORM,
@@ -476,8 +953,15 @@ export class InventoryAdjustmentsService {
       adjlocation: location,
       department,
       class: Number(classOracle),
-      memo,
-      custbody_me_description: a.note ?? '',
+      // FR-IA-03: "{IA Type} | {memo}".
+      memo: buildOracleMemo(a.adjustmentType, a.memo),
+      // Document number + attached discrepancy references, for reconciliation.
+      custbody_me_description: [
+        a.adjustmentNumber,
+        ...a.discrepancies.map((d) => d.discrepancy.discrepancyId),
+      ]
+        .filter(Boolean)
+        .join(', '),
       lines,
     };
 
@@ -508,6 +992,103 @@ export class InventoryAdjustmentsService {
     };
   }
 
+  // ---------- stock update (FR-IA-14) ----------
+
+  /**
+   * Apply every line's bucket movement and mark the document Completed, all in
+   * one transaction: either all lines land or none do (FR-IA-14 rule 1).
+   */
+  private async applyStockAndComplete(
+    id: string,
+    actorId: number,
+    note: string,
+  ) {
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const a = await tx.inventoryAdjustment.findUniqueOrThrow({
+          where: { id },
+          include: { items: true },
+        });
+        if (a.status === 'Completed') return; // idempotent
+
+        for (const it of a.items) {
+          if (!it.binId || !it.materialId) continue;
+
+          const stock = await tx.inventoryBinStock.findFirst({
+            where: {
+              binId: it.binId,
+              inventory: { warehouseId: a.warehouseId, materialId: it.materialId },
+            },
+          });
+          if (!stock) {
+            throw new Error(
+              `Bin stock for ${it.materialCode} @ ${it.binLabel} no longer exists`,
+            );
+          }
+
+          const d = stockEffect(a.adjustmentType, it);
+          const nextAvail = stock.availQty + d.availQty;
+          const nextQuality = stock.qualityIssue + d.qualityIssue;
+          const nextQtyIssue = d.zeroQtyIssue ? 0 : stock.qtyIssue + d.qtyIssue;
+
+          // FR-IA-14 rule 5: another transaction may have moved the stock since
+          // the document was written — refuse rather than go negative.
+          if (nextAvail < -EPS) {
+            throw new Error(
+              `${it.materialCode} @ ${it.binLabel}: available would become ${nextAvail} (stock changed since the document was created)`,
+            );
+          }
+          if (nextQuality < -EPS) {
+            throw new Error(
+              `${it.materialCode} @ ${it.binLabel}: Quality Issue would become ${nextQuality} (stock changed since the document was created)`,
+            );
+          }
+
+          await tx.inventoryBinStock.update({
+            where: { id: stock.id },
+            data: {
+              availQty: nextAvail,
+              qualityIssue: nextQuality,
+              qtyIssue: nextQtyIssue,
+            },
+          });
+        }
+
+        await tx.inventoryAdjustment.update({
+          where: { id },
+          data: {
+            status: 'Completed',
+            completedAt: new Date(),
+            oracleApprovalStatus:
+              a.oracleId && a.oracleId !== '-' ? 'Approved' : a.oracleApprovalStatus,
+          },
+        });
+        await this.event(tx, id, 'completed', {
+          from: a.status,
+          to: 'Completed',
+          actorId,
+          message: note,
+        });
+      });
+    } catch (e) {
+      const msg = (e as Error).message?.slice(0, 1000) ?? 'Stock update failed';
+      // FR-IA-14 rule 5: flag the document so it can be followed up; no partial
+      // stock change happened because the transaction rolled back.
+      await this.prisma.$transaction(async (tx) => {
+        await tx.inventoryAdjustment.update({
+          where: { id },
+          data: { oracleError: `Stock update failed: ${msg}` },
+        });
+        await this.event(tx, id, 'stock_failed', {
+          actorId,
+          message: msg,
+        });
+      });
+      this.logger.error(`Stock update failed for adjustment ${id}: ${msg}`);
+      throw new BadRequestException(`Stock update failed: ${msg}`);
+    }
+  }
+
   // ---------- read ----------
 
   async findAll(
@@ -516,6 +1097,7 @@ export class InventoryAdjustmentsService {
       limit?: number;
       search?: string;
       adjustment_type?: string;
+      status?: string;
       sort_by?: string;
       sort_order?: string;
     },
@@ -531,16 +1113,16 @@ export class InventoryAdjustmentsService {
       ...this.scopeWhere(scope),
     };
     if (
-      query.adjustment_type === 'qty_issue' ||
-      query.adjustment_type === 'quality_issue'
+      query.adjustment_type &&
+      IA_TYPES.includes(query.adjustment_type as InventoryAdjustmentType)
     ) {
-      where.adjustmentType = query.adjustment_type;
+      where.adjustmentType = query.adjustment_type as InventoryAdjustmentType;
+    }
+    if (query.status) {
+      where.status = query.status as InventoryAdjustmentStatus;
     }
     if (query.search) {
-      where.adjustmentNumber = {
-        contains: query.search,
-        mode: 'insensitive',
-      };
+      where.adjustmentNumber = { contains: query.search, mode: 'insensitive' };
     }
 
     const [total, rows] = await this.prisma.$transaction([
@@ -562,6 +1144,8 @@ export class InventoryAdjustmentsService {
         limit,
         sort_by: query.sort_by ?? null,
         sort_order: query.sort_order ?? null,
+        status: query.status ?? null,
+        adjustment_type: query.adjustment_type ?? null,
       },
       rows: rows.map((r) => this.serializeList(r)),
     };
@@ -572,49 +1156,62 @@ export class InventoryAdjustmentsService {
       where: { id },
       include: detailInclude,
     });
-    if (
-      !a ||
-      (scope.role !== 'admin' && a.warehouseId !== scope.warehouseId)
-    ) {
+    if (!a || (scope.role !== 'admin' && a.warehouseId !== scope.warehouseId)) {
       throw new NotFoundException(`Inventory adjustment ${id} not found`);
     }
     return this.serializeDetail(a);
   }
 
+  /** The behaviour matrix, so the UI does not have to duplicate the rules. */
+  types() {
+    return IA_TYPES.map((t) => {
+      const r = ruleFor(t);
+      return {
+        value: t,
+        label: r.oracleLabel,
+        qty_mode: r.qtyMode,
+        filter_bucket: r.filterBucket,
+        discrepancy_list: r.discrepancyList,
+        oracle_hit: r.oracleHit,
+      };
+    });
+  }
+
   // ---------- serializers ----------
 
-  private lineQty(a: { adjustmentType: string }, it: {
-    qtyAdjustment: number;
-    qtyScrapped: number;
-    qtyPassed: number;
-  }) {
-    return a.adjustmentType === 'qty_issue'
-      ? it.qtyAdjustment
-      : it.qtyScrapped + it.qtyPassed;
+  private lineQty(
+    type: InventoryAdjustmentType,
+    it: { qtyAdjustment: number; qtyPassed: number; qtyNonPassed: number },
+  ) {
+    return ruleFor(type).qtyMode === 'passed_non_passed'
+      ? it.qtyPassed + it.qtyNonPassed
+      : it.qtyAdjustment;
   }
 
   private serializeList(a: AdjList) {
     const materials = new Set(a.items.map((it) => it.materialId ?? it.materialCode));
     const bins = new Set(a.items.map((it) => it.binId ?? it.binLabel));
-    const totalQty = a.items.reduce((s, it) => s + this.lineQty(a, it), 0);
     return {
       id: a.id,
       adjustment_number: a.adjustmentNumber,
       warehouse: a.warehouse?.name ?? null,
       adjustment_type: a.adjustmentType,
+      adjustment_type_label: ruleFor(a.adjustmentType).oracleLabel,
       status: a.status,
       material_count: materials.size,
       bin_count: bins.size,
-      total_qty: totalQty,
+      total_qty: a.items.reduce((s, it) => s + this.lineQty(a.adjustmentType, it), 0),
       discrepancy_count: a._count.discrepancies,
       oracle_id: a.oracleId,
       oracle_approval_status: a.oracleApprovalStatus,
+      oracle_error: a.oracleError,
       created_by: a.createdBy?.name ?? null,
       created_at: a.createdAt,
     };
   }
 
   private serializeDetail(a: AdjDetail) {
+    const rule = ruleFor(a.adjustmentType);
     return {
       id: a.id,
       adjustment_number: a.adjustmentNumber,
@@ -624,16 +1221,24 @@ export class InventoryAdjustmentsService {
       class_name: a.class?.name ?? null,
       class_oracle_id: a.class?.oracleId ?? null,
       adjustment_type: a.adjustmentType,
+      adjustment_type_label: rule.oracleLabel,
+      qty_mode: rule.qtyMode,
       status: a.status,
-      note: a.note,
+      memo: a.memo,
+      // FR-IA-03: exactly what Oracle receives.
+      oracle_memo: buildOracleMemo(a.adjustmentType, a.memo),
       oracle_id: a.oracleId,
+      oracle_approval_status: a.oracleApprovalStatus,
+      oracle_sent_at: a.oracleSentAt,
+      oracle_error: a.oracleError,
+      oracle_reject_reason: a.oracleRejectReason,
+      completed_at: a.completedAt,
       created_by: a.createdBy?.name ?? null,
       created_at: a.createdAt,
       approved_by: a.approvedBy?.name ?? null,
       approved_at: a.approvedAt,
       approval_reason: a.approvalReason,
-      oracle_approval_status: a.oracleApprovalStatus,
-      total_qty: a.items.reduce((s, it) => s + this.lineQty(a, it), 0),
+      total_qty: a.items.reduce((s, it) => s + this.lineQty(a.adjustmentType, it), 0),
       items: a.items.map((it) => ({
         id: it.id,
         material_id: it.materialId,
@@ -642,8 +1247,8 @@ export class InventoryAdjustmentsService {
         bin_id: it.binId,
         bin_label: it.binLabel ?? it.bin?.binLabel ?? null,
         qty_adjustment: it.qtyAdjustment,
-        qty_scrapped: it.qtyScrapped,
         qty_passed: it.qtyPassed,
+        qty_non_passed: it.qtyNonPassed,
         avail_at_create: it.availAtCreate,
         qty_issue_at_create: it.qtyIssueAtCreate,
         quality_issue_at_create: it.qualityIssueAtCreate,
@@ -653,6 +1258,16 @@ export class InventoryAdjustmentsService {
         discrepancy_id: d.discrepancy.discrepancyId,
         type: d.discrepancy.discrepancyType,
         from: d.discrepancy.discrepancyFrom,
+      })),
+      // FR-IA-15: the audit trail.
+      events: a.events.map((e) => ({
+        id: e.id,
+        action: e.action,
+        from_status: e.fromStatus,
+        to_status: e.toStatus,
+        actor: e.actor?.name ?? null,
+        message: e.message,
+        created_at: e.createdAt,
       })),
     };
   }

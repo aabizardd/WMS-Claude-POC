@@ -8,45 +8,61 @@ import SortableTh from "../../components/SortableTh";
 
 const LIMIT = 10;
 
+const IA_TYPE_LABELS: Record<string, string> = {
+  DiscrepancyQuantity: "Discrepancy Quantity",
+  DiscrepancyQuality: "Discrepancy Quality",
+  QualityAdjustment: "Quality Adjustment",
+  Assembly: "Assembly",
+  Disassembly: "Disassembly",
+  CycleCount: "Cycle Count",
+  StockOpname: "Stock Opname",
+};
+
 export function adjTypeLabel(t: string) {
-  return t === "qty_issue"
-    ? "Qty Issue"
-    : t === "quality_issue"
-      ? "Quality Issue"
-      : t;
+  return IA_TYPE_LABELS[t] ?? t;
 }
+
+// PRD-06 FR-IA-12 status names.
+const IA_STATUS_LABELS: Record<string, string> = {
+  WaitingApproval: "Waiting Approval",
+  Approved: "Approved",
+  Rejected: "Rejected",
+  WaitingOracleApproval: "Waiting Oracle Approval",
+  Completed: "Completed",
+  RejectedByOracle: "Rejected by Oracle",
+};
+
 export function adjStatusLabel(s: string) {
-  if (s === "PendingApproval") return "Pending Approval WH Manager";
-  if (s === "Approved") return "Approved by Manager Warehouse";
-  if (s === "Rejected") return "Rejected";
-  return s;
+  return IA_STATUS_LABELS[s] ?? s;
 }
+
 export function adjStatusBadge(s: string) {
   const map: Record<string, string> = {
-    PendingApproval: "bg-amber-50 text-amber-700",
-    Approved: "bg-emerald-50 text-emerald-700",
+    WaitingApproval: "bg-amber-50 text-amber-700",
+    Approved: "bg-sky-50 text-sky-700",
+    WaitingOracleApproval: "bg-blue-50 text-blue-700",
+    Completed: "bg-emerald-50 text-emerald-700",
     Rejected: "bg-rose-50 text-rose-700",
+    RejectedByOracle: "bg-rose-50 text-rose-700",
   };
   return map[s] ?? "bg-slate-100 text-slate-600";
 }
-function statusBadge(s: string) {
-  const map: Record<string, string> = {
-    PendingApproval: "bg-amber-50 text-amber-700",
-    Approved: "bg-emerald-50 text-emerald-700",
-    Rejected: "bg-rose-50 text-rose-700",
-  };
-  return map[s] ?? "bg-slate-100 text-slate-600";
-}
+
 function oracleStatusBadge(s: string) {
-  if (s === "Pending Approval Oracle") return "bg-blue-50 text-blue-700";
   if (!s || s === "-") return "bg-slate-100 text-slate-500";
+  if (/reject/i.test(s)) return "bg-rose-50 text-rose-700";
+  if (/pending/i.test(s)) return "bg-blue-50 text-blue-700";
   return "bg-emerald-50 text-emerald-700";
 }
 
-const TYPE_TABS = [
-  { v: "", l: "All" },
-  { v: "qty_issue", l: "Qty Issue" },
-  { v: "quality_issue", l: "Quality Issue" },
+const TYPE_OPTIONS = [
+  { v: "", l: "All types" },
+  ...Object.entries(IA_TYPE_LABELS).map(([v, l]) => ({ v, l })),
+];
+
+const STATUS_OPTIONS = [
+  { v: "", l: "All statuses" },
+  ...Object.entries(IA_STATUS_LABELS).map(([v, l]) => ({ v, l })),
 ];
 
 export default function InventoryAdjustmentsPage() {
@@ -61,6 +77,7 @@ export default function InventoryAdjustmentsPage() {
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [type, setType] = useState("");
+  const [status, setStatus] = useState("");
   const { sort, toggle, params } = useSort();
   const onSort = (col: string) => {
     setPage(1);
@@ -77,6 +94,7 @@ export default function InventoryAdjustmentsPage() {
           limit: LIMIT,
           search: search || undefined,
           adjustment_type: type || undefined,
+          status: status || undefined,
           ...params(),
         },
       },
@@ -87,7 +105,7 @@ export default function InventoryAdjustmentsPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, type, sort.sortBy, sort.order]);
+  }, [page, search, type, status, sort.sortBy, sort.order]);
 
   function onSearch(e: FormEvent) {
     e.preventDefault();
@@ -108,7 +126,7 @@ export default function InventoryAdjustmentsPage() {
             {data
               ? `${data.total_data} adjustment(s)`
               : "Inventory adjustments"}{" "}
-            · qty / quality issue.
+            · 7 IA types, approval and Oracle-backed stock changes.
           </p>
         </div>
         {canCreate && (
@@ -119,23 +137,35 @@ export default function InventoryAdjustmentsPage() {
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center rounded-lg border border-slate-200 bg-white p-0.5">
-          {TYPE_TABS.map((t) => (
-            <button
-              key={t.v || "all"}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
-                type === t.v
-                  ? "bg-brand-600 text-white shadow-sm"
-                  : "text-slate-600 hover:text-slate-800"
-              }`}
-              onClick={() => {
-                setPage(1);
-                setType(t.v);
-              }}
-            >
-              {t.l}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            className="input w-52 text-xs"
+            value={status}
+            onChange={(e) => {
+              setPage(1);
+              setStatus(e.target.value);
+            }}
+          >
+            {STATUS_OPTIONS.map((t) => (
+              <option key={t.v || "all"} value={t.v}>
+                {t.l}
+              </option>
+            ))}
+          </select>
+          <select
+            className="input w-52 text-xs"
+            value={type}
+            onChange={(e) => {
+              setPage(1);
+              setType(e.target.value);
+            }}
+          >
+            {TYPE_OPTIONS.map((t) => (
+              <option key={t.v || "all"} value={t.v}>
+                {t.l}
+              </option>
+            ))}
+          </select>
         </div>
         <form onSubmit={onSearch} className="flex gap-2">
           <input
@@ -241,7 +271,7 @@ export default function InventoryAdjustmentsPage() {
                       {adjTypeLabel(a.adjustment_type)}
                     </td>
                     <td className="px-6 py-3">
-                      <span className={`badge ${statusBadge(a.status)}`}>
+                      <span className={`badge ${adjStatusBadge(a.status)}`}>
                         {adjStatusLabel(a.status)}
                       </span>
                     </td>

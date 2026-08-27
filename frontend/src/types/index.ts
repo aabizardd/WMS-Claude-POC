@@ -668,19 +668,51 @@ export interface Subsidiary {
   created_at: string;
 }
 
-// ===== Inventory Adjustment =====
+// ===== Inventory Adjustment (PRD-06) =====
+export type IaType =
+  | 'DiscrepancyQuantity'
+  | 'DiscrepancyQuality'
+  | 'QualityAdjustment'
+  | 'Assembly'
+  | 'Disassembly'
+  | 'CycleCount'
+  | 'StockOpname';
+
+export type IaStatus =
+  | 'WaitingApproval'
+  | 'Approved'
+  | 'Rejected'
+  | 'WaitingOracleApproval'
+  | 'Completed'
+  | 'RejectedByOracle';
+
+/** How a line's qty fields behave for the chosen type. */
+export type IaQtyMode = 'auto_negative' | 'passed_non_passed' | 'free_signed';
+
+/** GET /inventory-adjustments/types — the behaviour matrix, straight from the server. */
+export interface IaTypeInfo {
+  value: IaType;
+  label: string;
+  qty_mode: IaQtyMode;
+  filter_bucket: 'qty_issue' | 'quality_issue' | 'none';
+  discrepancy_list: false | 'quantity' | 'quality';
+  oracle_hit: 'always' | 'conditional';
+}
+
 export interface InventoryAdjustmentRow {
   id: string;
   adjustment_number: string;
   warehouse: string | null;
-  adjustment_type: 'qty_issue' | 'quality_issue';
-  status: string;
+  adjustment_type: IaType;
+  adjustment_type_label: string;
+  status: IaStatus;
   material_count: number;
   bin_count: number;
   total_qty: number;
   discrepancy_count: number;
   oracle_id?: string;
   oracle_approval_status?: string;
+  oracle_error?: string | null;
   created_by: string | null;
   created_at: string;
 }
@@ -689,6 +721,8 @@ export interface AdjMaterialOption {
   material_id: string | null;
   material_code: string | null;
   material_name: string | null;
+  uom_code?: string | null;
+  allows_decimal?: boolean;
 }
 
 export interface AdjBinOption {
@@ -697,6 +731,17 @@ export interface AdjBinOption {
   qty_available: number;
   qty_issue: number;
   quality_issue: number;
+  /** Read-only value the Discrepancy types will store for this bin. */
+  suggested_qty_adjustment: number | null;
+}
+
+/** FR-IA-10: a discrepancy that may be attached as a reference. */
+export interface AdjDiscrepancyOption {
+  id: string;
+  discrepancy_id: string;
+  type: string;
+  from: string;
+  created_at: string;
 }
 
 export interface InventoryAdjustmentItemRow {
@@ -707,11 +752,22 @@ export interface InventoryAdjustmentItemRow {
   bin_id: string | null;
   bin_label: string | null;
   qty_adjustment: number;
-  qty_scrapped: number;
   qty_passed: number;
+  qty_non_passed: number;
   avail_at_create: number;
   qty_issue_at_create: number;
   quality_issue_at_create: number;
+}
+
+/** FR-IA-15: one entry of the append-only audit trail. */
+export interface InventoryAdjustmentEvent {
+  id: string;
+  action: string;
+  from_status: string | null;
+  to_status: string | null;
+  actor: string | null;
+  message: string | null;
+  created_at: string;
 }
 
 export interface InventoryAdjustmentDetail {
@@ -722,24 +778,33 @@ export interface InventoryAdjustmentDetail {
   class_id: string | null;
   class_name: string | null;
   class_oracle_id: string | null;
-  adjustment_type: 'qty_issue' | 'quality_issue';
-  status: string;
-  note: string | null;
+  adjustment_type: IaType;
+  adjustment_type_label: string;
+  qty_mode: IaQtyMode;
+  status: IaStatus;
+  memo: string | null;
+  /** Exactly what Oracle receives: "{IA Type} | {memo}". */
+  oracle_memo: string;
   oracle_id: string;
+  oracle_approval_status: string;
+  oracle_sent_at: string | null;
+  oracle_error: string | null;
+  oracle_reject_reason: string | null;
+  completed_at: string | null;
   created_by: string | null;
   created_at: string;
   approved_by: string | null;
   approved_at: string | null;
   approval_reason: string | null;
-  oracle_approval_status: string;
   total_qty: number;
   items: InventoryAdjustmentItemRow[];
   discrepancies: { id: string; discrepancy_id: string; type: string; from: string }[];
+  events: InventoryAdjustmentEvent[];
 }
 
-// Response of PUT /inventory-adjustments/:id/approve on success (approve action).
-export interface AdjustmentApprovalResult extends InventoryAdjustmentDetail {
-  oracle?: { message: string; inventory_adjustment_id: number };
+/** Response of PUT /inventory-adjustments/:id/check-oracle. */
+export interface AdjustmentOracleCheckResult extends InventoryAdjustmentDetail {
+  oracle_check?: { found: boolean; status?: string; message: string };
 }
 
 export interface Bin {

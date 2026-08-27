@@ -150,7 +150,7 @@ export class DashboardService {
       }),
 
       this.prisma.inventoryAdjustment.count({
-        where: { ...wh, status: 'PendingApproval' },
+        where: { ...wh, status: 'WaitingApproval' },
       }),
       this.prisma.inventoryAdjustment.groupBy({
         by: ['status'],
