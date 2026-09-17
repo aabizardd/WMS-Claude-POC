@@ -1250,3 +1250,82 @@ export interface ComplaintDetail extends ComplaintRow {
   evidence_count: number;
   evidences: string[];
 }
+
+// ===== Inventory Sales Delivery =====
+
+/** Every created document is Success; Failed is reserved for the Oracle post. */
+export type SalesDeliveryStatus = 'Success' | 'Failed';
+
+/** GET /sales-delivery/form-options — header defaults and dropdowns. */
+export interface SalesDeliveryFormOptions {
+  /** Shared by From and To; the form hides whichever one is picked on the other side. */
+  warehouse_options: { id: string; name: string; oracle_id: string }[];
+  department_options: { id: string; name: string | null; oracle_id: string }[];
+  class_options: { id: string; name: string | null; oracle_id: string }[];
+  default_from_warehouse_id: string | null;
+  default_department_id: string | null;
+}
+
+export interface SdMaterialOption {
+  material_id: string | null;
+  material_code: string | null;
+  material_name: string | null;
+  uom_code?: string | null;
+  allows_decimal?: boolean;
+}
+
+export interface SdBinOption {
+  bin_id: string | null;
+  bin_label: string | null;
+  qty_available: number;
+  reserved_qty: number;
+  qty_issue: number;
+  quality_issue: number;
+}
+
+export interface SalesDeliveryRow {
+  id: string;
+  delivery_number: string;
+  status: SalesDeliveryStatus;
+  from_warehouse: string | null;
+  to_warehouse: string | null;
+  material_count: number;
+  total_qty: number;
+  memo: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface SalesDeliveryItem {
+  id: string;
+  material_id: string | null;
+  material_code: string | null;
+  material_name: string | null;
+  uom_code: string | null;
+  bin_id: string | null;
+  bin_label: string | null;
+  qty_transfer: number;
+  avail_at_create: number;
+}
+
+export interface SalesDeliveryDetail {
+  id: string;
+  delivery_number: string;
+  status: SalesDeliveryStatus;
+  from_warehouse_id: string;
+  from_warehouse: string | null;
+  to_warehouse_id: string;
+  to_warehouse: string | null;
+  department_id: string | null;
+  department_name: string | null;
+  department_oracle_id: string | null;
+  class_id: string | null;
+  class_name: string | null;
+  class_oracle_id: string | null;
+  /** Stored composed: "{memo typed on the form} | {SD number}". */
+  memo: string | null;
+  created_by: string | null;
+  created_at: string;
+  total_qty: number;
+  items: SalesDeliveryItem[];
+}

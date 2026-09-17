@@ -46,6 +46,17 @@ const CARDS: InventoryCard[] = [
       <path d="M12 6v6l4 2m5-2a9 9 0 11-18 0 9 9 0 0118 0z" />
     ),
   },
+  {
+    key: 'sales-delivery',
+    title: 'Inventory Sales Delivery',
+    description: 'Stock transfer for the MSO & VHS warehouses.',
+    to: '/admin/inventory/sales-delivery',
+    permission: 'sales-delivery:read',
+    accent: 'bg-indigo-600',
+    icon: (
+      <path d="M3 9h10v8H3V9zm10 3h4l3 3v2h-7v-5zM6 20a1.5 1.5 0 100-3 1.5 1.5 0 000 3zm11 0a1.5 1.5 0 100-3 1.5 1.5 0 000 3zM7 6h8" />
+    ),
+  },
 ];
 
 export default function InventoryLandingPage() {

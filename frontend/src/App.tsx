@@ -42,6 +42,9 @@ import { InboundPlaceholder } from './pages/inbound/InboundLayout';
 import InventoryLandingPage from './pages/inventory/InventoryLandingPage';
 import InventoryPage from './pages/inventory/InventoryPage';
 import InventoryDetailPage from './pages/inventory/InventoryDetailPage';
+import SalesDeliveryListPage from './pages/sales-delivery/SalesDeliveryListPage';
+import SalesDeliveryCreatePage from './pages/sales-delivery/SalesDeliveryCreatePage';
+import SalesDeliveryDetailPage from './pages/sales-delivery/SalesDeliveryDetailPage';
 import InventoryAdjustmentsPage from './pages/inventory-adjustment/InventoryAdjustmentsPage';
 import InventoryAdjustmentCreatePage from './pages/inventory-adjustment/InventoryAdjustmentCreatePage';
 import InventoryAdjustmentDetailPage from './pages/inventory-adjustment/InventoryAdjustmentDetailPage';
@@ -413,6 +416,32 @@ export default function App() {
             element={
               <RequirePermission permission="inventory:read">
                 <InventoryDetailPage />
+              </RequirePermission>
+            }
+          />
+
+          {/* Inventory Sales Delivery — MSO/VHS stock transfer */}
+          <Route
+            path="inventory/sales-delivery"
+            element={
+              <RequirePermission permission="sales-delivery:read">
+                <SalesDeliveryListPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="inventory/sales-delivery/new"
+            element={
+              <RequirePermission permission="sales-delivery:create">
+                <SalesDeliveryCreatePage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="inventory/sales-delivery/:id"
+            element={
+              <RequirePermission permission="sales-delivery:read">
+                <SalesDeliveryDetailPage />
               </RequirePermission>
             }
           />

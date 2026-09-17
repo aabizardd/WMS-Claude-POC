@@ -72,13 +72,14 @@ const nav: NavEntry[] = [
     ),
   },
   {
-    // Landing page with Management / Discrepancy / Adjustment cards.
+    // Landing page with Management / Discrepancy / Adjustment / Sales Delivery cards.
     to: '/admin/inventory',
     label: 'nav.inventory',
     anyPermission: [
       'inventory:read',
       'discrepancy:read',
       'inventory-adjustments:read',
+      'sales-delivery:read',
     ],
     icon: (
       <path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m-8-14l8 4m-8-4v10l8 4m0-10v10" />

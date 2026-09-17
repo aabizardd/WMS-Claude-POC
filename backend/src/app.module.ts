@@ -23,6 +23,7 @@ import { DepartmentsModule } from "./departments/departments.module";
 import { ClassesModule } from "./classes/classes.module";
 import { SubsidiariesModule } from "./subsidiaries/subsidiaries.module";
 import { InventoryAdjustmentsModule } from "./inventory-adjustments/inventory-adjustments.module";
+import { SalesDeliveryModule } from "./sales-delivery/sales-delivery.module";
 import { MrnModule } from "./mrn/mrn.module";
 import { GoodsReceiveModule } from "./goods-receive/goods-receive.module";
 import { InventoryModule } from "./inventory/inventory.module";
@@ -71,6 +72,7 @@ import { PermissionsGuard } from "./auth/guards/permissions.guard";
     GoodsReceiveModule,
     InventoryModule,
     InventoryAdjustmentsModule,
+    SalesDeliveryModule,
     DiscrepancyModule,
     PermissionsModule,
     PutawayModule,

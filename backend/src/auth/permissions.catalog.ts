@@ -51,6 +51,8 @@ const RESOURCES: { resource: string; label: string; actions: string[] }[] = [
   { resource: 'inventory', label: 'Inventory', actions: ['read', 'update'] },
   // Inventory Adjustment — manual qty/quality issue adjustment (create + view).
   { resource: 'inventory-adjustments', label: 'Inventory Adjustments', actions: ['read', 'create', 'approve'] },
+  // Inventory Sales Delivery — stock transfer between the MSO and VHS warehouses.
+  { resource: 'sales-delivery', label: 'Sales Delivery', actions: ['read', 'create', 'update'] },
   // Discrepancy is recorded automatically (quantity gap on receive) — read only.
   { resource: 'discrepancy', label: 'Discrepancy', actions: ['read'] },
   // Putaway generated from Goods Receive — read, create, update.
@@ -103,6 +105,7 @@ export const STAFF_PERMISSION_KEYS = [
   'goods-receive:read',
   'inventory:read',
   'inventory-adjustments:read',
+  'sales-delivery:read',
   'discrepancy:read',
   'putaway:read',
   'sales-orders:read',

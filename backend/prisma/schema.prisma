@@ -79,6 +79,7 @@ model User {
   complaints           Complaint[]
   inventoryAdjustments InventoryAdjustment[]      @relation("AdjustmentCreator")
   approvedAdjustments  InventoryAdjustment[]      @relation("AdjustmentApprover")
+  salesDeliveries      SalesDelivery[]            @relation("SalesDeliveryCreator")
   adjustmentEvents     InventoryAdjustmentEvent[]
   stockMovements       StockMovement[]
 
@@ -179,12 +180,13 @@ model Material {
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("modified_at")
 
-  inventories     InventoryManagement[]
-  salesOrderItems SalesOrderItem[]
-  pickingItems    PickingItem[]
-  packingItems    PackingItem[]
-  deliveryItems   DeliveryItem[]
-  adjustmentItems InventoryAdjustmentItem[]
+  inventories        InventoryManagement[]
+  salesOrderItems    SalesOrderItem[]
+  pickingItems       PickingItem[]
+  packingItems       PackingItem[]
+  deliveryItems      DeliveryItem[]
+  adjustmentItems    InventoryAdjustmentItem[]
+  salesDeliveryItems SalesDeliveryItem[]
 
   @@index([materialCategoryId])
   @@index([materialTypeId])
@@ -230,6 +232,8 @@ model Warehouse {
   inventoryAdjustments InventoryAdjustment[]
   purchaseOrders       PurchaseOrder[]
   transferOrders       TransferOrder[]       @relation("TransferOrderFrom")
+  salesDeliveriesFrom  SalesDelivery[]       @relation("SalesDeliveryFrom")
+  salesDeliveriesTo    SalesDelivery[]       @relation("SalesDeliveryTo")
 
   @@index([subsidiaryId])
   @@index([parentId])
@@ -312,6 +316,7 @@ model Bin {
   packingItems       PackingItem[]
   deliveryItems      DeliveryItem[]
   adjustmentItems    InventoryAdjustmentItem[]
+  salesDeliveryItems SalesDeliveryItem[]
   stockMovements     StockMovement[]
 
   @@index([warehouseId])
@@ -382,7 +387,8 @@ model Department {
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
-  users User[]
+  users           User[]
+  salesDeliveries SalesDelivery[]
 
   @@index([subsidiaryId])
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
@@ -404,7 +410,8 @@ model Class {
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
-  adjustments InventoryAdjustment[]
+  adjustments     InventoryAdjustment[]
+  salesDeliveries SalesDelivery[]
 
   @@index([subsidiaryId])
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
@@ -1013,6 +1020,88 @@ model InventoryAdjustmentEvent {
 
   @@index([adjustmentId])
   @@map("inventory_adjustment_events")
+}
+
+// ===================== Inventory Sales Delivery =====================
+
+// Stock transfer handling between the MSO and VHS warehouses. The document is
+// an inventory transfer: a header (from/to location, department, class, memo)
+// plus one line per (material, bin) taken from the source warehouse.
+//
+// A document is read-only once created and has NO stock effect. Every document
+// that is created is Success; Failed is reserved for the Oracle post, which is
+// not wired yet — nothing sets it today.
+enum SalesDeliveryStatus {
+  Success
+  Failed
+}
+
+model SalesDelivery {
+  id             String              @id @default(uuid())
+  deliveryNumber String              @unique @map("delivery_number") // SD-YYYYMMDD-NNN
+  // Transfer Inventory document number, allocated together with the SD number.
+  // Kept in the database but deliberately not exposed by the API or the UI.
+  documentNumber String              @unique @map("document_number") // TI-YYYYMMDD-NNN
+  status         SalesDeliveryStatus @default(Success)
+
+  // From and To are both picked from the active warehouses and must differ.
+  // From defaults to the creator's warehouse on the form.
+  fromWarehouseId String    @map("from_warehouse_id")
+  fromWarehouse   Warehouse @relation("SalesDeliveryFrom", fields: [fromWarehouseId], references: [id])
+  toWarehouseId   String    @map("to_warehouse_id")
+  toWarehouse     Warehouse @relation("SalesDeliveryTo", fields: [toWarehouseId], references: [id])
+
+  // Defaulted from the creator's department, overridable on the form.
+  departmentId String?     @map("department_id")
+  department   Department? @relation(fields: [departmentId], references: [id])
+  classId      String?     @map("class_id")
+  class        Class?      @relation(fields: [classId], references: [id])
+
+  // What is STORED is the composed value "{memo typed on the form} | {SD number}"
+  // (just the SD number when the form memo is left empty), so the memo always
+  // carries the document reference with it.
+  memo String?
+
+  createdById Int?  @map("created_by")
+  createdBy   User? @relation("SalesDeliveryCreator", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  items SalesDeliveryItem[]
+
+  @@index([fromWarehouseId])
+  @@index([toWarehouseId])
+  @@index([status])
+  @@map("sales_deliveries")
+}
+
+model SalesDeliveryItem {
+  id              String        @id @default(uuid())
+  salesDeliveryId String        @map("sales_delivery_id")
+  salesDelivery   SalesDelivery @relation(fields: [salesDeliveryId], references: [id], onDelete: Cascade)
+
+  materialId   String?   @map("material_id")
+  material     Material? @relation(fields: [materialId], references: [id])
+  materialCode String?   @map("material_code")
+  materialName String?   @map("material_name")
+  uomCode      String?   @map("uom_code")
+
+  binId    String? @map("bin_id")
+  bin      Bin?    @relation(fields: [binId], references: [id])
+  binLabel String? @map("bin_label")
+
+  // Always positive: how much of this bin moves to the destination warehouse.
+  qtyTransfer   Float @default(0) @map("qty_transfer")
+  // Snapshot of the source bin's available qty at create time (context only).
+  availAtCreate Float @default(0) @map("avail_at_create")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([salesDeliveryId])
+  @@index([materialId])
+  @@index([binId])
+  @@map("sales_delivery_items")
 }
 
 // ===================== Discrepancy =====================
