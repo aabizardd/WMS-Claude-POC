@@ -151,6 +151,8 @@ export default function SalesDeliveryListPage() {
                 <SortableTh label="Delivery No." col="delivery_number" sort={sort} onSort={onSort} />
                 <SortableTh label="From Location" col="from_warehouse" sort={sort} onSort={onSort} />
                 <SortableTh label="To Location" col="to_warehouse" sort={sort} onSort={onSort} />
+                <SortableTh label="Department" col="department" sort={sort} onSort={onSort} />
+                <SortableTh label="Class" col="class" sort={sort} onSort={onSort} />
                 <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3 text-right">Materials</th>
                 <th className="px-6 py-3 text-right">Total Qty</th>
@@ -163,7 +165,7 @@ export default function SalesDeliveryListPage() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={10} className="px-6 py-10 text-center text-slate-400">
+                  <td colSpan={12} className="px-6 py-10 text-center text-slate-400">
                     Loading…
                   </td>
                 </tr>
@@ -175,6 +177,8 @@ export default function SalesDeliveryListPage() {
                     </td>
                     <td className="px-6 py-3 text-slate-600">{d.from_warehouse ?? '—'}</td>
                     <td className="px-6 py-3 text-slate-600">{d.to_warehouse ?? '—'}</td>
+                    <td className="px-6 py-3 text-slate-600">{d.department ?? '—'}</td>
+                    <td className="px-6 py-3 text-slate-600">{d.class ?? '—'}</td>
                     <td className="px-6 py-3">
                       <span className={`badge ${sdStatusBadge(d.status)}`}>
                         {sdStatusLabel(d.status)}
@@ -207,7 +211,7 @@ export default function SalesDeliveryListPage() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={10} className="px-6 py-10 text-center text-slate-400">
+                  <td colSpan={12} className="px-6 py-10 text-center text-slate-400">
                     No sales delivery yet.
                   </td>
                 </tr>

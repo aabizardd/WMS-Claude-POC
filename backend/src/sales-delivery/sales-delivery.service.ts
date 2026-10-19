@@ -16,6 +16,8 @@ const EPS = 1e-9;
 const listInclude = {
   fromWarehouse: { select: { id: true, name: true } },
   toWarehouse: { select: { id: true, name: true } },
+  department: { select: { id: true, name: true } },
+  class: { select: { id: true, name: true } },
   createdBy: { select: { id: true, name: true } },
   items: true,
 } satisfies Prisma.SalesDeliveryInclude;
@@ -41,6 +43,8 @@ const SORTABLE: Record<string, (d: SortDir) => SdOrder> = {
   status: (d) => ({ status: d }),
   from_warehouse: (d) => ({ fromWarehouse: { name: d } }),
   to_warehouse: (d) => ({ toWarehouse: { name: d } }),
+  department: (d) => ({ department: { name: d } }),
+  class: (d) => ({ class: { name: d } }),
   created_by: (d) => ({ createdBy: { name: d } }),
   created_at: (d) => ({ createdAt: d }),
 };
@@ -539,6 +543,8 @@ export class SalesDeliveryService {
       status: sd.status,
       from_warehouse: sd.fromWarehouse?.name ?? null,
       to_warehouse: sd.toWarehouse?.name ?? null,
+      department: sd.department?.name ?? null,
+      class: sd.class?.name ?? null,
       material_count: materials.size,
       total_qty: sd.items.reduce((s, it) => s + it.qtyTransfer, 0),
       memo: sd.memo,

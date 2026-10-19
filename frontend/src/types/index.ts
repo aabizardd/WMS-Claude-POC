@@ -1289,6 +1289,8 @@ export interface SalesDeliveryRow {
   status: SalesDeliveryStatus;
   from_warehouse: string | null;
   to_warehouse: string | null;
+  department: string | null;
+  class: string | null;
   material_count: number;
   total_qty: number;
   memo: string | null;
