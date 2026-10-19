@@ -107,7 +107,6 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
   );
 }
 
-// eslint-disable-next-line react-refresh/only-export-components
 export function useWarehouse() {
   const ctx = useContext(WarehouseContext);
   if (!ctx) throw new Error('useWarehouse must be used within WarehouseProvider');

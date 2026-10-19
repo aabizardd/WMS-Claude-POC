@@ -69,6 +69,7 @@ export default function SimpleMasterPage({ config }: { config: MasterConfig }) {
     setData(r.data);
     setLoading(false);
   }
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps

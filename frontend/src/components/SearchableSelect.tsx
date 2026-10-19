@@ -44,10 +44,6 @@ export default function SearchableSelect({
     return q ? options.filter((o) => o.label.toLowerCase().includes(q)) : options;
   }, [options, search]);
 
-  useEffect(() => {
-    setVisible(PAGE);
-  }, [search, open]);
-
   function reposition() {
     const el = btnRef.current;
     if (!el) return;
@@ -94,7 +90,7 @@ export default function SearchableSelect({
         ref={btnRef}
         type="button"
         disabled={disabled}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => { setOpen((o) => !o); if (!open) setVisible(PAGE); }}
         className="input flex w-full items-center justify-between gap-2 text-left disabled:cursor-not-allowed disabled:bg-slate-50"
       >
         <span className={selected ? 'truncate text-slate-800 dark:text-slate-100' : 'truncate text-slate-400'}>
@@ -118,7 +114,7 @@ export default function SearchableSelect({
                 className="input w-full text-sm"
                 placeholder={searchPlaceholder}
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => { setSearch(e.target.value); setVisible(PAGE); }}
               />
             </div>
             <ul className="max-h-60 overflow-y-auto py-1" onScroll={onScroll}>

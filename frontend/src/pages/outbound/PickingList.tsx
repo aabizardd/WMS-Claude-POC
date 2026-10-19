@@ -129,7 +129,8 @@ export default function PickingList({
     sourceById.current.set(row.id, row.source_number ?? '');
     setSelected((prev) => {
       const next = new Set(prev);
-      next.has(row.id) ? next.delete(row.id) : next.add(row.id);
+      if (next.has(row.id)) next.delete(row.id);
+      else next.add(row.id);
       return next;
     });
   }
