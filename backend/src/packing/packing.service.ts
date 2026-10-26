@@ -103,7 +103,9 @@ export class PackingService {
     // the Delivery List tab).
     const where: Prisma.PackingWhereInput = {
       ...this.scopeWhere(scope),
-      delivery: { is: null },
+      // A packing is done once any delivery covers it.
+      deliveries: { none: {} },
+      deliveryItems: { none: {} },
     };
     if (query.source === 'SALES_ORDER' || query.source === 'TRANSFER_ORDER') {
       where.sourceType = query.source;
@@ -268,6 +270,7 @@ export class PackingService {
           qty: it.actualQty, // base = picking actual qty
           remainingQty: it.actualQty, // nothing packed yet
           binId: it.binId,
+          pickingItemId: it.id, // the picking line, for its Picking Bin
           pickerId: it.pickerId,
         }));
       const packing = await tx.packing.create({

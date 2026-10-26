@@ -1,37 +1,176 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import api from '../../lib/api';
 import Modal from '../../components/Modal';
 import type {
   Paginated,
+  TransferOrderFilter,
+  TransferOrderFilterField,
+  TransferOrderLine,
   TransferOrderRow,
   TransferOrderSyncResult,
 } from '../../types';
 import { useAuth } from '../../context/AuthContext';
-import SearchableSelect from '../../components/SearchableSelect';
+import { useToast } from '../../context/ToastContext';
 import { useSort } from '../../hooks/useSort';
 import SortableTh from '../../components/SortableTh';
+import MultiValueInput from '../../components/MultiValueInput';
+import DateRangeInput, { formatRangeValue } from '../../components/DateRangeInput';
+import RowActionMenu from '../../components/RowActionMenu';
+import TablePager from '../../components/TablePager';
+import { ExportIcon } from '../../components/ToolbarMenu';
+import { TO_STATUSES, soStatusBadgeClass } from '../../lib/salesOrderStatus';
+import TransferOrderLinesTable from './TransferOrderLinesTable';
+import {
+  AccordionPanelRow,
+  DetailIcon,
+  ExpandAllButton,
+  ExtraFiltersModal,
+  FilterField,
+  ListFilterPanel,
+  ListHeader,
+  RefreshButton,
+  RowExpandCell,
+  TotalCards,
+  expandableRowClass,
+  stickyActionsCellClass,
+} from '../../components/ListView';
 
-const LIMIT = 10;
 const DEFAULT_STATUS = 'Pending Fulfillment';
+/** Server-side cap on values within one filter. */
+const MAX_VALUES = 10;
+/**
+ * Without a Part Number filter an open row shows at most this many lines and
+ * then points at the detail page for the rest.
+ */
+const LINE_PREVIEW = 10;
 
-interface ToStatusOption {
-  status: string;
-  count: number;
+type FieldKind = 'text' | 'date';
+
+interface FieldDef {
+  value: TransferOrderFilterField;
+  label: string;
+  kind: FieldKind;
+}
+
+/**
+ * The shared list/tracking filter habit: the three fields used most sit above
+ * the table and search as they change; the rest live behind "Additional
+ * filters" and count once applied.
+ */
+const PRIMARY_FIELDS: FieldDef[] = [
+  { value: 'material_code', label: 'Part Number', kind: 'text' },
+  { value: 'from_warehouse_name', label: 'Origin Warehouse', kind: 'text' },
+  { value: 'created_at', label: 'Created Date', kind: 'date' },
+];
+
+const EXTRA_FIELDS: FieldDef[] = [
+  { value: 'tran_id', label: 'Transaction ID', kind: 'text' },
+  { value: 'to_warehouse_name', label: 'Destination Warehouse', kind: 'text' },
+  { value: 'oracle_id', label: 'ERP Doc ID', kind: 'text' },
+  { value: 'memo', label: 'Memo', kind: 'text' },
+];
+
+const FILTER_FIELDS = [...PRIMARY_FIELDS, ...EXTRA_FIELDS];
+
+type Draft = Record<TransferOrderFilterField, string[]>;
+
+function emptyDraft(): Draft {
+  return Object.fromEntries(FILTER_FIELDS.map((f) => [f.value, []])) as unknown as Draft;
+}
+
+function draftFrom(filters: TransferOrderFilter[]): Draft {
+  const d = emptyDraft();
+  for (const f of filters) d[f.field] = f.values;
+  return d;
+}
+
+function fieldLabel(f: TransferOrderFilterField) {
+  return FILTER_FIELDS.find((x) => x.value === f)?.label ?? f;
+}
+
+/** Filters live in the URL so a refresh or a shared link shows the same list. */
+function readFilters(sp: URLSearchParams): TransferOrderFilter[] {
+  const raw = sp.get('filters');
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const known = new Set(FILTER_FIELDS.map((f) => f.value));
+    return parsed.flatMap((f): TransferOrderFilter[] => {
+      const field = (f as TransferOrderFilter)?.field;
+      const values = (f as TransferOrderFilter)?.values;
+      if (!known.has(field) || !Array.isArray(values)) return [];
+      const clean = values.filter((v): v is string => typeof v === 'string' && !!v.trim());
+      return clean.length ? [{ field, values: clean }] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+/** Does this line match the Part Number filter? Mirrors the server. */
+function lineMatches(l: TransferOrderLine, f: TransferOrderFilter): boolean {
+  return f.values.some((raw) => {
+    const v = raw.trim().toLowerCase();
+    return (
+      !!v &&
+      ((l.item_name ?? '').toLowerCase().includes(v) ||
+        (l.material_code ?? '').toLowerCase().includes(v))
+    );
+  });
+}
+
+/** "2026-10-23 14:20", as on the other outbound lists. */
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return '-';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '-';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** Strip Oracle's "REGION : " prefix from a location name ("JAWA : Jakarta - IEL"). */
+const locationName = (v: string | null | undefined) => (v ? v.replace(/^[^:]+:\s*/, '') : '-');
+
+/** expand, No, 11 data columns, Actions. */
+const COLS = 14;
+
+/** Line quantities summed over every order matching the filters (Available Qty excluded). */
+interface Totals {
+  request_qty: number;
+  given_qty: number;
+  remaining_qty: number;
+  actual_delivery: number;
 }
 
 export default function TransferOrderTab() {
   const { has } = useAuth();
+  const toast = useToast();
+  const navigate = useNavigate();
   const canSync = has('transfer-orders:sync');
 
-  const [data, setData] = useState<Paginated<TransferOrderRow> | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [initial] = useState(() => ({
+    filters: readFilters(searchParams),
+    status: searchParams.get('status') ?? DEFAULT_STATUS,
+  }));
+
+  const [data, setData] = useState<(Paginated<TransferOrderRow> & { totals?: Totals }) | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [searchInput, setSearchInput] = useState('');
-  const [status, setStatus] = useState(DEFAULT_STATUS);
-  const [statuses, setStatuses] = useState<ToStatusOption[]>([]);
+  const [pageSize, setPageSize] = useState(10);
+  const [status, setStatus] = useState(initial.status);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const [draft, setDraft] = useState<Draft>(() => draftFrom(initial.filters));
+  const [applied, setApplied] = useState<TransferOrderFilter[]>(initial.filters);
+  const [extraOpen, setExtraOpen] = useState(false);
+
+  // Every order's lines are open by default; this holds the ones closed by hand.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
   const { sort, toggle, params } = useSort();
   const onSort = (col: string) => {
     setPage(1);
@@ -45,36 +184,39 @@ export default function TransferOrderTab() {
   const [syncError, setSyncError] = useState('');
   const [syncResult, setSyncResult] = useState<TransferOrderSyncResult | null>(null);
 
+  const appliedKey = JSON.stringify(applied);
+
   async function load() {
     setLoading(true);
-    const r = await api.get<Paginated<TransferOrderRow>>('/transfer-orders', {
-      params: {
-        page,
-        limit: LIMIT,
-        search: search || undefined,
-        status: status === 'all' ? undefined : status,
-        ...params(),
-      },
-    });
-    setData(r.data);
-    setLoading(false);
+    try {
+      const r = await api.get<Paginated<TransferOrderRow> & { totals?: Totals }>('/transfer-orders', {
+        params: {
+          page,
+          limit: pageSize,
+          status: status || undefined,
+          filters: applied.length ? JSON.stringify(applied) : undefined,
+          include_items: 'true',
+          ...params(),
+        },
+      });
+      setData(r.data);
+    } finally {
+      setLoading(false);
+    }
   }
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, status, sort.sortBy, sort.order]);
+  }, [page, pageSize, status, appliedKey, sort.sortBy, sort.order, reloadKey]);
 
-  async function loadStatuses() {
-    try {
-      const r = await api.get<ToStatusOption[]>('/transfer-orders/statuses');
-      setStatuses(r.data);
-    } catch {
-      setStatuses([]);
-    }
-  }
+  // Keep the status and filters in the URL.
   useEffect(() => {
-    loadStatuses();
-  }, []);
+    const next = new URLSearchParams();
+    if (status !== DEFAULT_STATUS) next.set('status', status);
+    if (applied.length) next.set('filters', JSON.stringify(applied));
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, appliedKey]);
 
   async function openSync() {
     setSyncError('');
@@ -82,9 +224,7 @@ export default function TransferOrderTab() {
     setSyncOpen(true);
     setLastSyncLoading(true);
     try {
-      const r = await api.get<{ lastSyncAt: string | null }>(
-        '/transfer-orders/erp-last-sync',
-      );
+      const r = await api.get<{ lastSyncAt: string | null }>('/transfer-orders/erp-last-sync');
       setLastSyncAt(r.data.lastSyncAt);
     } catch {
       setLastSyncAt(null);
@@ -100,14 +240,10 @@ export default function TransferOrderTab() {
     setSyncing(true);
     try {
       const payload = lastSyncAt ? { lastModified: lastSyncAt } : {};
-      const r = await api.post<TransferOrderSyncResult>(
-        '/transfer-orders/sync-erp',
-        payload,
-      );
+      const r = await api.post<TransferOrderSyncResult>('/transfer-orders/sync-erp', payload);
       setSyncResult(r.data);
       setPage(1);
       await load();
-      await loadStatuses();
     } catch (err) {
       if (axios.isAxiosError(err)) {
         const msg = err.response?.data?.message;
@@ -118,180 +254,310 @@ export default function TransferOrderTab() {
     }
   }
 
-  const totalPage = data?.total_page ?? 0;
+  // ----- filters (standard habit) -----
+
+  function runSearch(values: Draft) {
+    const next = FILTER_FIELDS.map((f) => ({
+      field: f.value,
+      values: (values[f.value] ?? []).map((v) => v.trim()).filter(Boolean),
+    })).filter((f) => f.values.length);
+    setPage(1);
+    setApplied(next);
+  }
+
+  /** The three fields outside the modal search as soon as they change. */
+  function changePrimary(field: TransferOrderFilterField, values: string[]) {
+    const next = { ...draft, [field]: values };
+    setDraft(next);
+    runSearch(next);
+  }
+
+  /** The modal's fields as last applied — what a closed modal falls back to. */
+  function appliedExtras(): Partial<Draft> {
+    const fromApplied = draftFrom(applied);
+    return Object.fromEntries(EXTRA_FIELDS.map((f) => [f.value, fromApplied[f.value] ?? []]));
+  }
+
+  function applyExtras() {
+    runSearch(draft);
+    setExtraOpen(false);
+  }
+
+  function closeExtras() {
+    setDraft((d) => ({ ...d, ...appliedExtras() }));
+    setExtraOpen(false);
+  }
+
+  function resetExtras() {
+    setDraft((d) => ({ ...d, ...Object.fromEntries(EXTRA_FIELDS.map((f) => [f.value, []])) }));
+  }
+
+  function clearAll() {
+    setDraft(emptyDraft());
+    setApplied([]);
+    setPage(1);
+  }
+
+  function valueLabel(field: TransferOrderFilterField, value: string) {
+    if (field === 'created_at') return formatRangeValue(value);
+    return value;
+  }
+
+  const extraCount = applied.filter((f) => EXTRA_FIELDS.some((x) => x.value === f.field)).length;
+
+  function renderField(f: FieldDef, onChange: (v: string[]) => void) {
+    const values = draft[f.value] ?? [];
+    if (f.kind === 'date') {
+      return <DateRangeInput value={values[0] ?? ''} onChange={(v) => onChange(v ? [v] : [])} />;
+    }
+    return (
+      <MultiValueInput
+        values={values}
+        onChange={onChange}
+        max={MAX_VALUES}
+        placeholder={`${f.label} — type and press Enter…`}
+      />
+    );
+  }
+
+  // ----- accordion -----
+
+  const rows = useMemo(() => data?.rows ?? [], [data]);
+  const anyOpen = rows.some((r) => !collapsed.has(r.id));
+  const partFilters = applied.filter((f) => f.field === 'material_code');
+
+  function toggleRow(id: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (anyOpen) rows.forEach((r) => next.add(r.id));
+      else rows.forEach((r) => next.delete(r.id));
+      return next;
+    });
+  }
+
+  const th = 'whitespace-nowrap';
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-slate-500">
-          {data ? `${data.total_data} transfer orders` : 'Transfer Orders'} ·
-          synced from Oracle, read-only.
-        </p>
-        {canSync && (
-          <button className="btn-secondary" onClick={openSync}>
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.8}
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M4 4v5h5M20 20v-5h-5M5 19a9 9 0 0014.13-3M19 5A9 9 0 004.87 8"
-              />
-            </svg>
-            Sync from ERP
-          </button>
-        )}
-      </div>
-
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          setPage(1);
-          setSearch(searchInput.trim());
-        }}
-        className="flex flex-wrap gap-2"
-      >
-        <input
-          className="input max-w-xs"
-          placeholder="Search TO number / destination…"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-        />
-        <SearchableSelect
-          className="w-56"
-          value={status}
-          onChange={(v) => {
-            setPage(1);
-            setStatus(v);
-          }}
-          placeholder="All statuses"
-          searchPlaceholder="Search status…"
-          options={[
-            { value: 'all', label: 'All statuses' },
-            ...(statuses.some((s) => s.status === DEFAULT_STATUS)
-              ? []
-              : [{ value: DEFAULT_STATUS, label: DEFAULT_STATUS }]),
-            ...statuses.map((s) => ({
-              value: s.status,
-              label: `${s.status} (${s.count})`,
-            })),
+    <div className="card overflow-hidden">
+      <div className="space-y-4 p-5 pb-4">
+        <ListHeader
+          title="Transfer Order"
+          subtitle="Initiate a stock transfer between locations"
+          menu={[
+            {
+              label: 'Export',
+              icon: <ExportIcon />,
+              onClick: () => toast.info('Export is not available yet.'),
+            },
           ]}
         />
-        <button type="submit" className="btn-secondary">
-          Search
-        </button>
-        {(search || status !== DEFAULT_STATUS) && (
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => {
-              setSearchInput('');
-              setSearch('');
-              setStatus(DEFAULT_STATUS);
-              setPage(1);
-            }}
-          >
-            Reset
-          </button>
-        )}
-      </form>
 
-      <div className="card overflow-hidden">
+        <ListFilterPanel
+          columns={4}
+          extraCount={extraCount}
+          onOpenExtras={() => {
+            setDraft((d) => ({ ...d, ...appliedExtras() }));
+            setExtraOpen(true);
+          }}
+          onClear={applied.length > 0 ? clearAll : undefined}
+          chips={applied.map((f) => ({
+            label: fieldLabel(f.field),
+            value: f.values.map((v) => valueLabel(f.field, v)).join(' or '),
+          }))}
+          chipsNote={partFilters.length > 0 ? 'open orders show only the matching lines' : undefined}
+          toolbar={
+            <>
+              <ExpandAllButton anyOpen={anyOpen} onClick={toggleAll} disabled={rows.length === 0} />
+              {/* Refresh pulls the latest orders from Oracle; without the sync
+                  permission it just reloads what WMS already has. */}
+              <RefreshButton
+                onClick={() => (canSync ? openSync() : setReloadKey((k) => k + 1))}
+                spinning={loading || syncing}
+                title={canSync ? 'Sync from ERP' : 'Refresh'}
+              />
+            </>
+          }
+        >
+          <FilterField label="Status">
+            <select
+              className="input"
+              value={status}
+              onChange={(e) => {
+                setPage(1);
+                setStatus(e.target.value);
+              }}
+            >
+              <option value="">All Status</option>
+              {TO_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </FilterField>
+          {PRIMARY_FIELDS.map((f) => (
+            <FilterField key={f.value} label={f.label}>
+              {renderField(f, (v) => changePrimary(f.value, v))}
+            </FilterField>
+          ))}
+        </ListFilterPanel>
+      </div>
+
+      {/* Nothing here searches until Apply. */}
+      <ExtraFiltersModal open={extraOpen} onClose={closeExtras} onReset={resetExtras} onApply={applyExtras}>
+        {EXTRA_FIELDS.map((f) => (
+          <FilterField key={f.value} label={f.label}>
+            {renderField(f, (v) => setDraft((d) => ({ ...d, [f.value]: v })))}
+          </FilterField>
+        ))}
+      </ExtraFiltersModal>
+
+      {/* Totals over every matching order, not only this page — as on the Inventory List. */}
+      {data?.totals && (
+        <TotalCards
+          items={[
+            ['Request Qty', data.totals.request_qty],
+            ['Given Qty', data.totals.given_qty],
+            ['Remaining Qty', data.totals.remaining_qty],
+            ['Actual Delivery', data.totals.actual_delivery],
+          ]}
+        />
+      )}
+
+      <div className="mx-5 overflow-hidden rounded-lg border border-slate-200">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-              <tr>
-                <SortableTh label="TO Number" col="tran_id" sort={sort} onSort={onSort} />
-                <SortableTh label="TO Date" col="tran_date" sort={sort} onSort={onSort} />
-                <SortableTh label="From" col="from_location" sort={sort} onSort={onSort} />
-                <SortableTh label="To" col="to_location" sort={sort} onSort={onSort} />
-                <SortableTh label="Status" col="status_name" sort={sort} onSort={onSort} />
-                <th className="px-6 py-3">Items</th>
-                <SortableTh label="Last Modified" col="last_modified" sort={sort} onSort={onSort} />
-                <th className="px-6 py-3 text-right">Actions</th>
+            <thead className="bg-slate-50 text-left text-sm text-slate-600">
+              <tr className="[&>th]:font-medium [&_button]:normal-case [&_button]:tracking-normal">
+                <th className="w-10 px-2 py-3" aria-label="Expand" />
+                <th className="px-4 py-3 font-medium">No</th>
+                <SortableTh label="Status" col="status_name" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <SortableTh label="Transaction ID" col="tran_id" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <SortableTh label="ERP Doc ID" col="oracle_id" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <th className="whitespace-nowrap px-4 py-3 font-medium">Doc Type</th>
+                <SortableTh label="Ownership" col="ownership" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <SortableTh label="Origin Warehouse" col="from_location" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <SortableTh label="Destination Warehouse" col="to_location" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <SortableTh label="Created By" col="created_by" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <SortableTh label="Created At" col="created_at" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <th className="whitespace-nowrap px-4 py-3 font-medium">Last Modified By</th>
+                <SortableTh label="Last Modified At" col="last_modified" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <th className="sticky right-0 bg-slate-50 px-4 py-3 text-center font-medium shadow-[-6px_0_8px_-6px_rgba(15,23,42,0.15)]">
+                  Actions
+                </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              {loading ? (
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {loading && !data ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-10 text-center text-slate-400">
+                  <td colSpan={COLS} className="px-6 py-10 text-center text-slate-400">
                     Loading…
                   </td>
                 </tr>
-              ) : data && data.rows.length > 0 ? (
-                data.rows.map((t) => (
-                  <tr key={t.id} className="hover:bg-slate-50">
-                    <td className="px-6 py-3 font-medium text-slate-800">
-                      {t.tran_id ?? t.oracle_id}
-                    </td>
-                    <td className="px-6 py-3 text-slate-600">{t.tran_date ?? '—'}</td>
-                    <td className="px-6 py-3 text-slate-600">
-                      {t.from_location_name ?? '—'}
-                    </td>
-                    <td className="px-6 py-3 text-slate-600">
-                      {t.to_location_name ?? '—'}
-                    </td>
-                    <td className="px-6 py-3">
-                      <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
-                        {t.status_name ?? '—'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-3 text-slate-600">{t.item_count}</td>
-                    <td className="px-6 py-3 text-slate-600">
-                      {t.last_modified
-                        ? new Date(t.last_modified).toLocaleDateString()
-                        : '—'}
-                    </td>
-                    <td className="px-6 py-3">
-                      <div className="flex justify-end">
-                        <Link
-                          to={`/admin/outbound/transfer-stock/list/${t.id}`}
-                          className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
+              ) : rows.length > 0 ? (
+                rows.map((t, i) => {
+                  const open = !collapsed.has(t.id);
+                  const all = t.items ?? [];
+                  const matching = partFilters.length
+                    ? all.filter((l) => partFilters.every((f) => lineMatches(l, f)))
+                    : all;
+                  // A Part Number filter shows every match; otherwise only the first few.
+                  const lines = partFilters.length ? matching : matching.slice(0, LINE_PREVIEW);
+                  const detailPath = `/admin/outbound/transfer-stock/list/${t.id}`;
+                  return [
+                    <tr key={t.id} className={expandableRowClass(open, loading)} onClick={() => toggleRow(t.id)}>
+                      <RowExpandCell open={open} onToggle={() => toggleRow(t.id)} noun="lines" />
+                      <td className="px-4 py-3 text-slate-500">{(page - 1) * pageSize + i + 1}</td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`inline-flex whitespace-nowrap rounded-full border px-3 py-0.5 text-xs font-medium ${soStatusBadgeClass(
+                            t.status_name,
+                          )}`}
                         >
-                          View
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                          {t.status_name ?? '-'}
+                        </span>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-800">{t.tran_id ?? '-'}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.oracle_id}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">Transfer Order</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.ownership ?? '-'}</td>
+                      <td className="px-4 py-3 text-slate-700">{t.warehouse?.name ?? locationName(t.from_location_name)}</td>
+                      <td className="px-4 py-3 text-slate-700">{locationName(t.to_location_name)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.created_by ?? '-'}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDateTime(t.created_at)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.last_modified_by ?? '-'}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDateTime(t.last_modified)}</td>
+                      <td className={stickyActionsCellClass(open)} onClick={(e) => e.stopPropagation()}>
+                        <RowActionMenu
+                          actions={[
+                            {
+                              label: 'Detail',
+                              icon: <DetailIcon />,
+                              onClick: () => navigate(detailPath),
+                            },
+                          ]}
+                        />
+                      </td>
+                    </tr>,
+
+                    open && (
+                      <AccordionPanelRow
+                        key={`${t.id}-lines`}
+                        colSpan={COLS}
+                        title="Line items"
+                        noun="lines"
+                        total={all.length}
+                        matching={matching.length}
+                        filtered={partFilters.length > 0}
+                        shown={lines.length}
+                        detailPath={detailPath}
+                      >
+                        <TransferOrderLinesTable
+                          lines={lines}
+                          emptyText={
+                            partFilters.length
+                              ? 'No line on this order matches the Part Number filter.'
+                              : 'This order has no lines.'
+                          }
+                        />
+                      </AccordionPanelRow>
+                    ),
+                  ];
+                })
               ) : (
                 <tr>
-                  <td colSpan={8} className="px-6 py-10 text-center text-slate-400">
-                    No transfer orders. Click “Sync from ERP” to pull data.
+                  <td colSpan={COLS} className="px-6 py-10 text-center text-slate-400">
+                    {applied.length > 0 || status
+                      ? 'No transfer order matches the filters.'
+                      : 'No transfer orders. Click the refresh button to pull data from ERP.'}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+      </div>
 
-        {totalPage > 1 && (
-          <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3 text-sm">
-            <span className="text-slate-500">
-              Page {page} of {totalPage}
-            </span>
-            <div className="flex gap-2">
-              <button
-                className="btn-secondary"
-                disabled={page <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-              >
-                Prev
-              </button>
-              <button
-                className="btn-secondary"
-                disabled={page >= totalPage}
-                onClick={() => setPage((p) => Math.min(totalPage, p + 1))}
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        )}
+      <div className="px-1 pb-1 pt-2">
+        <TablePager
+          page={page}
+          pageSize={pageSize}
+          total={data?.total_data ?? 0}
+          onPage={setPage}
+          onPageSize={(n) => {
+            setPageSize(n);
+            setPage(1);
+          }}
+        />
       </div>
 
       <Modal

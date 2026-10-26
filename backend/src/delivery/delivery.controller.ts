@@ -18,6 +18,13 @@ export class DeliveryController {
     return this.service.findAll(query, user);
   }
 
+  /** Dropdown values (master warehouses, customers, users) for SD Tracking. */
+  @Get('tracking-options')
+  @RequirePermissions('delivery:read')
+  trackingOptions() {
+    return this.service.trackingOptions();
+  }
+
   @Get(':id')
   @RequirePermissions('delivery:read')
   findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {

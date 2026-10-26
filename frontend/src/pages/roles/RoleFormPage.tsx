@@ -94,7 +94,7 @@ const PERMISSION_TREE: TreeNode[] = [
     children: [
       { label: 'Inventory Management', resource: 'inventory' },
       { label: 'Inventory Adjustment', resource: 'inventory-adjustments' },
-      { label: 'Inventory Sales Delivery', resource: 'sales-delivery' },
+      { label: 'Inventory Sales', resource: 'sales-delivery' },
     ],
   },
   { label: 'Discrepancy', resource: 'discrepancy' },

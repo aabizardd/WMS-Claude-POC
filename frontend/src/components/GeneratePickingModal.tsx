@@ -32,6 +32,8 @@ interface Props {
   remainingHint?: string;
   // Error from loading the pickable data (set by the parent).
   loadError?: string;
+  /** Items to start ticked (e.g. the materials checked on the detail page). */
+  preselectedIds?: string[];
   onClose: () => void;
   // Resolves on success (parent closes/reloads); throw an Error to surface the
   // message inside the modal.
@@ -50,6 +52,7 @@ export default function GeneratePickingModal({
   pickers,
   remainingHint,
   loadError,
+  preselectedIds,
   onClose,
   onSubmit,
 }: Props) {
@@ -67,10 +70,15 @@ export default function GeneratePickingModal({
       Object.fromEntries(
         pickable.items.map((it) => [
           it.id,
-          { selected: false, allocations: [newAlloc(it, it.remaining_qty)] } as ItemForm,
+          {
+            selected: !!preselectedIds?.includes(it.id),
+            allocations: [newAlloc(it, it.remaining_qty)],
+          } as ItemForm,
         ]),
       ),
     );
+    // Preselection is read with each fresh pickable, not tracked on its own.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pickable]);
 
   function patchItem(itemId: string, patch: Partial<ItemForm>) {

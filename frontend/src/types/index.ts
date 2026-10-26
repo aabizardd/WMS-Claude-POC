@@ -289,9 +289,16 @@ export interface InventoryRow {
   material_type: string | null;
   material_category: string | null;
   primary_uom: string | null;
+  secondary_uom?: string | null;
+  /** The material's Oracle internal id. */
+  erp_doc_id?: string | null;
   warehouse_name: string | null;
   reserved_qty: number;
   avail_qty: number;
+  /** Usable stock: the bins' available total minus freeze_qty. */
+  freeze_qty: number;
+  /** The bins' available total, frozen (KIT) stock included. */
+  avail_in_bins: number;
   in_transit_qty: number;
   quality_issue: number;
   qty_issue: number;
@@ -306,6 +313,11 @@ export interface InventoryRow {
 export interface InventoryBinGroup {
   bin_id: string | null;
   bin_location: string | null;
+  bin_code?: string | null;
+  /** True for the auto-created per-warehouse bin that holds unplaced stock. */
+  is_virtual: boolean;
+  /** True for a KIT bin: its stock is frozen and reported as freeze_qty. */
+  is_frozen: boolean;
   warehouse_name: string | null;
   on_hand: number;
   reserved_qty: number;
@@ -318,6 +330,16 @@ export interface InventoryBinGroup {
 export interface InventoryDetail extends InventoryRow {
   warehouse_id: string | null;
   bins: InventoryBinGroup[];
+}
+
+/** One "from bin -> to bin" move made by Transfer Bins. */
+export interface InventoryTransfer {
+  id: string;
+  created_at: string;
+  from_bin: { bin_id: string | null; bin_code: string | null; bin_label: string | null };
+  to_bin: { bin_id: string | null; bin_code: string | null; bin_label: string | null };
+  qty: number;
+  adjusted_by: string | null;
 }
 
 export interface BinOption {
@@ -495,8 +517,33 @@ export interface TransferOrderRow {
   to_location_name: string | null;
   warehouse: { id: string; name: string } | null;
   item_count: number;
+  /** Subsidiary of the origin warehouse, shown as Ownership. */
+  ownership?: string | null;
+  memo?: string | null;
+  created_by?: string | null;
+  last_modified_by?: string | null;
   last_modified: string | null;
   created_at: string;
+  /** The order's lines, when asked for with include_items. */
+  items?: TransferOrderLine[];
+}
+
+/** One Transfer Order list filter: values OR-ed, fields AND-ed. */
+export type TransferOrderFilterField =
+  | 'material_code'
+  | 'from_warehouse_id'
+  | 'created_at'
+  | 'tran_id'
+  | 'to_warehouse_id'
+  | 'oracle_id'
+  | 'memo'
+  /** Free text on the origin / destination warehouse names. */
+  | 'from_warehouse_name'
+  | 'to_warehouse_name';
+
+export interface TransferOrderFilter {
+  field: TransferOrderFilterField;
+  values: string[];
 }
 
 export interface TransferOrderLine {
@@ -517,6 +564,15 @@ export interface TransferOrderLine {
   received: number;
   from_location_name: string | null;
   material_id: string | null;
+  // Detail page only.
+  uom?: string | null;
+  /** Pickable stock of the material in the origin warehouse. */
+  available_qty?: number;
+  /** Already sent to picking. */
+  given_qty?: number;
+  remaining_qty?: number;
+  /** Shipped through closed deliveries. */
+  actual_delivery?: number;
 }
 
 export interface TransferOrderDetail {
@@ -529,6 +585,9 @@ export interface TransferOrderDetail {
   from_location_name: string | null;
   to_location_name: string | null;
   warehouse: { id: string; name: string } | null;
+  ownership?: string | null;
+  created_by?: string | null;
+  last_modified_by?: string | null;
   memo: string | null;
   date_created: string | null;
   last_modified: string | null;
@@ -954,6 +1013,10 @@ export interface SalesOrderRow {
   warehouse: { id: string; name: string } | null;
   total_amount: number;
   item_count: number;
+  /** The order's subsidiary, shown as Ownership. */
+  ownership?: string | null;
+  created_by?: string | null;
+  last_modified_by?: string | null;
   last_modified: string | null;
   created_at: string;
 }
@@ -965,8 +1028,15 @@ export interface SalesOrderItemRow {
   item_name: string | null;
   material_code: string | null;
   material_name: string | null;
+  uom?: string | null;
+  /** Pickable stock of the material in the order's warehouse. */
+  available_qty?: number;
   quantity: number;
+  /** Already sent to picking. */
+  given_qty?: number;
   remaining_qty: number;
+  /** Shipped through closed deliveries. */
+  actual_delivery?: number;
   rate: number;
   amount: number;
   shipped: number;
@@ -988,6 +1058,8 @@ export interface SalesOrderDetail {
   location_name: string | null;
   warehouse: { id: string; name: string } | null;
   subsidiary_name: string | null;
+  /** The order's subsidiary, shown as Ownership. */
+  ownership?: string | null;
   currency_name: string | null;
   total_amount: number;
   last_modified: string | null;
@@ -1130,7 +1202,10 @@ export interface DeliveryRow {
   delivery_id: string;
   sdo_id: string | null;
   source_type: 'SALES_ORDER' | 'TRANSFER_ORDER';
+  /** The packing the document was generated from first. */
   packing_id: string | null;
+  /** Every packing this delivery covers — it can be more than one. */
+  packing_codes?: string[];
   so_number: string | null;
   to_number: string | null;
   source_number: string | null;
@@ -1138,7 +1213,41 @@ export interface DeliveryRow {
   location: string | null;
   status: string;
   item_count: number;
+  /** Packing's own id, for linking to its detail. */
+  packing_db_id?: string | null;
+  /** Oracle id of the SO/TO behind the delivery. */
+  erp_doc_id?: string | null;
+  ownership?: string | null;
+  created_by?: string | null;
   created_at: string;
+  updated_by?: string | null;
+  updated_at?: string | null;
+  /** Present when the list is asked for them (include_items=true). */
+  items?: DeliveryItemRow[];
+}
+
+/** One SD Tracking filter: several values are OR-ed, fields are AND-ed. */
+export type DeliveryFilterField =
+  | 'material_code'
+  | 'material_name'
+  | 'warehouse_id'
+  /** Transfer Order deliveries: the TO's destination warehouse. */
+  | 'to_warehouse_id'
+  /** Free text on names (the Delivery Plan filter fields). */
+  | 'warehouse_name'
+  | 'to_warehouse_name'
+  | 'customer_name'
+  | 'created_by_name'
+  | 'sdo_id'
+  | 'tran_id'
+  | 'customer_id'
+  | 'oracle_id'
+  | 'packing_code'
+  | 'created_by_id';
+
+export interface DeliveryFilter {
+  field: DeliveryFilterField;
+  values: string[];
 }
 
 export interface DeliveryTracking {
@@ -1163,11 +1272,17 @@ export interface DeliveryTracking {
 export interface DeliveryItemRow {
   id: string;
   line_number: number | null;
+  /** Which packing this line came from — one delivery can cover several. */
+  packing_id: string | null;
+  packing_code: string | null;
   material_code: string | null;
   material_name: string | null;
   qty: number;
   uom: string | null;
+  /** Staging bin for this line. */
   bin_label: string | null;
+  /** The bins this line was picked from. */
+  picked_bins?: string[];
   picker: { id: number; name: string } | null;
 }
 
@@ -1176,19 +1291,29 @@ export interface DeliveryDetail {
   delivery_id: string;
   sdo_id: string | null;
   source_type: 'SALES_ORDER' | 'TRANSFER_ORDER';
+  /** The packing the document was generated from first. */
   packing_id: string | null;
+  /** Every packing this delivery covers — it can be more than one. */
+  packing_codes?: string[];
   so_id: string | null;
   so_oracle_id: string | null;
   so_number: string | null;
   to_id: string | null;
   to_oracle_id: string | null;
   to_number: string | null;
+  source_number?: string | null;
   customer: string | null;
   location: string | null;
   status: string;
   oracle_fulfillment_id: number | null;
   oracle_local_id: number | null;
+  packing_db_id?: string | null;
+  erp_doc_id?: string | null;
+  ownership?: string | null;
+  created_by?: string | null;
   created_at: string;
+  updated_by?: string | null;
+  updated_at?: string | null;
   tracking: DeliveryTracking;
   items: DeliveryItemRow[];
 }
@@ -1256,10 +1381,16 @@ export interface ComplaintDetail extends ComplaintRow {
 /** Every created document is Success; Failed is reserved for the Oracle post. */
 export type SalesDeliveryStatus = 'Success' | 'Failed';
 
+/** A return reverses a delivery; both live in the same list. */
+export type SalesDeliveryDocumentType = 'SalesDelivery' | 'SalesReturn';
+
 /** GET /sales-delivery/form-options — header defaults and dropdowns. */
 export interface SalesDeliveryFormOptions {
   /** Shared by From and To; the form hides whichever one is picked on the other side. */
   warehouse_options: { id: string; name: string; oracle_id: string }[];
+  /** A Sales Return is raised FROM one of these. */
+  billing_warehouse_options: { id: string; name: string; oracle_id: string }[];
+  customer_options: { id: string; name: string | null; entity_id: string | null }[];
   department_options: { id: string; name: string | null; oracle_id: string }[];
   class_options: { id: string; name: string | null; oracle_id: string }[];
   default_from_warehouse_id: string | null;
@@ -1272,11 +1403,14 @@ export interface SdMaterialOption {
   material_name: string | null;
   uom_code?: string | null;
   allows_decimal?: boolean;
+  /** Sum of the transferable bins' available qty. */
+  qty_available?: number;
 }
 
 export interface SdBinOption {
   bin_id: string | null;
   bin_label: string | null;
+  bin_code?: string | null;
   qty_available: number;
   reserved_qty: number;
   qty_issue: number;
@@ -1286,9 +1420,12 @@ export interface SdBinOption {
 export interface SalesDeliveryRow {
   id: string;
   delivery_number: string;
+  document_type: SalesDeliveryDocumentType;
+  source_delivery_number: string | null;
   status: SalesDeliveryStatus;
   from_warehouse: string | null;
   to_warehouse: string | null;
+  customer: string | null;
   department: string | null;
   class: string | null;
   material_count: number;
@@ -1296,6 +1433,8 @@ export interface SalesDeliveryRow {
   memo: string | null;
   created_by: string | null;
   created_at: string;
+  /** Present when the list is asked for them (include_items=true). */
+  items?: SalesDeliveryItem[];
 }
 
 export interface SalesDeliveryItem {
@@ -1306,6 +1445,9 @@ export interface SalesDeliveryItem {
   uom_code: string | null;
   bin_id: string | null;
   bin_label: string | null;
+  bin_code?: string | null;
+  /** Free note typed for this bin line on the create form. */
+  remarks: string | null;
   qty_transfer: number;
   avail_at_create: number;
 }
@@ -1313,11 +1455,17 @@ export interface SalesDeliveryItem {
 export interface SalesDeliveryDetail {
   id: string;
   delivery_number: string;
+  document_type: SalesDeliveryDocumentType;
+  source_delivery_id: string | null;
+  source_delivery_number: string | null;
   status: SalesDeliveryStatus;
   from_warehouse_id: string;
   from_warehouse: string | null;
   to_warehouse_id: string;
   to_warehouse: string | null;
+  customer_id: string | null;
+  customer_name: string | null;
+  customer_entity_id: string | null;
   department_id: string | null;
   department_name: string | null;
   department_oracle_id: string | null;
@@ -1330,4 +1478,83 @@ export interface SalesDeliveryDetail {
   created_at: string;
   total_qty: number;
   items: SalesDeliveryItem[];
+}
+
+// ===== Inventory list filters =====
+
+/** Columns the inventory list can be filtered on (mirrors the server list). */
+export type InventoryFilterField =
+  | 'material_code'
+  | 'material_name'
+  | 'material_type'
+  | 'material_category'
+  | 'primary_uom'
+  /** Matched on the warehouse id (older links). */
+  | 'warehouse_id'
+  /** Free text on the warehouse name. */
+  | 'warehouse_name'
+  | 'bin';
+
+export interface InventoryFilter {
+  field: InventoryFilterField;
+  /** Several values on one column mean "any of these" (OR). */
+  values: string[];
+}
+
+// ===== Sales Order list filters =====
+
+/** Columns the Sales Order list can be filtered on (mirrors the server list). */
+export type SalesOrderFilterField =
+  | 'tran_id'
+  | 'oracle_id'
+  | 'customer_name'
+  /** Matched on the warehouse id — the field is a dropdown, not free text. */
+  /** Free text on the warehouse name. */
+  | 'warehouse_name'
+  | 'warehouse_id'
+  | 'status_name'
+  | 'delivery_status'
+  | 'memo'
+  | 'item_name'
+  | 'material_code'
+  | 'material_name'
+  | 'item_description'
+  /** Value is a "from..to" date range on created_at. */
+  | 'created_at';
+
+export interface SalesOrderFilter {
+  field: SalesOrderFilterField;
+  /** Several values on one column mean "any of these" (OR). */
+  values: string[];
+}
+
+// ===== Sales Delivery list filters =====
+
+/** Columns the Sales Delivery list can be filtered on (mirrors the server). */
+export type SalesDeliveryFilterField =
+  | 'delivery_number'
+  | 'document_type'
+  | 'from_warehouse'
+  /** Exact Origin warehouse id (tracking dropdown). */
+  | 'from_warehouse_id'
+  | 'to_warehouse'
+  | 'customer'
+  | 'department'
+  | 'class'
+  | 'status'
+  | 'memo'
+  | 'created_by'
+  /** Exact creator user id (tracking dropdown). */
+  | 'created_by_id'
+  /** Value is a "from..to" date range on created_at. */
+  | 'created_at'
+  | 'material_code'
+  | 'material_name'
+  | 'bin'
+  | 'remarks';
+
+export interface SalesDeliveryFilter {
+  field: SalesDeliveryFilterField;
+  /** Several values on one column mean "any of these" (OR). */
+  values: string[];
 }

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { subsidiarySingleFilter } from '../common/subsidiary-filter';
 
 type WarehouseRow = Prisma.WarehouseGetPayload<object>;
 
@@ -39,17 +40,17 @@ export class WarehousesService {
       DEFAULT_ORDER,
     );
 
-    const where: Prisma.WarehouseWhereInput = query.search
-      ? {
-          OR: [
-            { name: { contains: query.search, mode: 'insensitive' } },
-            { parentName: { contains: query.search, mode: 'insensitive' } },
-            {
-              subsidiaryName: { contains: query.search, mode: 'insensitive' },
-            },
-          ],
-        }
-      : {};
+    // Only sites of an allowed subsidiary are listed.
+    const where: Prisma.WarehouseWhereInput = {
+      subsidiaryId: subsidiarySingleFilter(),
+    };
+    if (query.search) {
+      where.OR = [
+        { name: { contains: query.search, mode: 'insensitive' } },
+        { parentName: { contains: query.search, mode: 'insensitive' } },
+        { subsidiaryName: { contains: query.search, mode: 'insensitive' } },
+      ];
+    }
 
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.warehouse.count({ where }),
@@ -77,7 +78,7 @@ export class WarehousesService {
   // Lightweight lookup for dropdowns (id + name).
   options() {
     return this.prisma.warehouse.findMany({
-      where: { isInactive: false },
+      where: { isInactive: false, subsidiaryId: subsidiarySingleFilter() },
       orderBy: { name: 'asc' },
       select: { id: true, name: true, oracleId: true },
     });

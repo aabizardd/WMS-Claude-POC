@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import type { GeneratePickingDto } from './dto/generate-picking.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { usableBinStockWhere } from '../common/frozen-bins';
 
 type PickingOrder = Prisma.PickingOrderByWithRelationInput;
 const PICKING_SORTABLE: Record<string, (d: SortDir) => PickingOrder> = {
@@ -920,7 +921,8 @@ export class PickingService {
       where: { warehouseId, materialCode: { in: materialCodes } },
       include: {
         binStocks: {
-          where: { availQty: { gt: 0 } },
+          // Frozen (KIT) stock is never offered as a picking source.
+          where: { availQty: { gt: 0 }, ...usableBinStockWhere() },
           include: { bin: { select: { id: true, binLabel: true } } },
         },
       },

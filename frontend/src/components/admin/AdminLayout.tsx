@@ -22,17 +22,23 @@ export default function AdminLayout() {
   }
 
   return (
+    /* print-hide / print-reset (see PrintDocument) keep the admin chrome and
+       its page gutters out of the print-outs rendered inside this layout. */
     <div className="min-h-screen bg-slate-100 dark:bg-slate-900">
-      <Sidebar
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        collapsed={collapsed}
-        onToggle={toggleCollapsed}
-      />
+      <div className="print-hide">
+        <Sidebar
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          collapsed={collapsed}
+          onToggle={toggleCollapsed}
+        />
+      </div>
 
-      <div className={collapsed ? 'lg:pl-16' : 'lg:pl-64'}>
-        <Topbar onMenuClick={() => setSidebarOpen(true)} />
-        <main className="mx-auto w-full max-w-7xl p-4 sm:p-6 lg:p-8">
+      <div className={`print-reset ${collapsed ? 'lg:pl-16' : 'lg:pl-64'}`}>
+        <div className="print-hide">
+          <Topbar onMenuClick={() => setSidebarOpen(true)} />
+        </div>
+        <main className="print-reset mx-auto w-full max-w-7xl p-4 sm:p-6 lg:p-8">
           {/* Remount page content when the active warehouse changes so all
               warehouse-scoped data re-fetches. */}
           <div key={activeWarehouseId ?? 'none'}>

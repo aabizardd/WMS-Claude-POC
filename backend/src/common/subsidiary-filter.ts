@@ -1,8 +1,14 @@
 // Central allow-list of Oracle subsidiary ids that WMS is permitted to display.
 // Rows whose subsidiary_id is outside this list (or NULL) are hidden from
 // list/table/dropdown queries on every table that has a subsidiary_id column
-// (currently: SalesOrder, Vendor — single value; Department, Class — comma list).
-// Warehouse & User are intentionally NOT filtered (used for scoping/assignment).
+// (currently: SalesOrder, Vendor, Warehouse — single value; Department, Class —
+// comma list).
+//
+// Warehouse joined the list so only the allowed subsidiary's sites are offered
+// and only their rows are listed; a record is still readable by id, so links to
+// documents in another subsidiary keep working. User stays unfiltered — it is
+// used for scoping and assignment, and a user's own warehouse must resolve even
+// when it sits outside the list.
 //
 // Override via SUBSIDIARY_ALLOWLIST env (comma-separated), else defaults to "6".
 const ENV = process.env.SUBSIDIARY_ALLOWLIST;

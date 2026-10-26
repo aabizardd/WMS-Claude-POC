@@ -37,6 +37,33 @@ export class SalesDeliveryController {
     return this.service.binOptions(materialId, fromWarehouseId);
   }
 
+  /** Bins of the To Location holding a material — used by a Sales Return. */
+  @Get('return-bins')
+  @RequirePermissions('sales-delivery:create')
+  returnBinOptions(
+    @Query('material_id') materialId: string,
+    @Query('to_warehouse_id') toWarehouseId: string,
+  ) {
+    return this.service.returnBinOptions(materialId, toWarehouseId);
+  }
+
+  /** Dropdown values (master warehouses and users) for the tracking filters. */
+  @Get('tracking-options')
+  @RequirePermissions('sales-delivery:read')
+  trackingOptions() {
+    return this.service.trackingFilterOptions();
+  }
+
+  /** Deliveries a Sales Return can be copied from. */
+  @Get('return-sources')
+  @RequirePermissions('sales-delivery:create')
+  returnSources(
+    @Query('search') search: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.service.returnSourceOptions(search, user);
+  }
+
   @Get()
   @RequirePermissions('sales-delivery:read')
   findAll(

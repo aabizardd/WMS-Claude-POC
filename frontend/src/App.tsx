@@ -41,10 +41,13 @@ import PoDetailPage from './pages/inbound/PoDetailPage';
 import { InboundPlaceholder } from './pages/inbound/InboundLayout';
 import InventoryLandingPage from './pages/inventory/InventoryLandingPage';
 import InventoryPage from './pages/inventory/InventoryPage';
+import InventoryQtySourcePage from './pages/inventory/InventoryQtySourcePage';
 import InventoryDetailPage from './pages/inventory/InventoryDetailPage';
 import SalesDeliveryListPage from './pages/sales-delivery/SalesDeliveryListPage';
 import SalesDeliveryCreatePage from './pages/sales-delivery/SalesDeliveryCreatePage';
 import SalesDeliveryDetailPage from './pages/sales-delivery/SalesDeliveryDetailPage';
+import SalesDeliveryPrintPage from './pages/sales-delivery/SalesDeliveryPrintPage';
+import SalesReturnCreatePage from './pages/sales-delivery/SalesReturnCreatePage';
 import InventoryAdjustmentsPage from './pages/inventory-adjustment/InventoryAdjustmentsPage';
 import InventoryAdjustmentCreatePage from './pages/inventory-adjustment/InventoryAdjustmentCreatePage';
 import InventoryAdjustmentDetailPage from './pages/inventory-adjustment/InventoryAdjustmentDetailPage';
@@ -58,10 +61,12 @@ import PickingDetailPage from './pages/outbound/PickingDetailPage';
 import PackingList from './pages/outbound/PackingList';
 import PackingDetailPage from './pages/outbound/PackingDetailPage';
 import DeliveryList from './pages/outbound/DeliveryList';
+import DeliveryPrintPage from './pages/outbound/DeliveryPrintPage';
 import DeliveryDetailPage from './pages/outbound/DeliveryDetailPage';
 import HistoryList from './pages/outbound/HistoryList';
 import HistoryDetailPage from './pages/outbound/HistoryDetailPage';
 import SalesOrderDetailPage from './pages/outbound/SalesOrderDetailPage';
+import SalesOrderTrackingPage from './pages/outbound/SalesOrderTrackingPage';
 import TransferStockLayout from './pages/outbound/TransferStockLayout';
 import TransferOrderTab from './pages/outbound/TransferOrderTab';
 import TransferOrderDetailPage from './pages/outbound/TransferOrderDetailPage';
@@ -419,6 +424,15 @@ export default function App() {
               </RequirePermission>
             }
           />
+          {/* The SO / TO documents behind a Reserved or In Transit quantity. */}
+          <Route
+            path="inventory/list/:id/:type"
+            element={
+              <RequirePermission permission="inventory:read">
+                <InventoryQtySourcePage />
+              </RequirePermission>
+            }
+          />
 
           {/* Inventory Sales Delivery — MSO/VHS stock transfer */}
           <Route
@@ -429,6 +443,11 @@ export default function App() {
               </RequirePermission>
             }
           />
+          {/* Tracking now lives on the list itself; keep old links working. */}
+          <Route
+            path="inventory/sales-delivery/tracking"
+            element={<Navigate to="/admin/inventory/sales-delivery" replace />}
+          />
           <Route
             path="inventory/sales-delivery/new"
             element={
@@ -438,10 +457,26 @@ export default function App() {
             }
           />
           <Route
+            path="inventory/sales-delivery/return/new"
+            element={
+              <RequirePermission permission="sales-delivery:create">
+                <SalesReturnCreatePage />
+              </RequirePermission>
+            }
+          />
+          <Route
             path="inventory/sales-delivery/:id"
             element={
               <RequirePermission permission="sales-delivery:read">
                 <SalesDeliveryDetailPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="inventory/sales-delivery/:id/print"
+            element={
+              <RequirePermission permission="sales-delivery:read">
+                <SalesDeliveryPrintPage />
               </RequirePermission>
             }
           />
@@ -474,6 +509,23 @@ export default function App() {
 
           {/* Outbound — landing page (type selection) */}
           <Route path="outbound" element={<OutboundLandingPage />} />
+
+          {/* Opened in its own tab from the Sales Order list; stands outside
+              the tabbed layout so it fills the page. */}
+          <Route
+            path="outbound/sales-order/tracking"
+            element={
+              <RequirePermission permission="sales-orders:read">
+                <SalesOrderTrackingPage />
+              </RequirePermission>
+            }
+          />
+          {/* SD Tracking — opened in its own tab from the Delivery Plan list. */}
+          <Route
+            path="outbound/sales-order/delivery/tracking"
+            // SD Tracking now lives on the Delivery Plan list; keep old links working.
+            element={<Navigate to="/admin/outbound/sales-order/delivery" replace />}
+          />
 
           {/* Outbound from Sales Order (tabbed) */}
           <Route path="outbound/sales-order" element={<OutboundLayout />}>
@@ -548,6 +600,14 @@ export default function App() {
             element={
               <RequirePermission permission="delivery:read">
                 <DeliveryDetailPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="outbound/sales-order/delivery/:id/print"
+            element={
+              <RequirePermission permission="delivery:read">
+                <DeliveryPrintPage basePath="/admin/outbound/sales-order" />
               </RequirePermission>
             }
           />
@@ -645,6 +705,14 @@ export default function App() {
             element={
               <RequirePermission permission="delivery:read">
                 <DeliveryDetailPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="outbound/transfer-stock/delivery/:id/print"
+            element={
+              <RequirePermission permission="delivery:read">
+                <DeliveryPrintPage basePath="/admin/outbound/transfer-stock" />
               </RequirePermission>
             }
           />

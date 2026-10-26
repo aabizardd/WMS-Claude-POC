@@ -48,8 +48,8 @@ const CARDS: InventoryCard[] = [
   },
   {
     key: 'sales-delivery',
-    title: 'Inventory Sales Delivery',
-    description: 'Stock transfer for the MSO & VHS warehouses.',
+    title: 'Inventory Sales',
+    description: 'Sales Delivery & Sales Return for the MSO & VHS warehouses.',
     to: '/admin/inventory/sales-delivery',
     permission: 'sales-delivery:read',
     accent: 'bg-indigo-600',

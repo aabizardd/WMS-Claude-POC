@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import type { GenerateDeliveryDto } from './dto/generate-delivery.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { subsidiarySingleFilter } from '../common/subsidiary-filter';
 
 interface ErpAuthResponse {
   success: boolean;
@@ -39,6 +40,14 @@ export interface WarehouseScope {
   warehouseId: string | null;
 }
 
+/** Where a picking line was taken from: the bin it was picked out of. */
+const pickedFromSelect = {
+  salesOrderItemId: true,
+  transferOrderItemId: true,
+  actualQty: true,
+  bin: { select: { binLabel: true } },
+} satisfies Prisma.PickingItemSelect;
+
 const packingSelect = {
   id: true,
   packingCode: true,
@@ -48,24 +57,44 @@ const packingSelect = {
       pickingCode: true,
       status: true,
       salesOrder: {
-        select: { id: true, oracleId: true, tranId: true, customerName: true },
+        select: {
+          id: true,
+          oracleId: true,
+          tranId: true,
+          customerName: true,
+          subsidiaryName: true,
+        },
       },
       transferOrder: {
-        select: { id: true, oracleId: true, tranId: true, toLocationName: true },
+        select: {
+          id: true,
+          oracleId: true,
+          tranId: true,
+          toLocationName: true,
+        },
       },
+      items: { select: pickedFromSelect },
     },
   },
+  // Pickings consolidated into this packing besides its own.
+  pickings: { select: { items: { select: pickedFromSelect } } },
 } satisfies Prisma.PackingSelect;
+
+const userName = { select: { id: true, name: true } } as const;
 
 const listInclude = {
   warehouse: { select: { id: true, name: true } },
   packing: { select: packingSelect },
+  createdBy: userName,
+  updatedBy: userName,
   _count: { select: { items: true } },
 } satisfies Prisma.DeliveryInclude;
 
 const detailInclude = {
   warehouse: { select: { id: true, name: true } },
   packing: { select: packingSelect },
+  createdBy: userName,
+  updatedBy: userName,
   items: {
     include: {
       material: {
@@ -77,7 +106,10 @@ const detailInclude = {
       },
       salesOrderItem: { select: { lineNumber: true } },
       transferOrderItem: { select: { lineNumber: true } },
+      // A delivery can cover several packings; the line says which.
+      packing: { select: { id: true, packingCode: true } },
       bin: { select: { id: true, binLabel: true } },
+      pickingItem: { select: { bin: { select: { binLabel: true } } } },
       picker: { select: { id: true, name: true } },
     },
     orderBy: { createdAt: 'asc' as const },
@@ -85,7 +117,9 @@ const detailInclude = {
 } satisfies Prisma.DeliveryInclude;
 
 type DeliveryList = Prisma.DeliveryGetPayload<{ include: typeof listInclude }>;
-type DeliveryDetail = Prisma.DeliveryGetPayload<{ include: typeof detailInclude }>;
+type DeliveryDetail = Prisma.DeliveryGetPayload<{
+  include: typeof detailInclude;
+}>;
 
 type DeliveryOrder = Prisma.DeliveryOrderByWithRelationInput;
 const DELIVERY_SORTABLE: Record<string, (d: SortDir) => DeliveryOrder> = {
@@ -99,6 +133,45 @@ const DELIVERY_SORTABLE: Record<string, (d: SortDir) => DeliveryOrder> = {
   location: (d) => ({ warehouse: { name: d } }),
   status: (d) => ({ status: d }),
   created_at: (d) => ({ createdAt: d }),
+  updated_at: (d) => ({ updatedAt: d }),
+  created_by: (d) => ({ createdBy: { name: d } }),
+};
+
+/** SO or TO behind a delivery, for filters that look at the source document. */
+const viaSalesOrder = (w: Prisma.SalesOrderWhereInput): Prisma.DeliveryWhereInput => ({
+  packing: { picking: { salesOrder: w } },
+});
+const viaTransferOrder = (w: Prisma.TransferOrderWhereInput): Prisma.DeliveryWhereInput => ({
+  packing: { picking: { transferOrder: w } },
+});
+const ci = (v: string) => ({ contains: v, mode: 'insensitive' as const });
+
+/**
+ * Tracking filters, one per field. Several values on one field are OR-ed;
+ * different fields are AND-ed. Item fields look inside the delivery's lines.
+ */
+const DELIVERY_FILTERS: Record<string, (v: string) => Prisma.DeliveryWhereInput> = {
+  material_code: (v) => ({ items: { some: { materialCode: ci(v) } } }),
+  material_name: (v) => ({ items: { some: { materialName: ci(v) } } }),
+  warehouse_id: (v) => ({ warehouseId: v }),
+  // Transfer Order deliveries only: the TO's destination warehouse.
+  to_warehouse_id: (v) => viaTransferOrder({ toWarehouseId: v }),
+  // Free-text versions of the fields above, matched on names.
+  warehouse_name: (v) => ({ warehouse: { name: ci(v) } }),
+  to_warehouse_name: (v) => viaTransferOrder({ toLocationName: ci(v) }),
+  customer_name: (v) => viaSalesOrder({ customerName: ci(v) }),
+  created_by_name: (v) => ({ createdBy: { name: ci(v) } }),
+  sdo_id: (v) => ({ sdoId: ci(v) }),
+  tran_id: (v) => ({
+    OR: [viaSalesOrder({ tranId: ci(v) }), viaTransferOrder({ tranId: ci(v) })],
+  }),
+  // Value is the customer's Oracle id (the master's oracleId).
+  customer_id: (v) => viaSalesOrder({ customerId: v }),
+  oracle_id: (v) => ({
+    OR: [viaSalesOrder({ oracleId: ci(v) }), viaTransferOrder({ oracleId: ci(v) })],
+  }),
+  packing_code: (v) => ({ packing: { packingCode: ci(v) } }),
+  created_by_id: (v) => ({ createdById: /^\d+$/.test(v) ? Number(v) : -1 }),
 };
 
 @Injectable()
@@ -213,9 +286,14 @@ export class DeliveryService {
       limit?: number;
       search?: string;
       history?: string | boolean;
+      /** "all" lists every status (Delivery Plan, SD Tracking). */
+      status?: string;
       source?: string;
+      filters?: { field: string; values: string[] }[];
       sort_by?: string;
       sort_order?: string;
+      /** 'true' adds each delivery's lines to its row (the list's accordion). */
+      include_items?: string;
     },
     scope: WarehouseScope,
   ) {
@@ -229,7 +307,7 @@ export class DeliveryService {
     const isHistory = query.history === true || query.history === 'true';
     const where: Prisma.DeliveryWhereInput = {
       ...this.scopeWhere(scope),
-      status: isHistory ? 'Closed' : { not: 'Closed' },
+      ...(query.status === 'all' ? {} : { status: isHistory ? 'Closed' : { not: 'Closed' } }),
     };
     if (query.source === 'SALES_ORDER' || query.source === 'TRANSFER_ORDER') {
       where.sourceType = query.source;
@@ -238,45 +316,76 @@ export class DeliveryService {
       where.OR = [
         { deliveryCode: { contains: query.search, mode: 'insensitive' } },
         { sdoId: { contains: query.search, mode: 'insensitive' } },
-        { packing: { packingCode: { contains: query.search, mode: 'insensitive' } } },
+        {
+          packing: {
+            packingCode: { contains: query.search, mode: 'insensitive' },
+          },
+        },
         {
           packing: {
             picking: {
-              salesOrder: { tranId: { contains: query.search, mode: 'insensitive' } },
+              salesOrder: {
+                tranId: { contains: query.search, mode: 'insensitive' },
+              },
             },
           },
         },
         {
           packing: {
             picking: {
-              transferOrder: { tranId: { contains: query.search, mode: 'insensitive' } },
+              transferOrder: {
+                tranId: { contains: query.search, mode: 'insensitive' },
+              },
             },
           },
         },
+        { warehouse: { name: ci(query.search) } },
+        viaSalesOrder({ customerName: ci(query.search) }),
+        viaTransferOrder({ toLocationName: ci(query.search) }),
       ];
     }
 
-    const [total, rows] = await this.prisma.$transaction([
+    const and: Prisma.DeliveryWhereInput[] = [];
+    for (const f of query.filters ?? []) {
+      const build = DELIVERY_FILTERS[f.field];
+      const values = (f.values ?? []).map((v) => v.trim()).filter(Boolean);
+      if (build && values.length) and.push({ OR: values.map(build) });
+    }
+    if (and.length) where.AND = and;
+
+    const withItems = query.include_items === 'true';
+    const [total, rows, qtySum] = await this.prisma.$transaction([
       this.prisma.delivery.count({ where }),
       this.prisma.delivery.findMany({
         where,
-        include: listInclude,
+        include: withItems ? { ...listInclude, items: detailInclude.items } : listInclude,
         orderBy,
         skip: (page - 1) * limit,
         take: limit,
+      }),
+      // Quantity of every matching delivery, not only this page.
+      this.prisma.deliveryItem.aggregate({
+        where: { delivery: where },
+        _sum: { qty: true },
       }),
     ]);
 
     return {
       total_page: Math.ceil(total / limit) || 0,
       total_data: total,
+      totals: { qty: qtySum._sum.qty ?? 0 },
       attributes: {
         page,
         limit,
         sort_by: query.sort_by ?? null,
         sort_order: query.sort_order ?? null,
       },
-      rows: rows.map((r) => this.serializeList(r)),
+      rows: rows.map((r) => ({
+        ...this.serializeList(r),
+        ...('items' in r
+          ? { items: this.serializeItems(r.items as DeliveryDetail['items'], r.packing) }
+          : {}),
+      })),
     };
   }
 
@@ -300,7 +409,12 @@ export class DeliveryService {
 
     const packings = await this.prisma.packing.findMany({
       where: { id: { in: dto.packingIds } },
-      include: { items: true, delivery: { select: { id: true } } },
+      include: {
+        items: true,
+        deliveries: { select: { id: true } },
+        // A packing may also be covered by a delivery it is not the primary of.
+        deliveryItems: { select: { id: true }, take: 1 },
+      },
     });
     const byId = new Map(packings.map((p) => [p.id, p]));
 
@@ -315,10 +429,8 @@ export class DeliveryService {
           `Only Closed packings can be delivered (${p.packingCode} is ${p.status})`,
         );
       }
-      if (p.delivery) {
-        throw new BadRequestException(
-          `Packing ${p.packingCode} already has a delivery document`,
-        );
+      if (p.deliveries.length || p.deliveryItems.length) {
+        throw new BadRequestException(`Packing ${p.packingCode} already has a delivery document`);
       }
     }
 
@@ -327,35 +439,71 @@ export class DeliveryService {
       where: { deliveryCode: { startsWith: `DEL-${today}` } },
     });
 
+    /**
+     * Packings that belong together ship together: same warehouse and same
+     * source document become ONE delivery covering several packings. Anything
+     * else still gets its own, so unrelated orders are never merged.
+     */
+    const pickings = await this.prisma.picking.findMany({
+      where: { id: { in: packings.map((p) => p.pickingId) } },
+      select: { id: true, salesOrderId: true, transferOrderId: true },
+    });
+    const pickingById = new Map(pickings.map((pk) => [pk.id, pk]));
+    const sourceById = new Map(
+      packings.map((p) => [p.id, pickingById.get(p.pickingId)]),
+    );
+
+    const groups = new Map<string, typeof packings>();
+    for (const id of dto.packingIds) {
+      const p = byId.get(id)!;
+      // A packing reaches its order through its primary picking.
+      const src = sourceById.get(p.id);
+      const sourceKey =
+        p.sourceType === 'TRANSFER_ORDER'
+          ? `TO:${src?.transferOrderId ?? p.id}`
+          : `SO:${src?.salesOrderId ?? p.id}`;
+      const key = `${p.warehouseId ?? '-'}|${p.sourceType}|${sourceKey}`;
+      const bucket = groups.get(key);
+      if (bucket) bucket.push(p);
+      else groups.set(key, [p]);
+    }
+
     const createdCodes: string[] = [];
     await this.prisma.$transaction(async (tx) => {
       let seq = baseCount;
-      for (const id of dto.packingIds) {
-        const p = byId.get(id)!;
+      for (const group of groups.values()) {
         seq += 1;
         const deliveryCode = `DEL-${today}-${String(seq).padStart(3, '0')}`;
+        const first = group[0];
         // Carry the actually-packed qty (per item) into the delivery. Items with
         // nothing packed (all issue) are skipped.
-        const items = p.items
-          .filter((it) => it.actualQty > 0)
-          .map((it) => ({
-            // Carry the source line reference (SO or TO) through from packing.
-            salesOrderItemId: it.salesOrderItemId,
-            transferOrderItemId: it.transferOrderItemId,
-            materialId: it.materialId,
-            materialCode: it.materialCode,
-            materialName: it.materialName,
-            qty: it.actualQty,
-            binId: it.binId,
-            pickerId: it.pickerId,
-          }));
+        const items = group.flatMap((p) =>
+          p.items
+            .filter((it) => it.actualQty > 0)
+            .map((it) => ({
+              // Carry the source line reference (SO or TO) through from packing.
+              salesOrderItemId: it.salesOrderItemId,
+              transferOrderItemId: it.transferOrderItemId,
+              materialId: it.materialId,
+              materialCode: it.materialCode,
+              materialName: it.materialName,
+              qty: it.actualQty,
+              binId: it.binId,
+              pickingItemId: it.pickingItemId, // the picking line, for its Picking Bin
+              pickerId: it.pickerId,
+              // Which packing this line came from.
+              packingId: p.id,
+            })),
+        );
         await tx.delivery.create({
           data: {
             deliveryCode,
-            sourceType: p.sourceType, // inherit source from the packing
-            packingId: p.id,
-            warehouseId: p.warehouseId,
+            sourceType: first.sourceType, // inherit source from the packing
+            packingId: first.id,
+            warehouseId: first.warehouseId,
             status: 'Open',
+            createdById: scope.userId ?? null,
+            updatedById: scope.userId ?? null,
             items: { create: items },
           },
         });
@@ -363,9 +511,7 @@ export class DeliveryService {
       }
     });
 
-    this.logger.log(
-      `Generated ${createdCodes.length} delivery(ies): ${createdCodes.join(', ')}`,
-    );
+    this.logger.log(`Generated ${createdCodes.length} delivery(ies): ${createdCodes.join(', ')}`);
     return { created: createdCodes.length, delivery_codes: createdCodes };
   }
 
@@ -408,8 +554,8 @@ export class DeliveryService {
     const isTransfer = d.sourceType === 'TRANSFER_ORDER';
     const transactionType = isTransfer ? 'transfer_order' : 'sales_order';
     const sourceOracleId = isTransfer
-      ? d.packing?.picking?.transferOrder?.oracleId ?? null
-      : d.packing?.picking?.salesOrder?.oracleId ?? null;
+      ? (d.packing?.picking?.transferOrder?.oracleId ?? null)
+      : (d.packing?.picking?.salesOrder?.oracleId ?? null);
     if (!sourceOracleId) {
       throw new BadRequestException(
         `${isTransfer ? 'Transfer Order' : 'Sales Order'} Oracle ID not found for this delivery`,
@@ -423,8 +569,8 @@ export class DeliveryService {
     for (const it of d.items) {
       if (!(it.qty > 0)) continue;
       const line = isTransfer
-        ? it.transferOrderItem?.lineNumber ?? null
-        : it.salesOrderItem?.lineNumber ?? null;
+        ? (it.transferOrderItem?.lineNumber ?? null)
+        : (it.salesOrderItem?.lineNumber ?? null);
       if (line == null) {
         throw new BadRequestException(
           `Cannot ship: item "${it.materialCode ?? it.id}" has no source line number`,
@@ -472,6 +618,7 @@ export class DeliveryService {
         data: {
           sdoId,
           status: 'Closed',
+          updatedById: scope.userId ?? null,
           oracleFulfillmentId: fulfillment?.fulfillment_id ?? null,
           oracleLocalId: fulfillment?.local_id ?? null,
         },
@@ -529,6 +676,13 @@ export class DeliveryService {
       sdo_id: d.sdoId,
       source_type: d.sourceType,
       packing_id: d.packing?.packingCode ?? null,
+      // Every packing this delivery covers — it can be more than one.
+      packing_codes:
+        'items' in d
+          ? this.packingCodes(d.items as DeliveryDetail['items'])
+          : d.packing?.packingCode
+            ? [d.packing.packingCode]
+            : [],
       so_number: so?.tranId ?? null,
       to_number: to?.tranId ?? null,
       source_number: so?.tranId ?? to?.tranId ?? null,
@@ -536,7 +690,77 @@ export class DeliveryService {
       location: d.warehouse?.name ?? null,
       status: d.status,
       item_count: d._count.items,
+      ...this.auditFields(d),
+    };
+  }
+
+  /**
+   * The bins each order line was picked from, keyed by its Sales / Transfer
+   * Order line id. Only bins something was actually taken out of count.
+   */
+  private pickedFrom(packing: DeliveryList['packing']) {
+    const rows = [
+      ...(packing?.picking?.items ?? []),
+      ...(packing?.pickings ?? []).flatMap((p) => p.items),
+    ];
+    const byLine = new Map<string, Set<string>>();
+    for (const r of rows) {
+      const line = r.salesOrderItemId ?? r.transferOrderItemId;
+      if (!line || !r.bin || r.actualQty <= 0) continue;
+      if (!byLine.has(line)) byLine.set(line, new Set());
+      byLine.get(line)!.add(r.bin.binLabel);
+    }
+    return byLine;
+  }
+
+  /** Fields the Delivery Plan list, tracking and detail all show. */
+  private auditFields(d: DeliveryList | DeliveryDetail) {
+    const so = d.packing?.picking?.salesOrder;
+    const to = d.packing?.picking?.transferOrder;
+    return {
+      packing_db_id: d.packing?.id ?? null,
+      erp_doc_id: so?.oracleId ?? to?.oracleId ?? null,
+      ownership: so?.subsidiaryName ?? null,
+      created_by: d.createdBy?.name ?? null,
       created_at: d.createdAt,
+      updated_by: d.updatedBy?.name ?? null,
+      updated_at: d.updatedAt,
+    };
+  }
+
+  /**
+   * Dropdown values for SD Tracking, from the masters: active warehouses of the
+   * allowed subsidiary, customers and active users.
+   */
+  async trackingOptions() {
+    const [warehouses, customers, users] = await Promise.all([
+      this.prisma.warehouse.findMany({
+        where: { isInactive: false, subsidiaryId: subsidiarySingleFilter() },
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true },
+      }),
+      this.prisma.customer.findMany({
+        orderBy: { companyName: 'asc' },
+        select: { oracleId: true, entityId: true, companyName: true },
+      }),
+      this.prisma.user.findMany({
+        where: { isActive: true },
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true },
+      }),
+    ]);
+    return {
+      warehouses,
+      customers: customers.map((c) => ({
+        id: c.oracleId,
+        // entityId usually already reads "CODE - NAME"; only add the name
+        // when it is not part of it.
+        name:
+          c.entityId && c.companyName && !c.entityId.includes(c.companyName)
+            ? `${c.entityId} - ${c.companyName}`
+            : c.entityId || c.companyName || c.oracleId,
+      })),
+      creators: users.map((u) => ({ id: String(u.id), name: u.name })),
     };
   }
 
@@ -551,6 +775,8 @@ export class DeliveryService {
       sdo_id: d.sdoId,
       source_type: d.sourceType,
       packing_id: packing?.packingCode ?? null,
+      // Every packing this delivery covers — it can be more than one.
+      packing_codes: this.packingCodes(d.items),
       so_id: so?.id ?? null,
       so_oracle_id: so?.oracleId ?? null,
       so_number: so?.tranId ?? null,
@@ -563,7 +789,7 @@ export class DeliveryService {
       status: d.status,
       oracle_fulfillment_id: d.oracleFulfillmentId ?? null,
       oracle_local_id: d.oracleLocalId ?? null,
-      created_at: d.createdAt,
+      ...this.auditFields(d),
       // Full outbound tracking chain: source doc → Picking → Packing → Delivery.
       // The first step is the Sales Order or the Transfer Order, per source_type.
       tracking: {
@@ -583,18 +809,41 @@ export class DeliveryService {
         sdo_id: d.sdoId,
         delivery_status: d.status,
       },
-      items: d.items
+      items: this.serializeItems(d.items, d.packing),
+    };
+  }
+
+  /** Distinct packing codes across a delivery's lines, in first-seen order. */
+  private packingCodes(items: DeliveryDetail['items']): string[] {
+    const seen: string[] = [];
+    for (const it of items) {
+      const code = it.packing?.packingCode;
+      if (code && !seen.includes(code)) seen.push(code);
+    }
+    return seen;
+  }
+
+  /** A delivery's lines, in Sales / Transfer Order line order. */
+  private serializeItems(items: DeliveryDetail['items'], packing: DeliveryList['packing']) {
+    const picked = this.pickedFrom(packing);
+    return (
+      items
         .map((it) => ({
           id: it.id,
-          line_number:
-            it.salesOrderItem?.lineNumber ??
-            it.transferOrderItem?.lineNumber ??
-            null,
+          line_number: it.salesOrderItem?.lineNumber ?? it.transferOrderItem?.lineNumber ?? null,
           material_code: it.materialCode ?? it.material?.materialCode ?? null,
           material_name: it.materialName ?? it.material?.materialName ?? null,
+          // Shown per line on the print-out, since one document can mix them.
+          packing_id: it.packing?.id ?? null,
+          packing_code: it.packing?.packingCode ?? null,
           qty: it.qty,
           uom: it.material?.primaryUom?.uomCode ?? null,
+          // Staging bin: a line-level field; the header no longer carries one.
           bin_label: it.bin?.binLabel ?? null,
+          // The bins this line was picked from.
+          picked_bins: it.pickingItem?.bin
+            ? [it.pickingItem.bin.binLabel]
+            : [...(picked.get(it.salesOrderItemId ?? it.transferOrderItemId ?? '') ?? [])].slice(0, 1),
           picker: it.picker ? { id: it.picker.id, name: it.picker.name } : null,
         }))
         // Sort by Sales Order line number ASC; items without a line last.
@@ -603,7 +852,7 @@ export class DeliveryService {
           if (a.line_number == null) return 1;
           if (b.line_number == null) return -1;
           return a.line_number - b.line_number;
-        }),
-    };
+        })
+    );
   }
 }

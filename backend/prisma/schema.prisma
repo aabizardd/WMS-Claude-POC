@@ -80,6 +80,8 @@ model User {
   inventoryAdjustments InventoryAdjustment[]      @relation("AdjustmentCreator")
   approvedAdjustments  InventoryAdjustment[]      @relation("AdjustmentApprover")
   salesDeliveries      SalesDelivery[]            @relation("SalesDeliveryCreator")
+  deliveriesCreated    Delivery[]                 @relation("DeliveryCreator")
+  deliveriesUpdated    Delivery[]                 @relation("DeliveryUpdater")
   adjustmentEvents     InventoryAdjustmentEvent[]
   stockMovements       StockMovement[]
 
@@ -366,6 +368,8 @@ model Customer {
   createdBy    String?   @map("created_by")
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  salesDeliveries SalesDelivery[]
 
   @@index([companyName(ops: raw("gin_trgm_ops"))], type: Gin)
   @@index([entityId(ops: raw("gin_trgm_ops"))], type: Gin)
@@ -1036,13 +1040,24 @@ enum SalesDeliveryStatus {
   Failed
 }
 
+// A Sales Return is the mirror of a Sales Delivery: it is raised FROM a billing
+// warehouse and copied from the delivery it reverses. Both live in this table so
+// the list, filters and print template are shared; the type tells them apart —
+// never the warehouse name, which can be renamed.
+enum SalesDeliveryDocumentType {
+  SalesDelivery
+  SalesReturn
+}
+
 model SalesDelivery {
-  id             String              @id @default(uuid())
-  deliveryNumber String              @unique @map("delivery_number") // SD-YYYYMMDD-NNN
+  id             String                    @id @default(uuid())
+  // SD-YYYYMMDD-NNN for a delivery, SR-YYYYMMDD-NNN for a return.
+  deliveryNumber String                    @unique @map("delivery_number")
+  documentType   SalesDeliveryDocumentType @default(SalesDelivery) @map("document_type")
   // Transfer Inventory document number, allocated together with the SD number.
   // Kept in the database but deliberately not exposed by the API or the UI.
-  documentNumber String              @unique @map("document_number") // TI-YYYYMMDD-NNN
-  status         SalesDeliveryStatus @default(Success)
+  documentNumber String                    @unique @map("document_number") // TI-YYYYMMDD-NNN
+  status         SalesDeliveryStatus       @default(Success)
 
   // From and To are both picked from the active warehouses and must differ.
   // From defaults to the creator's warehouse on the form.
@@ -1050,6 +1065,10 @@ model SalesDelivery {
   fromWarehouse   Warehouse @relation("SalesDeliveryFrom", fields: [fromWarehouseId], references: [id])
   toWarehouseId   String    @map("to_warehouse_id")
   toWarehouse     Warehouse @relation("SalesDeliveryTo", fields: [toWarehouseId], references: [id])
+
+  // Who the delivery is for; picked from the Customer master on the form.
+  customerId String?   @map("customer_id")
+  customer   Customer? @relation(fields: [customerId], references: [id])
 
   // Defaulted from the creator's department, overridable on the form.
   departmentId String?     @map("department_id")
@@ -1062,6 +1081,12 @@ model SalesDelivery {
   // carries the document reference with it.
   memo String?
 
+  // The delivery a return was copied from. A return always has one; a delivery
+  // never does.
+  sourceDeliveryId String?         @map("source_delivery_id")
+  sourceDelivery   SalesDelivery?  @relation("SalesReturnSource", fields: [sourceDeliveryId], references: [id])
+  returns          SalesDelivery[] @relation("SalesReturnSource")
+
   createdById Int?  @map("created_by")
   createdBy   User? @relation("SalesDeliveryCreator", fields: [createdById], references: [id])
 
@@ -1072,7 +1097,10 @@ model SalesDelivery {
 
   @@index([fromWarehouseId])
   @@index([toWarehouseId])
+  @@index([customerId])
   @@index([status])
+  @@index([documentType])
+  @@index([sourceDeliveryId])
   @@map("sales_deliveries")
 }
 
@@ -1090,6 +1118,9 @@ model SalesDeliveryItem {
   binId    String? @map("bin_id")
   bin      Bin?    @relation(fields: [binId], references: [id])
   binLabel String? @map("bin_label")
+
+  // Free note typed per bin line on the create form.
+  remarks String?
 
   // Always positive: how much of this bin moves to the destination warehouse.
   qtyTransfer   Float @default(0) @map("qty_transfer")
@@ -1411,6 +1442,10 @@ model PickingItem {
 
   status PickingStatus @default(Open)
 
+  // The packing / delivery lines this picking line became.
+  packingItems  PackingItem[]  @relation("PackingItemPicking")
+  deliveryItems DeliveryItem[] @relation("DeliveryItemPicking")
+
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([pickingId])
@@ -1453,8 +1488,9 @@ model Packing {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  items    PackingItem[]
-  delivery Delivery?
+  items         PackingItem[]
+  deliveries    Delivery[]
+  deliveryItems DeliveryItem[]
 
   @@index([warehouseId])
   @@index([status])
@@ -1493,12 +1529,17 @@ model PackingItem {
   pickerId Int?  @map("picker_id")
   picker   User? @relation(fields: [pickerId], references: [id])
 
+  // The picking line this packing line came from — its Picking Bin.
+  pickingItemId String?      @map("picking_item_id")
+  pickingItem   PickingItem? @relation("PackingItemPicking", fields: [pickingItemId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([packingId])
   @@index([materialId])
   @@index([binId])
   @@index([transferOrderItemId])
+  @@index([pickingItemId])
   @@map("packing_items")
 }
 
@@ -1509,7 +1550,7 @@ enum DeliveryDocStatus {
   Closed
 }
 
-// A Delivery Document generated from a Packing. One delivery per packing.
+// A Delivery Document generated from one or more Packings.
 // Carries the packing's header + detail. SDO ID is generated at Generate Shipment.
 model Delivery {
   id           String  @id @default(uuid())
@@ -1523,13 +1564,24 @@ model Delivery {
   oracleFulfillmentId Int? @map("oracle_fulfillment_id")
   oracleLocalId       Int? @map("oracle_local_id")
 
-  packingId String  @unique @map("packing_id")
+  // The packing this delivery was generated from. A delivery can now cover
+  // several packings, so the authoritative link is on DeliveryItem.packingId —
+  // this one is the first of them, kept for the documents that show a single
+  // reference.
+  packingId String  @map("packing_id")
   packing   Packing @relation(fields: [packingId], references: [id])
 
   warehouseId String?    @map("warehouse_id")
   warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
 
   status DeliveryDocStatus @default(Open)
+
+  // Who generated the delivery and who last changed it (Generate Shipment).
+  // Null on deliveries created before these were recorded.
+  createdById Int?  @map("created_by_id")
+  createdBy   User? @relation("DeliveryCreator", fields: [createdById], references: [id])
+  updatedById Int?  @map("updated_by_id")
+  updatedBy   User? @relation("DeliveryUpdater", fields: [updatedById], references: [id])
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -1566,12 +1618,22 @@ model DeliveryItem {
   pickerId Int?  @map("picker_id")
   picker   User? @relation(fields: [pickerId], references: [id])
 
+  // Which packing this line came from — a delivery can cover several.
+  packingId String?  @map("packing_id")
+  packing   Packing? @relation(fields: [packingId], references: [id])
+
+  // The picking line this delivery line came from — its Picking Bin.
+  pickingItemId String?      @map("picking_item_id")
+  pickingItem   PickingItem? @relation("DeliveryItemPicking", fields: [pickingItemId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([deliveryId])
+  @@index([packingId])
   @@index([materialId])
   @@index([binId])
   @@index([transferOrderItemId])
+  @@index([pickingItemId])
   @@map("delivery_items")
 }
 

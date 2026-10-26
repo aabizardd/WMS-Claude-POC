@@ -1,16 +1,20 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import api from '../../lib/api';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import type { DeliveryDetail, ShipmentResult } from '../../types';
+import TablePager from '../../components/TablePager';
+import ToolbarMenu, { ExportIcon, PrintIcon } from '../../components/ToolbarMenu';
+import { deliveryStatusPill, formatDateTime } from './deliveryColumns';
 
 export default function DeliveryDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { has } = useAuth();
   const toast = useToast();
+  const navigate = useNavigate();
   const confirm = useConfirm();
   const canShip = has('delivery:update');
 
@@ -19,6 +23,11 @@ export default function DeliveryDetailPage() {
   const [loadError, setLoadError] = useState('');
   const [shipping, setShipping] = useState(false);
   const [shipError, setShipError] = useState('');
+
+  // Material List: searched and paged on the client.
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   function load() {
     setLoading(true);
@@ -69,7 +78,21 @@ export default function DeliveryDetailPage() {
     await runShipment();
   }
 
-  if (loading) {
+  const items = useMemo(() => dl?.items ?? [], [dl]);
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(
+      (it) =>
+        (it.material_code ?? '').toLowerCase().includes(q) ||
+        (it.material_name ?? '').toLowerCase().includes(q) ||
+        (it.bin_label ?? '').toLowerCase().includes(q) ||
+        (it.picked_bins ?? []).some((b) => b.toLowerCase().includes(q)),
+    );
+  }, [items, search]);
+  const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
+
+  if (loading && !dl) {
     return (
       <div className="flex h-64 items-center justify-center text-slate-400">Loading…</div>
     );
@@ -81,14 +104,24 @@ export default function DeliveryDetailPage() {
           {loadError || 'Delivery not found.'}
         </div>
         <Link to="/admin/outbound/sales-order/delivery" className="btn-secondary">
-          ← Back to Delivery
+          ← Back to Delivery Plan
         </Link>
       </div>
     );
   }
 
+  const isTransfer = dl.source_type === 'TRANSFER_ORDER';
+  // Packings this delivery covers; the API lists them, older payloads carry one.
+  const packingCodes =
+    dl.packing_codes?.length ? dl.packing_codes : dl.packing_id ? [dl.packing_id] : [];
+  const basePath = isTransfer ? '/admin/outbound/transfer-stock' : '/admin/outbound/sales-order';
+  const sourceLink = isTransfer
+    ? dl.to_id && `/admin/outbound/transfer-stock/list/${dl.to_id}`
+    : dl.so_id && `/admin/outbound/sales-order/list/${dl.so_id}`;
+  const notYet = () => toast.info('This is not available yet.');
+
   return (
-    <div className="space-y-6">
+    <div className="card p-5">
       {/* Blocking loading overlay while hitting the Oracle fulfillment API */}
       {shipping && (
         <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-900/50">
@@ -104,40 +137,40 @@ export default function DeliveryDetailPage() {
         </div>
       )}
 
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
+      {/* Header */}
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
           <Link
-            to={`${dl.source_type === 'TRANSFER_ORDER' ? '/admin/outbound/transfer-stock' : '/admin/outbound/sales-order'}/delivery`}
-            className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            to={`${basePath}/delivery`}
+            className="rounded-lg border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             aria-label="Back"
           >
-            <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
             </svg>
           </Link>
-          <div>
-            <h1 className="page-title">{dl.delivery_id}</h1>
-            <p className="page-subtitle">
-              {dl.customer ?? '—'} · {dl.location ?? 'No location'}
-            </p>
-          </div>
+          <h1 className="text-xl font-semibold text-slate-800">Delivery Plan Detail</h1>
         </div>
         <div className="flex items-center gap-2">
-          <span
-            className={`badge ${
-              dl.status === 'Closed'
-                ? 'bg-emerald-50 text-emerald-700'
-                : 'bg-amber-50 text-amber-700'
-            }`}
+          <ToolbarMenu
+            items={[
+              { label: 'Print', icon: <PrintIcon />, onClick: () => navigate(`${basePath}/delivery/${dl.id}/print`) },
+              { label: 'Export', icon: <ExportIcon />, onClick: notYet },
+            ]}
+          />
+          <button
+            type="button"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50"
+            onClick={load}
+            aria-label="Refresh"
+            title="Refresh"
           >
-            {dl.status}
-          </span>
+            <svg className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h5M20 20v-5h-5M5 19a9 9 0 0014.13-3M19 5A9 9 0 004.87 8" />
+            </svg>
+          </button>
           {canShip && dl.status !== 'Closed' && (
-            <button
-              className="btn-primary"
-              onClick={handleGenerateShipment}
-              disabled={shipping}
-            >
+            <button className="btn-primary" onClick={handleGenerateShipment} disabled={shipping}>
               {shipping ? 'Generating…' : 'Generate Shipment'}
             </button>
           )}
@@ -146,7 +179,7 @@ export default function DeliveryDetailPage() {
 
       {/* Fulfillment failure — allow retry */}
       {shipError && dl.status !== 'Closed' && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
           <div>
             <span className="font-semibold">Shipment failed:</span> {shipError}
           </div>
@@ -158,113 +191,144 @@ export default function DeliveryDetailPage() {
         </div>
       )}
 
-      <div className="card p-5">
-        <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Delivery Document
-        </h3>
-        <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
-          <Meta label="Delivery ID" value={dl.delivery_id} />
-          <Meta label="SDO ID" value={dl.sdo_id} />
-          <Meta label="Packing ID" value={dl.packing_id} />
-          {dl.source_type === 'TRANSFER_ORDER' ? (
-            <>
-              <Meta
-                label="TO Number"
-                value={
-                  dl.to_id ? (
-                    <Link to={`/admin/outbound/transfer-stock/list/${dl.to_id}`} className="text-brand-700 hover:underline">
-                      {dl.to_number ?? '—'}
-                    </Link>
-                  ) : (
-                    dl.to_number
-                  )
-                }
-              />
-              <Meta label="Transfer Order (Oracle ID)" value={dl.to_oracle_id} />
-            </>
-          ) : (
-            <>
-              <Meta
-                label="SO Number"
-                value={
-                  dl.so_id ? (
-                    <Link to={`/admin/outbound/sales-order/list/${dl.so_id}`} className="text-brand-700 hover:underline">
-                      {dl.so_number ?? '—'}
-                    </Link>
-                  ) : (
-                    dl.so_number
-                  )
-                }
-              />
-              <Meta label="Sales Order (Oracle ID)" value={dl.so_oracle_id} />
-            </>
-          )}
-          <Meta label="Location" value={dl.location} />
-          <Meta
-            label={dl.source_type === 'TRANSFER_ORDER' ? 'Warehouse Destination' : 'Customer'}
-            value={dl.customer}
+      {/* Info */}
+      <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-5">
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-5 text-sm lg:grid-cols-4">
+          <Info label="Status" value={deliveryStatusPill(dl.status)} />
+          <Info
+            label="Transaction ID"
+            value={
+              sourceLink ? (
+                <Link to={sourceLink} className="text-brand-700 hover:underline">
+                  {dl.source_number ?? '-'}
+                </Link>
+              ) : (
+                dl.source_number
+              )
+            }
           />
-          <Meta label="Status" value={dl.status} />
+          <Info label="SD Number" value={dl.sdo_id} />
+          <Info label="Delivery ID" value={dl.delivery_id} />
+          <Info
+            label="Packing ID"
+            value={
+              <span className="inline-flex items-center gap-1.5">
+                {dl.packing_db_id ? (
+                  <Link
+                    to={`${basePath}/packing/${dl.packing_db_id}`}
+                    className="text-brand-700 hover:underline"
+                  >
+                    {dl.packing_id}
+                  </Link>
+                ) : (
+                  (dl.packing_id ?? '-')
+                )}
+                {/*
+                  A delivery can cover several packings. The first one is named;
+                  the rest sit behind a badge whose tooltip lists them all, so
+                  the header stays short. Each line names its own below.
+                */}
+                {packingCodes.length > 1 && (
+                  <span
+                    className="cursor-help rounded-full bg-brand-50 px-1.5 py-0.5 text-[11px] font-semibold text-brand-700"
+                    title={`Covers ${packingCodes.length} packings:\n${packingCodes.join('\n')}`}
+                  >
+                    +{packingCodes.length - 1}
+                  </span>
+                )}
+              </span>
+            }
+          />
+          <Info label="Doc Type" value="Delivery Plan" />
+          <Info label="Ownership" value={dl.ownership} />
+          <Info label="Warehouse Name" value={dl.location} />
+          <Info label={isTransfer ? 'Destination' : 'Customer Name'} value={dl.customer} />
+          <Info label="Created By" value={dl.created_by} />
+          <Info label="Created At" value={formatDateTime(dl.created_at)} />
+          <Info label="Last Modified By" value={dl.updated_by} />
+          <Info label="Last Modified At" value={formatDateTime(dl.updated_at)} />
         </dl>
       </div>
 
-      <div className="card overflow-hidden">
-        <div className="border-b border-slate-200 px-5 py-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-            Material Detail
-          </h3>
-        </div>
+      {/* Material List */}
+      <h3 className="mb-3 mt-6 text-base font-semibold text-slate-800">Material List</h3>
+      <div className="relative mb-3 w-full max-w-xs">
+        <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
+        </svg>
+        <input
+          className="input pl-9"
+          placeholder="Search..."
+          value={search}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setPage(1);
+          }}
+        />
+      </div>
+      <div className="overflow-hidden rounded-lg border border-slate-200">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="table-head">
-              <tr>
-                <th className="px-5 py-3 text-right">Line #</th>
-                <th className="px-5 py-3">Material Code</th>
-                <th className="px-5 py-3">Material Name</th>
-                <th className="px-5 py-3 text-right">Qty</th>
-                <th className="px-5 py-3">UOM</th>
-                <th className="px-5 py-3">Bin</th>
-                <th className="px-5 py-3">Picker</th>
+            <thead className="bg-slate-50 text-left text-slate-600">
+              <tr className="[&>th]:whitespace-nowrap [&>th]:px-4 [&>th]:py-3 [&>th]:font-medium">
+                <th>No</th>
+                <th>Packing ID</th>
+                <th>Material Code</th>
+                <th>Material Name</th>
+                <th className="text-right">ERP Line</th>
+                <th className="text-right">Quantity</th>
+                <th>UOM</th>
+                <th>Staging Bin</th>
+                <th>Picking Bin</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {dl.items.length === 0 ? (
+              {paged.map((it, i) => (
+                <tr key={it.id} className="hover:bg-slate-50">
+                  <td className="px-4 py-3 text-slate-500">{(page - 1) * pageSize + i + 1}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                    {it.packing_code ?? dl.packing_id ?? '-'}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-slate-800">{it.material_code ?? '-'}</td>
+                  <td className="px-4 py-3 text-slate-700">{it.material_name ?? '-'}</td>
+                  <td className="px-4 py-3 text-right text-slate-700">{it.line_number ?? '-'}</td>
+                  <td className="px-4 py-3 text-right text-slate-800">{it.qty.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-slate-700">{it.uom ?? '-'}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-slate-700">{it.bin_label ?? '-'}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-slate-700">{it.picked_bins?.join(', ') || '-'}</td>
+                </tr>
+              ))}
+              {paged.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-5 py-8 text-center text-slate-400">
-                    No items.
+                  <td colSpan={9} className="px-4 py-8 text-center text-slate-400">
+                    {search ? 'No material matches the search.' : 'No items.'}
                   </td>
                 </tr>
-              ) : (
-                dl.items.map((it) => (
-                  <tr key={it.id} className="hover:bg-slate-50">
-                    <td className="px-5 py-3 text-right text-slate-600">
-                      {it.line_number ?? '—'}
-                    </td>
-                    <td className="px-5 py-3 font-medium text-slate-800">
-                      {it.material_code ?? '—'}
-                    </td>
-                    <td className="px-5 py-3 text-slate-600">{it.material_name ?? '—'}</td>
-                    <td className="px-5 py-3 text-right text-slate-600">{it.qty}</td>
-                    <td className="px-5 py-3 text-slate-600">{it.uom ?? '—'}</td>
-                    <td className="px-5 py-3 text-slate-600">{it.bin_label ?? '—'}</td>
-                    <td className="px-5 py-3 text-slate-600">{it.picker?.name ?? '—'}</td>
-                  </tr>
-                ))
               )}
             </tbody>
           </table>
         </div>
+        <TablePager
+          page={page}
+          pageSize={pageSize}
+          total={filtered.length}
+          onPage={setPage}
+          onPageSize={(n) => {
+            setPageSize(n);
+            setPage(1);
+          }}
+        />
       </div>
     </div>
   );
 }
 
-function Meta({ label, value }: { label: string; value: ReactNode }) {
+function Info({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div>
-      <dt className="text-xs text-slate-400">{label}</dt>
-      <dd className="font-medium text-slate-700">
-        {value || <span className="text-slate-300">—</span>}
+      <dt className="text-xs font-semibold text-slate-700">{label}</dt>
+      <dd className="mt-1 text-slate-700">
+        {value === null || value === undefined || value === '' ? '-' : value}
       </dd>
     </div>
   );

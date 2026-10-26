@@ -24,6 +24,24 @@ export class InventoryController {
     return this.service.findOne(id, user);
   }
 
+  /** SO / TO documents behind the header Reserved or In Transit Qty. */
+  @Get(':id/qty-sources/:type')
+  @RequirePermissions('inventory:read')
+  qtySources(
+    @Param('id') id: string,
+    @Param('type') type: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.service.qtySources(id, type, user);
+  }
+
+  /** Manual bin re-allocations, newest first. */
+  @Get(':id/transfers')
+  @RequirePermissions('inventory:read')
+  transferHistory(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.service.transferHistory(id, user);
+  }
+
   @Patch(':id/bins')
   @RequirePermissions('inventory:update')
   adjustBins(

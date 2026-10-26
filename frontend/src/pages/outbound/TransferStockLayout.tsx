@@ -17,7 +17,7 @@ const TABS: Tab[] = [
   },
   { to: '/admin/outbound/transfer-stock/picking', label: 'Picking' },
   { to: '/admin/outbound/transfer-stock/packing', label: 'Packing' },
-  { to: '/admin/outbound/transfer-stock/delivery', label: 'Delivery' },
+  { to: '/admin/outbound/transfer-stock/delivery', label: 'Delivery Plan' },
   { to: '/admin/outbound/transfer-stock/history', label: 'History' },
 ];
 

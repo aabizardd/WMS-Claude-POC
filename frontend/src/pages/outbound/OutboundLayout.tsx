@@ -15,7 +15,7 @@ const TABS: Tab[] = [
   },
   { to: "/admin/outbound/sales-order/picking", label: "Picking" },
   { to: "/admin/outbound/sales-order/packing", label: "Packing" },
-  { to: "/admin/outbound/sales-order/delivery", label: "Delivery" },
+  { to: "/admin/outbound/sales-order/delivery", label: "Delivery Plan" },
   { to: "/admin/outbound/sales-order/history", label: "History" },
 ];
 
@@ -47,7 +47,7 @@ export default function OutboundLayout() {
         </Link>
         <h1 className="page-title">Outbound from Sales Order</h1>
         <p className="page-subtitle">
-          List Outbound → Picking → Packing → Delivery → History.
+          List Outbound → Picking → Packing → Delivery Plan → History.
         </p>
       </div>
 

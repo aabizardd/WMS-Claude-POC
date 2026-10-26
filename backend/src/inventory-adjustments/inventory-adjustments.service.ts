@@ -15,6 +15,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ErpHttpService } from '../erp/erp-http.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { isFrozenBinLabel, usableBinStockWhere } from '../common/frozen-bins';
 import {
   IA_TYPES,
   buildOracleMemo,
@@ -184,7 +185,14 @@ export class InventoryAdjustmentsService {
       where: {
         warehouseId,
         materialId: { not: null },
-        binStocks: { some: { binId: { not: null }, ...this.bucketWhere(iaType) } },
+        binStocks: {
+          some: {
+            binId: { not: null },
+            ...this.bucketWhere(iaType),
+            // Frozen (KIT) stock is out of scope for adjustments.
+            ...usableBinStockWhere(),
+          },
+        },
       },
       select: {
         materialId: true,
@@ -222,7 +230,11 @@ export class InventoryAdjustmentsService {
       where: { warehouseId, materialId },
       include: {
         binStocks: {
-          where: { binId: { not: null }, ...this.bucketWhere(iaType) },
+          where: {
+            binId: { not: null },
+            ...this.bucketWhere(iaType),
+            ...usableBinStockWhere(),
+          },
           include: { bin: { select: { binLabel: true } } },
           orderBy: { createdAt: 'asc' },
         },
@@ -423,6 +435,14 @@ export class InventoryAdjustmentsService {
       const label = `${inv.materialCode ?? line.material_id} @ ${
         stock.bin?.binLabel ?? line.bin_id
       }`;
+
+      // A bin the form may not offer may not be saved through a hand-made
+      // request either.
+      if (isFrozenBinLabel(stock.bin?.binLabel)) {
+        throw new BadRequestException(
+          `${label}: this bin holds frozen (KIT) stock and cannot be adjusted`,
+        );
+      }
       const allowsDecimal = inv.material?.primaryUom?.allowsDecimal ?? true;
 
       let qtyAdjustment = 0;

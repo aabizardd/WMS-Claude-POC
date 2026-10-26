@@ -25,6 +25,9 @@
     "sync:transfer-orders": "ts-node src/scripts/sync-transfer-orders.ts",
     "so:reset": "ts-node src/scripts/reset-sales-orders.ts",
     "seed:outbound-test": "ts-node src/scripts/seed-outbound-test.ts",
+    "seed:bin-variety": "ts-node src/scripts/seed-bin-variety.ts",
+    "seed:billing-stock": "ts-node src/scripts/seed-billing-stock.ts",
+    "seed:multi-packing-delivery": "ts-node src/scripts/seed-multi-packing-delivery.ts",
     "db:reset": "prisma migrate reset --force"
   },
   "prisma": {
