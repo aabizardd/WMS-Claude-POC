@@ -356,6 +356,15 @@ export default function TransferOrderDetailPage() {
         submitting={submitting}
         pickable={pickable}
         pickers={pickers}
+        docInfo={[
+          { label: 'Transaction ID', value: to.tran_id },
+          { label: 'TO ID', value: '-' },
+          { label: 'ERP Doc ID', value: to.oracle_id },
+          { label: 'Doc Type', value: 'Transfer Order' },
+          { label: 'Origin Warehouse', value: to.warehouse?.name ?? locationName(to.from_location_name) },
+          { label: 'Ownership', value: to.ownership },
+          { label: 'Destination Warehouse', value: locationName(to.to_location_name) },
+        ]}
         loadError={genError}
         remainingHint="remaining (committed)"
         preselectedIds={preselected}

@@ -4,6 +4,7 @@ import axios from 'axios';
 import api from '../../lib/api';
 import { RefreshButton } from '../../components/ListView';
 import { soStatusBadgeClass } from '../../lib/salesOrderStatus';
+import DocRefsCell, { type DocRef } from './DocRefsCell';
 import type { QtySourceType } from './QtySourceLink';
 
 interface SourceRow {
@@ -14,7 +15,23 @@ interface SourceRow {
   status: string | null;
   party: string | null;
   references: string[];
+  /** Packing codes; empty before packing. */
+  packing_ids: string[];
+  /** Reserved only: pickings and packings with ids, for links. */
+  pickings?: DocRef[];
+  packings?: DocRef[];
+  /** In Transit only: shipped deliveries by SD number (id = delivery id). */
+  sds?: DocRef[];
+  /** In Transit only: shipped by the SDs, and received at the destination. */
+  qty_delivered?: number;
+  qty_received?: number;
   qty: number;
+  /** Reserved only: what picking holds (picked, or requested while open). */
+  qty_picking?: number;
+  /** Reserved only: what closed packings packed; null before packing. */
+  qty_packing?: number | null;
+  /** Reserved only: picked but not packed — taken off the reservation. */
+  packing_diff?: number;
 }
 
 interface QtySources {
@@ -24,15 +41,27 @@ interface QtySources {
   type: QtySourceType;
   header_qty: number;
   documents_qty: number;
+  /** Reserved only: stock still held for cancelled SO / TO (not listed). */
+  cancelled_qty?: number;
   rows: SourceRow[];
 }
 
+
 const fmt = (n: number) => n.toLocaleString();
+
+/** Outbound section a document lives under, by its source. */
+const OUTBOUND_BASE: Record<'SO' | 'TO', string> = {
+  SO: '/admin/outbound/sales-order',
+  TO: '/admin/outbound/transfer-stock',
+};
+
 
 const DOC_PATH: Record<SourceRow['doc_type'], string> = {
   SO: '/admin/outbound/sales-order/list',
   TO: '/admin/outbound/transfer-stock/list',
 };
+/** In Transit is about receiving, so its TOs open in Inbound from Transfer Stock (TO In). */
+const IN_TRANSIT_TO_PATH = '/admin/inbound/transfer/to';
 
 /**
  * The SO / TO documents behind one inventory row's header Reserved Qty or In
@@ -68,6 +97,9 @@ export default function InventoryQtySourcePage() {
 
   const title = isReserved ? 'Reserved Quantity' : 'In Transit Quantity';
   const gap = data ? data.header_qty - data.documents_qty : 0;
+  const cancelled = data?.cancelled_qty ?? 0;
+  const sum = (pick: (r: SourceRow) => number | null | undefined) =>
+    (data?.rows ?? []).reduce((t, r) => t + (pick(r) ?? 0), 0);
 
   return (
     <div className="card p-5">
@@ -86,8 +118,8 @@ export default function InventoryQtySourcePage() {
             <h1 className="text-xl font-semibold text-slate-800">{title} Documents</h1>
             <p className="mt-0.5 text-sm text-slate-500">
               {isReserved
-                ? 'Sales Orders and Transfer Orders whose picking still holds this stock.'
-                : 'Transfer Orders out of this warehouse: shipped, not received by the destination yet.'}
+                ? 'Sales Orders and Transfer Orders whose picking still holds this stock. Reserved = Qty Picking − Packing Difference − qty already shipped; Qty Packing counts closed packings only.'
+                : 'Transfer Orders out of this warehouse: shipped, not received by the destination yet. In Transit = Qty Delivered (SD) − Qty Received (TO In).'}
             </p>
           </div>
         </div>
@@ -114,8 +146,11 @@ export default function InventoryQtySourcePage() {
 
           {gap !== 0 && (
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
-              The documents below account for {fmt(data.documents_qty)} of {fmt(data.header_qty)}. The
-              other {fmt(gap)} was reserved outside a picking (e.g. a manual or seeded stock change).
+              The documents below account for {fmt(data.documents_qty)} of {fmt(data.header_qty)}.
+              {cancelled > 0 && <> {fmt(cancelled)} is still held for cancelled SO / TO, which are not listed.</>}
+              {gap - cancelled !== 0 && (
+                <> {fmt(gap - cancelled)} was reserved outside a picking (e.g. a manual or seeded stock change).</>
+              )}
             </div>
           )}
 
@@ -130,16 +165,45 @@ export default function InventoryQtySourcePage() {
                     <th>ERP Doc ID</th>
                     <th>Status</th>
                     <th>{isReserved ? 'Customer / Destination' : 'Destination Warehouse'}</th>
-                    <th>{isReserved ? 'Picking ID' : 'Delivery ID'}</th>
+                    <th>{isReserved ? 'Picking ID' : 'SD ID'}</th>
+                    <th>Packing ID</th>
+                    {isReserved && (
+                      <>
+                        <th className="text-right">Qty Picking</th>
+                        <th className="text-right">Qty Packing</th>
+                        <th className="text-right">Packing Difference</th>
+                      </>
+                    )}
+                    {!isReserved && (
+                      <>
+                        <th className="text-right">Qty Delivered (SD)</th>
+                        <th className="text-right">Qty Received (TO In)</th>
+                      </>
+                    )}
                     <th className="text-right">{title}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
                   {data.rows.length > 0 && (
                     <tr className="bg-brand-50 font-semibold text-brand-800">
-                      <td colSpan={7} className="px-4 py-3">
+                      <td colSpan={8} className="px-4 py-3">
                         Total · {data.rows.length} document(s)
                       </td>
+                      {isReserved && (
+                        <>
+                          <td className="px-4 py-3 text-right">{fmt(sum((r) => r.qty_picking))}</td>
+                          <td className="px-4 py-3 text-right">
+                            {data.rows.some((r) => r.qty_packing != null) ? fmt(sum((r) => r.qty_packing)) : ''}
+                          </td>
+                          <td className="px-4 py-3 text-right">{fmt(sum((r) => r.packing_diff))}</td>
+                        </>
+                      )}
+                      {!isReserved && (
+                        <>
+                          <td className="px-4 py-3 text-right">{fmt(sum((r) => r.qty_delivered))}</td>
+                          <td className="px-4 py-3 text-right">{fmt(sum((r) => r.qty_received))}</td>
+                        </>
+                      )}
                       <td className="px-4 py-3 text-right">{fmt(data.documents_qty)}</td>
                     </tr>
                   )}
@@ -151,7 +215,7 @@ export default function InventoryQtySourcePage() {
                       </td>
                       <td className="whitespace-nowrap px-4 py-3">
                         <Link
-                          to={`${DOC_PATH[r.doc_type]}/${r.doc_id}`}
+                          to={`${isReserved ? DOC_PATH[r.doc_type] : IN_TRANSIT_TO_PATH}/${r.doc_id}`}
                           className="font-medium text-brand-700 hover:underline"
                         >
                           {r.doc_number ?? r.doc_id}
@@ -168,13 +232,42 @@ export default function InventoryQtySourcePage() {
                         )}
                       </td>
                       <td className="px-4 py-3 text-slate-700">{r.party}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{r.references.join(', ')}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                        {isReserved ? (
+                          <DocRefsCell refs={r.pickings} path={`${OUTBOUND_BASE[r.doc_type]}/picking`} label="Picking ID" context={r.doc_number} />
+                        ) : (
+                          <DocRefsCell refs={r.sds} path={`${OUTBOUND_BASE[r.doc_type]}/delivery`} label="SD ID" context={r.doc_number} />
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">
+                        <DocRefsCell refs={r.packings} path={`${OUTBOUND_BASE[r.doc_type]}/packing`} label="Packing ID" context={r.doc_number} />
+                      </td>
+                      {isReserved && (
+                        <>
+                          <td className="px-4 py-3 text-right text-slate-700">{fmt(r.qty_picking ?? 0)}</td>
+                          {/* Blank until a packing of this picking is closed. */}
+                          <td className="px-4 py-3 text-right text-slate-700">
+                            {r.qty_packing != null ? fmt(r.qty_packing) : ''}
+                          </td>
+                          <td
+                            className={`px-4 py-3 text-right ${r.packing_diff ? 'font-medium text-rose-600' : 'text-slate-700'}`}
+                          >
+                            {r.packing_diff ? `−${fmt(r.packing_diff)}` : fmt(0)}
+                          </td>
+                        </>
+                      )}
+                      {!isReserved && (
+                        <>
+                          <td className="px-4 py-3 text-right text-slate-700">{fmt(r.qty_delivered ?? 0)}</td>
+                          <td className="px-4 py-3 text-right text-slate-700">{fmt(r.qty_received ?? 0)}</td>
+                        </>
+                      )}
                       <td className="px-4 py-3 text-right font-semibold text-slate-800">{fmt(r.qty)}</td>
                     </tr>
                   ))}
                   {data.rows.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
+                      <td colSpan={isReserved ? 12 : 11} className="px-4 py-8 text-center text-slate-400">
                         No SO / TO document holds this quantity.
                       </td>
                     </tr>

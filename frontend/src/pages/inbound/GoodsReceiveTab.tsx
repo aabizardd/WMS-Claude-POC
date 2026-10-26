@@ -15,9 +15,9 @@ function statusBadge(status: string) {
 }
 
 interface Props {
-  // GR source served by this tab: 'PIB' (Inbound from PIB) or 'PO' (Local
-  // Vendor). Omitted → all sources.
-  source?: 'PIB' | 'PO';
+  // GR source served by this tab: 'PIB' (Inbound from PIB), 'PO' (Local
+  // Vendor) or 'TO' (Transfer Stock). Omitted → all sources.
+  source?: 'PIB' | 'PO' | 'TO';
   // Base path for detail links (default: the PIB inbound section).
   basePath?: string;
 }
@@ -28,7 +28,9 @@ export default function GoodsReceiveTab({
 }: Props) {
   const { has } = useAuth();
   const canUpdate = has('goods-receive:update');
-  const isPo = source === 'PO';
+  // PO and TO GRs are generated from an Oracle item receipt; PIB is filled in.
+  const isPo = source === 'PO' || source === 'TO';
+  const docLabel = source === 'TO' ? 'TO' : 'PO';
 
   const [data, setData] = useState<Paginated<GoodsReceiveRow> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -90,14 +92,14 @@ export default function GoodsReceiveTab({
       <p className="text-sm text-slate-500">
         {data ? `${data.total_data} documents` : 'Goods Receive'} ·{' '}
         {isPo
-          ? 'generated from PO item receipts (Oracle).'
+          ? `generated from ${docLabel} item receipts (Oracle).`
           : 'fill the actual received quantity per item.'}
       </p>
 
       <form onSubmit={onSearch} className="flex gap-2">
         <input
           className="input max-w-xs"
-          placeholder={isPo ? 'Search GR / PO number…' : 'Search GR / shipment number…'}
+          placeholder={isPo ? `Search GR / ${docLabel} number…` : 'Search GR / shipment number…'}
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
         />
@@ -126,7 +128,7 @@ export default function GoodsReceiveTab({
               <tr>
                 <SortableTh label="GR Number" col="gr_number" sort={sort} onSort={onSort} />
                 <SortableTh
-                  label={isPo ? 'PO Number' : 'Shipment No.'}
+                  label={isPo ? `${docLabel} Number` : 'Shipment No.'}
                   col="shipment_number"
                   sort={sort}
                   onSort={onSort}

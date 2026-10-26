@@ -2,18 +2,18 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-// Route-level RBAC guard. Renders children only if the user has `permission`,
-// otherwise shows a 403 panel.
+// Route-level RBAC guard. Renders children only if the user has `permission`
+// (any one of them, when a list), otherwise shows a 403 panel.
 export default function RequirePermission({
   permission,
   children,
 }: {
-  permission: string;
+  permission: string | string[];
   children: ReactNode;
 }) {
   const { has } = useAuth();
 
-  if (has(permission)) {
+  if (Array.isArray(permission) ? permission.some(has) : has(permission)) {
     return <>{children}</>;
   }
 

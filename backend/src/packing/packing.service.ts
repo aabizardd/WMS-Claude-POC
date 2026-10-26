@@ -6,7 +6,9 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { highestSeq } from '../common/doc-sequence';
 import { InventoryService } from '../inventory/inventory.service';
+import { reopenPicking } from '../common/outbound-revert';
 import type { GeneratePackingDto } from './dto/generate-packing.dto';
 import type { ProgressPackingDto } from './dto/progress-packing.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
@@ -248,9 +250,14 @@ export class PackingService {
     }
 
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const baseCount = await this.prisma.packing.count({
-      where: { packingCode: { startsWith: `PACK-${today}` } },
-    });
+    const baseCount = highestSeq(
+      (
+        await this.prisma.packing.findMany({
+          where: { packingCode: { startsWith: `PACK-${today}` } },
+          select: { packingCode: true },
+        })
+      ).map((r) => r.packingCode),
+    );
 
     const createdCodes: string[] = [];
     await this.prisma.$transaction(async (tx) => {
@@ -296,6 +303,55 @@ export class PackingService {
       `Generated ${createdCodes.length} packing(s): ${createdCodes.join(', ')}`,
     );
     return { created: createdCodes.length, packing_codes: createdCodes };
+  }
+
+  // ---------- delete ----------
+
+  /**
+   * Delete an Open packing. Every picking it was made from goes back to Open
+   * with its progress cleared, so it is picked again: the stock a closed
+   * picking had moved into the issue buckets returns to Reserved and its
+   * discrepancies are removed. (An Open packing has not touched stock itself.)
+   */
+  async remove(id: string, scope: WarehouseScope) {
+    const pk = await this.prisma.packing.findUnique({
+      where: { id },
+      include: {
+        pickings: { select: { id: true } },
+        _count: { select: { deliveries: true, deliveryItems: true } },
+      },
+    });
+    if (!pk || (scope.role !== 'admin' && pk.warehouseId !== scope.warehouseId)) {
+      throw new NotFoundException(`Packing ${id} not found`);
+    }
+    if (pk.status !== 'Open') {
+      throw new BadRequestException(
+        `Only an Open packing can be deleted (current: ${pk.status})`,
+      );
+    }
+    if (pk._count.deliveries || pk._count.deliveryItems) {
+      throw new BadRequestException(`Packing ${pk.packingCode} is on a delivery plan`);
+    }
+
+    const pickingIds = [...new Set([pk.pickingId, ...pk.pickings.map((p) => p.id)])];
+    await this.prisma.$transaction(async (tx) => {
+      // Reopen first: it also detaches the pickings from this packing.
+      for (const pickingId of pickingIds) {
+        await reopenPicking(
+          tx,
+          this.inventory,
+          pickingId,
+          scope.userId,
+          `Packing ${pk.packingCode} deleted — picking reopened`,
+        );
+      }
+      await tx.packing.delete({ where: { id } });
+    });
+
+    this.logger.log(
+      `Packing ${pk.packingCode} deleted; ${pickingIds.length} picking(s) reopened`,
+    );
+    return { deleted: true, reopened_pickings: pickingIds.length };
   }
 
   // ---------- progress / close ----------
@@ -447,9 +503,14 @@ export class PackingService {
       if (existing) continue;
 
       const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-      const count = await this.prisma.discrepancy.count({
-        where: { discrepancyId: { startsWith: `DISC-${today}` } },
-      });
+      const count = highestSeq(
+        (
+          await this.prisma.discrepancy.findMany({
+            where: { discrepancyId: { startsWith: `DISC-${today}` } },
+            select: { discrepancyId: true },
+          })
+        ).map((r) => r.discrepancyId),
+      );
       const seq = String(count + 1).padStart(3, '0');
       await this.prisma.discrepancy.create({
         data: {

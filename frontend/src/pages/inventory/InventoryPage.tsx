@@ -82,6 +82,21 @@ function emptyDraft(): Draft {
   return Object.fromEntries(FILTER_FIELDS.map((f) => [f.value, []])) as unknown as Draft;
 }
 
+/**
+ * The documents page behind a Reserved / In Transit total, carrying over the
+ * filters it shares with this list (Part Number, Material Name, Warehouse).
+ */
+function qtyDocumentsHref(type: "reserved" | "in-transit", applied: InventoryFilter[]) {
+  const carry: Record<string, string> = {
+    material_code: "material_code",
+    material_name: "material_name",
+    warehouse_name: "warehouse",
+  };
+  const filters = applied.flatMap((f) => (carry[f.field] ? [{ field: carry[f.field], values: f.values }] : []));
+  const qs = filters.length ? `?filters=${encodeURIComponent(JSON.stringify(filters))}` : "";
+  return `/admin/inventory/${type}${qs}`;
+}
+
 function draftFrom(filters: InventoryFilter[]): Draft {
   const d = emptyDraft();
   for (const f of filters) d[f.field] = f.values;
@@ -342,8 +357,8 @@ export default function InventoryPage() {
             ["Freeze Quantity", totals.freeze_qty],
             ["Quantity Issue", totals.qty_issue],
             ["Quality Issue", totals.quality_issue],
-            ["Reserved Quantity", totals.reserved_qty],
-            ["In Transit Quantity", totals.in_transit_qty],
+            ["Reserved Quantity", totals.reserved_qty, qtyDocumentsHref("reserved", applied)],
+            ["In Transit Quantity", totals.in_transit_qty, qtyDocumentsHref("in-transit", applied)],
           ]}
         />
       )}

@@ -18,6 +18,7 @@ interface FormState {
   lastName: string;
   username: string;
   email: string;
+  employeeId: string;
   password: string;
   roleId: number | '';
   warehouseId: string;
@@ -31,6 +32,7 @@ const emptyForm: FormState = {
   lastName: '',
   username: '',
   email: '',
+  employeeId: '',
   password: '',
   roleId: '',
   warehouseId: '',
@@ -52,6 +54,9 @@ export default function UserFormPage() {
   const isAdmin = user?.role === 'admin';
 
   const [roles, setRoles] = useState<Role[]>([]);
+  // The role the user had when the form opened: still listed if it has since
+  // been set inactive, while other inactive roles are not offered.
+  const [loadedRoleId, setLoadedRoleId] = useState<number | null>(null);
   const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
   const [departments, setDepartments] = useState<DepartmentOption[]>([]);
   const [subsidiaries, setSubsidiaries] = useState<SubsidiaryOption[]>([]);
@@ -83,11 +88,13 @@ export default function UserFormPage() {
         setDepartments((res[2] as { data: DepartmentOption[] }).data);
         if (!isNew) {
           const u = (res[3] as { data: User }).data;
+          setLoadedRoleId(u.roleId);
           setForm({
             firstName: u.firstName ?? '',
             lastName: u.lastName ?? '',
             username: u.username,
             email: u.email,
+            employeeId: u.employeeId ?? '',
             password: '',
             roleId: u.roleId,
             warehouseId: u.warehouseId ?? '',
@@ -101,7 +108,7 @@ export default function UserFormPage() {
           // New user: default to the first assignable role (admins excluded for
           // non-admin creators) and lock the warehouse to the creator's own.
           const assignable = roleList.filter(
-            (r) => isAdmin || r.name !== 'admin',
+            (r) => (isAdmin || r.name !== 'admin') && r.isActive !== false,
           );
           setForm((f) => ({
             ...f,
@@ -176,6 +183,7 @@ export default function UserFormPage() {
       lastName: form.lastName || undefined,
       username: form.username,
       email: form.email,
+      employeeId: form.employeeId.trim(),
       roleId: Number(form.roleId),
       warehouseId: form.warehouseId, // required
       // Optional org assignment; null clears it. Subsidiary only sent with a
@@ -295,6 +303,14 @@ export default function UserFormPage() {
                 disabled={viewOnly}
               />
             </Field>
+            <Field label="Employee ID">
+              <input
+                className="input"
+                value={form.employeeId}
+                onChange={(e) => set({ employeeId: e.target.value })}
+                disabled={viewOnly}
+              />
+            </Field>
           </div>
         </Section>
 
@@ -308,7 +324,11 @@ export default function UserFormPage() {
                 placeholder="Select role"
                 options={roles
                   .filter((r) => isAdmin || r.name !== 'admin')
-                  .map((r) => ({ value: String(r.id), label: r.name }))}
+                  .filter((r) => r.isActive !== false || r.id === loadedRoleId)
+                  .map((r) => ({
+                    value: String(r.id),
+                    label: r.isActive === false ? `${r.name} (inactive)` : r.name,
+                  }))}
               />
             </Field>
             <Field label="Warehouse" required error={fieldErrors.warehouseId}>

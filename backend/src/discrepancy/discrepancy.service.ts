@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { highestSeq } from '../common/doc-sequence';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { loadPibMrn } from '../goods-receive/gr-source.util';
 
@@ -243,9 +244,14 @@ export class DiscrepancyService {
     if (existing) return;
 
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const count = await this.prisma.discrepancy.count({
-      where: { discrepancyId: { startsWith: `DISC-${today}` } },
-    });
+    const count = highestSeq(
+      (
+        await this.prisma.discrepancy.findMany({
+          where: { discrepancyId: { startsWith: `DISC-${today}` } },
+          select: { discrepancyId: true },
+        })
+      ).map((r) => r.discrepancyId),
+    );
     const seq = String(count + 1).padStart(3, '0');
     const discId = `DISC-${today}-${seq}`;
 

@@ -4,15 +4,15 @@ export default function AreaTypesPage() {
   return (
     <SimpleMasterPage
       config={{
-        title: 'Area Types',
-        subtitle: 'Master data of warehouse area types.',
+        noun: 'Area',
         endpoint: '/area-types',
         permission: 'area-types',
         codeKey: 'areaTypeCode',
         nameKey: 'areaTypeName',
-        codeLabel: 'Code',
-        nameLabel: 'Name',
-        addLabel: '+ Add Area Type',
+        codeLabel: 'Area ID',
+        nameLabel: 'Area Name',
+        addLabel: 'Add Area',
+        countKey: 'bins',
       }}
     />
   );

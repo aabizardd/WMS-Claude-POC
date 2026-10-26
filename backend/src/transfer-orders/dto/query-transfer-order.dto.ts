@@ -87,4 +87,10 @@ export class QueryTransferOrderDto extends SortableQueryDto {
   @IsOptional()
   @IsString()
   include_items?: string;
+
+  // 'in' = Inbound from Transfer Stock: TOs coming INTO the user's warehouse
+  // (destination), past fulfillment. Default is the outbound view.
+  @IsOptional()
+  @IsIn(['out', 'in'])
+  direction?: 'out' | 'in';
 }

@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { highestSeq } from '../common/doc-sequence';
 import { InventoryService } from '../inventory/inventory.service';
 import type { GeneratePickingDto } from './dto/generate-picking.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
@@ -170,7 +171,15 @@ export class PickingService {
       include: {
         warehouse: { select: { id: true, name: true } },
         items: {
-          include: { material: { select: { materialCode: true, materialName: true } } },
+          include: {
+            material: {
+              select: {
+                materialCode: true,
+                materialName: true,
+                primaryUom: { select: { uomCode: true } },
+              },
+            },
+          },
           orderBy: { lineNumber: 'asc' },
         },
       },
@@ -206,6 +215,7 @@ export class PickingService {
           item_name: it.itemName,
           material_code: it.material?.materialCode ?? null,
           material_name: it.material?.materialName ?? null,
+          uom: it.material?.primaryUom?.uomCode ?? null,
           quantity: it.quantity,
           remaining_qty: it.remainingQty,
           available_bins: it.material?.materialCode
@@ -314,9 +324,14 @@ export class PickingService {
     }
 
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const count = await this.prisma.picking.count({
-      where: { pickingCode: { startsWith: `PICK-${today}` } },
-    });
+    const count = highestSeq(
+      (
+        await this.prisma.picking.findMany({
+          where: { pickingCode: { startsWith: `PICK-${today}` } },
+          select: { pickingCode: true },
+        })
+      ).map((r) => r.pickingCode),
+    );
     const seq = String(count + 1).padStart(3, '0');
     const pickingCode = `PICK-${today}-${seq}`;
 
@@ -395,17 +410,26 @@ export class PickingService {
     const clean = ids.filter((x): x is string => !!x);
     const empty = new Map<
       string,
-      { materialCode: string | null; materialName: string | null }
+      { materialCode: string | null; materialName: string | null; uom: string | null }
     >();
     if (clean.length === 0) return empty;
     const mats = await this.prisma.material.findMany({
       where: { id: { in: clean } },
-      select: { id: true, materialCode: true, materialName: true },
+      select: {
+        id: true,
+        materialCode: true,
+        materialName: true,
+        primaryUom: { select: { uomCode: true } },
+      },
     });
     return new Map(
       mats.map((m) => [
         m.id,
-        { materialCode: m.materialCode, materialName: m.materialName },
+        {
+          materialCode: m.materialCode,
+          materialName: m.materialName,
+          uom: m.primaryUom?.uomCode ?? null,
+        },
       ]),
     );
   }
@@ -451,6 +475,7 @@ export class PickingService {
             item_name: it.itemName,
             material_code: mat?.materialCode ?? null,
             material_name: mat?.materialName ?? null,
+            uom: mat?.uom ?? null,
             quantity: it.quantity,
             remaining_qty: it.remainingQty,
             available_bins: mat?.materialCode
@@ -550,9 +575,14 @@ export class PickingService {
     }
 
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const count = await this.prisma.picking.count({
-      where: { pickingCode: { startsWith: `PICK-${today}` } },
-    });
+    const count = highestSeq(
+      (
+        await this.prisma.picking.findMany({
+          where: { pickingCode: { startsWith: `PICK-${today}` } },
+          select: { pickingCode: true },
+        })
+      ).map((r) => r.pickingCode),
+    );
     const pickingCode = `PICK-${today}-${String(count + 1).padStart(3, '0')}`;
 
     const created = await this.prisma.$transaction(async (tx) => {
@@ -847,9 +877,14 @@ export class PickingService {
       if (existing) continue;
 
       const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-      const count = await this.prisma.discrepancy.count({
-        where: { discrepancyId: { startsWith: `DISC-${today}` } },
-      });
+      const count = highestSeq(
+        (
+          await this.prisma.discrepancy.findMany({
+            where: { discrepancyId: { startsWith: `DISC-${today}` } },
+            select: { discrepancyId: true },
+          })
+        ).map((r) => r.discrepancyId),
+      );
       const seq = String(count + 1).padStart(3, '0');
       await this.prisma.discrepancy.create({
         data: {

@@ -6,11 +6,26 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import type { PickingDetail } from '../../types';
+import { progressConfirm } from './progressConfirm';
 
 interface RowInput {
   actual: number;
   qtyIssue: number;
   quality: number;
+}
+
+/**
+ * Apply an edit to a row's inputs. Changing Qty Issue or Quality Issue refills
+ * Actual with whatever is left of `remaining`; Actual itself can be lowered
+ * freely.
+ */
+function withActualFilled(row: RowInput, p: Partial<RowInput>, remaining: number): RowInput {
+  const next = { ...row, ...p };
+  if ('qtyIssue' in p || 'quality' in p) {
+    const left = remaining - (Number(next.qtyIssue) || 0) - (Number(next.quality) || 0);
+    next.actual = Math.max(0, Math.round(left * 1e6) / 1e6);
+  }
+  return next;
 }
 
 function statusBadge(status: string) {
@@ -38,10 +53,11 @@ export default function PickingDetailPage() {
   const [inputs, setInputs] = useState<Record<string, RowInput>>({});
   const [saving, setSaving] = useState(false);
 
+  // Actual starts at the max (everything still to pick); issues start at 0.
   function resetInputs(data: PickingDetail) {
     setInputs(
       Object.fromEntries(
-        data.items.map((it) => [it.id, { actual: 0, qtyIssue: 0, quality: 0 }]),
+        data.items.map((it) => [it.id, { actual: it.remaining_qty, qtyIssue: 0, quality: 0 }]),
       ),
     );
   }
@@ -64,8 +80,10 @@ export default function PickingDetailPage() {
 
   const editable = canUpdate && pk?.status !== 'Closed';
 
+  // Entering an issue takes it off Actual, so the row never exceeds remaining.
   function patch(itemId: string, p: Partial<RowInput>) {
-    setInputs((s) => ({ ...s, [itemId]: { ...s[itemId], ...p } }));
+    const remaining = pk?.items.find((it) => it.id === itemId)?.remaining_qty ?? 0;
+    setInputs((s) => ({ ...s, [itemId]: withActualFilled(s[itemId], p, remaining) }));
   }
 
   // Realtime totals = stored totals +/- current inputs.
@@ -118,13 +136,22 @@ export default function PickingDetailPage() {
       }
     }
 
-    const ok = await confirm({
-      title: 'Save picking progress?',
-      description:
-        'The picking status will update automatically. When remaining reaches 0 it will be Closed and inventory/discrepancy settled.',
-      type: 'info',
-      confirmText: 'Save',
-    });
+    const ok = await confirm(
+      progressConfirm(
+        'picking',
+        pk.items
+          .filter((it) => it.remaining_qty > 0)
+          .map((it) => {
+            const f = inputs[it.id] ?? { actual: 0, qtyIssue: 0, quality: 0 };
+            return {
+              remaining: it.remaining_qty,
+              actual: Number(f.actual) || 0,
+              qtyIssue: Number(f.qtyIssue) || 0,
+              quality: Number(f.quality) || 0,
+            };
+          }),
+      ),
+    );
     if (!ok) return;
 
     setSaving(true);

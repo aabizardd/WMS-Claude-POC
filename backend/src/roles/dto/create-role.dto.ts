@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsBoolean,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -14,6 +15,10 @@ export class CreateRoleDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
 
   // Permission ids assigned to this role.
   @IsOptional()

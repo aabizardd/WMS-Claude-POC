@@ -22,6 +22,7 @@ import TablePager from '../../components/TablePager';
 import { ExportIcon } from '../../components/ToolbarMenu';
 import { TO_STATUSES, soStatusBadgeClass } from '../../lib/salesOrderStatus';
 import TransferOrderLinesTable from './TransferOrderLinesTable';
+import TransferInLinesTable from '../inbound/TransferInLinesTable';
 import {
   AccordionPanelRow,
   DetailIcon,
@@ -38,6 +39,12 @@ import {
 } from '../../components/ListView';
 
 const DEFAULT_STATUS = 'Pending Fulfillment';
+
+/** Inbound (TO In) leaves out TOs that have not been fulfilled yet. */
+const NOT_INBOUND_STATUSES = ['Pending Approval', 'Pending Fulfillment'];
+const INBOUND_STATUSES = TO_STATUSES.filter((s) => !NOT_INBOUND_STATUSES.includes(s));
+/** TO In opens on what is waiting to be received. */
+const DEFAULT_INBOUND_STATUS = 'Pending Receipt';
 /** Server-side cap on values within one filter. */
 const MAX_VALUES = 10;
 /**
@@ -145,7 +152,18 @@ interface Totals {
   actual_delivery: number;
 }
 
-export default function TransferOrderTab() {
+/**
+ * Transfer Order list. `direction="in"` is the same list seen from the
+ * destination warehouse (Inbound from Transfer Stock): every TO past
+ * fulfillment, with its lines showing what is fulfilled, received and still to
+ * receive.
+ */
+export default function TransferOrderTab({ direction = 'out' }: { direction?: 'out' | 'in' } = {}) {
+  const isIn = direction === 'in';
+  const defaultStatus = isIn ? DEFAULT_INBOUND_STATUS : DEFAULT_STATUS;
+  const statusOptions = isIn ? INBOUND_STATUSES : TO_STATUSES;
+  // WMS dev's inbound list has no Doc Type column.
+  const cols = isIn ? COLS - 1 : COLS;
   const { has } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
@@ -154,7 +172,7 @@ export default function TransferOrderTab() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [initial] = useState(() => ({
     filters: readFilters(searchParams),
-    status: searchParams.get('status') ?? DEFAULT_STATUS,
+    status: searchParams.get('status') ?? defaultStatus,
   }));
 
   const [data, setData] = useState<(Paginated<TransferOrderRow> & { totals?: Totals }) | null>(null);
@@ -196,6 +214,7 @@ export default function TransferOrderTab() {
           status: status || undefined,
           filters: applied.length ? JSON.stringify(applied) : undefined,
           include_items: 'true',
+          direction: isIn ? 'in' : undefined,
           ...params(),
         },
       });
@@ -212,7 +231,7 @@ export default function TransferOrderTab() {
   // Keep the status and filters in the URL.
   useEffect(() => {
     const next = new URLSearchParams();
-    if (status !== DEFAULT_STATUS) next.set('status', status);
+    if (status !== defaultStatus) next.set('status', status);
     if (applied.length) next.set('filters', JSON.stringify(applied));
     setSearchParams(next, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -350,8 +369,8 @@ export default function TransferOrderTab() {
     <div className="card overflow-hidden">
       <div className="space-y-4 p-5 pb-4">
         <ListHeader
-          title="Transfer Order"
-          subtitle="Initiate a stock transfer between locations"
+          title={isIn ? 'Request - TO' : 'Transfer Order'}
+          subtitle={isIn ? 'Record incoming requests for transfer order' : 'Initiate a stock transfer between locations'}
           menu={[
             {
               label: 'Export',
@@ -397,7 +416,7 @@ export default function TransferOrderTab() {
               }}
             >
               <option value="">All Status</option>
-              {TO_STATUSES.map((s) => (
+              {statusOptions.map((s) => (
                 <option key={s} value={s}>
                   {s}
                 </option>
@@ -422,7 +441,7 @@ export default function TransferOrderTab() {
       </ExtraFiltersModal>
 
       {/* Totals over every matching order, not only this page — as on the Inventory List. */}
-      {data?.totals && (
+      {!isIn && data?.totals && (
         <TotalCards
           items={[
             ['Request Qty', data.totals.request_qty],
@@ -443,7 +462,7 @@ export default function TransferOrderTab() {
                 <SortableTh label="Status" col="status_name" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="Transaction ID" col="tran_id" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="ERP Doc ID" col="oracle_id" sort={sort} onSort={onSort} pad="px-4" className={th} />
-                <th className="whitespace-nowrap px-4 py-3 font-medium">Doc Type</th>
+                {!isIn && <th className="whitespace-nowrap px-4 py-3 font-medium">Doc Type</th>}
                 <SortableTh label="Ownership" col="ownership" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="Origin Warehouse" col="from_location" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="Destination Warehouse" col="to_location" sort={sort} onSort={onSort} pad="px-4" className={th} />
@@ -459,7 +478,7 @@ export default function TransferOrderTab() {
             <tbody className="divide-y divide-slate-100 bg-white">
               {loading && !data ? (
                 <tr>
-                  <td colSpan={COLS} className="px-6 py-10 text-center text-slate-400">
+                  <td colSpan={cols} className="px-6 py-10 text-center text-slate-400">
                     Loading…
                   </td>
                 </tr>
@@ -472,7 +491,9 @@ export default function TransferOrderTab() {
                     : all;
                   // A Part Number filter shows every match; otherwise only the first few.
                   const lines = partFilters.length ? matching : matching.slice(0, LINE_PREVIEW);
-                  const detailPath = `/admin/outbound/transfer-stock/list/${t.id}`;
+                  const detailPath = isIn
+                    ? `/admin/inbound/transfer/to/${t.id}`
+                    : `/admin/outbound/transfer-stock/list/${t.id}`;
                   return [
                     <tr key={t.id} className={expandableRowClass(open, loading)} onClick={() => toggleRow(t.id)}>
                       <RowExpandCell open={open} onToggle={() => toggleRow(t.id)} noun="lines" />
@@ -488,7 +509,7 @@ export default function TransferOrderTab() {
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-800">{t.tran_id ?? '-'}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.oracle_id}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">Transfer Order</td>
+                      {!isIn && <td className="whitespace-nowrap px-4 py-3 text-slate-700">Transfer Order</td>}
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.ownership ?? '-'}</td>
                       <td className="px-4 py-3 text-slate-700">{t.warehouse?.name ?? locationName(t.from_location_name)}</td>
                       <td className="px-4 py-3 text-slate-700">{locationName(t.to_location_name)}</td>
@@ -512,7 +533,7 @@ export default function TransferOrderTab() {
                     open && (
                       <AccordionPanelRow
                         key={`${t.id}-lines`}
-                        colSpan={COLS}
+                        colSpan={cols}
                         title="Line items"
                         noun="lines"
                         total={all.length}
@@ -521,21 +542,33 @@ export default function TransferOrderTab() {
                         shown={lines.length}
                         detailPath={detailPath}
                       >
-                        <TransferOrderLinesTable
-                          lines={lines}
-                          emptyText={
-                            partFilters.length
-                              ? 'No line on this order matches the Part Number filter.'
-                              : 'This order has no lines.'
-                          }
-                        />
+                        {isIn ? (
+                          // Same columns as the TO In detail's Material List.
+                          <TransferInLinesTable
+                            lines={lines}
+                            emptyText={
+                              partFilters.length
+                                ? 'No line on this order matches the Part Number filter.'
+                                : 'This order has no lines.'
+                            }
+                          />
+                        ) : (
+                          <TransferOrderLinesTable
+                            lines={lines}
+                            emptyText={
+                              partFilters.length
+                                ? 'No line on this order matches the Part Number filter.'
+                                : 'This order has no lines.'
+                            }
+                          />
+                        )}
                       </AccordionPanelRow>
                     ),
                   ];
                 })
               ) : (
                 <tr>
-                  <td colSpan={COLS} className="px-6 py-10 text-center text-slate-400">
+                  <td colSpan={cols} className="px-6 py-10 text-center text-slate-400">
                     {applied.length > 0 || status
                       ? 'No transfer order matches the filters.'
                       : 'No transfer orders. Click the refresh button to pull data from ERP.'}

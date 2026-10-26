@@ -49,17 +49,37 @@ export function TotalCards({
   items,
   gridClass = 'grid-cols-2 sm:grid-cols-4',
 }: {
-  items: [label: string, value: number][];
+  /** A card with a link opens the documents behind its total, in a new tab. */
+  items: [label: string, value: number, href?: string][];
   gridClass?: string;
 }) {
   return (
     <div className={`mx-5 mb-3 grid gap-2 ${gridClass}`}>
-      {items.map(([label, value]) => (
-        <div key={label} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-          <div className="text-[11px] text-slate-500">Total {label}</div>
-          <div className="text-lg font-semibold text-slate-800">{value.toLocaleString()}</div>
-        </div>
-      ))}
+      {items.map(([label, value, href]) =>
+        href ? (
+          <a
+            key={label}
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            className="group rounded-lg border border-slate-200 bg-white px-3 py-2 transition hover:border-brand-300 hover:bg-brand-50/40"
+            title={`See the documents behind the total ${label.toLowerCase()}`}
+          >
+            <div className="text-[11px] text-slate-500">Total {label}</div>
+            <div className="flex items-center gap-1 text-lg font-semibold text-brand-700">
+              {value.toLocaleString()}
+              <svg className="h-3.5 w-3.5 opacity-60 group-hover:opacity-100" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M14 5h5v5M19 5l-8 8M10 5H6a1 1 0 00-1 1v12a1 1 0 001 1h12a1 1 0 001-1v-4" />
+              </svg>
+            </div>
+          </a>
+        ) : (
+          <div key={label} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+            <div className="text-[11px] text-slate-500">Total {label}</div>
+            <div className="text-lg font-semibold text-slate-800">{value.toLocaleString()}</div>
+          </div>
+        ),
+      )}
     </div>
   );
 }

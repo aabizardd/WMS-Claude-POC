@@ -20,6 +20,7 @@ const SORTABLE: Record<string, (d: SortDir) => UserOrder> = {
   is_active: (d) => ({ isActive: d }),
   role: (d) => ({ role: { name: d } }),
   warehouse: (d) => ({ warehouse: { name: d } }),
+  employee_id: (d) => ({ employeeId: d }),
   created_at: (d) => ({ createdAt: d }),
 };
 const DEFAULT_ORDER: UserOrder = { id: 'asc' };
@@ -32,6 +33,7 @@ const userSelect = {
   lastName: true,
   email: true,
   username: true,
+  employeeId: true,
   isActive: true,
   roleId: true,
   role: { select: { id: true, name: true } },
@@ -51,8 +53,27 @@ export interface WarehouseScope {
   warehouseId: string | null;
 }
 
+// Blank employee ids are stored as null, so several users may leave it empty.
+export function cleanEmployeeId(v: string | null | undefined): string | null {
+  const t = v?.trim();
+  return t ? t : null;
+}
+
+// "Username already in use", etc. — from a unique-constraint error.
+export function uniqueViolation(e: Prisma.PrismaClientKnownRequestError) {
+  const LABELS: Record<string, string> = {
+    username: 'Username',
+    email: 'Email',
+    employee_id: 'Employee ID',
+    employeeId: 'Employee ID',
+  };
+  const target = (e.meta?.target as string[] | undefined) ?? [];
+  const label = target.map((t) => LABELS[t] ?? t).join(', ') || 'Value';
+  return new BadRequestException(`${label} already in use`);
+}
+
 // Display name derived from first/last; fall back to a provided default.
-function buildName(
+export function buildName(
   firstName?: string | null,
   lastName?: string | null,
   fallback = '',
@@ -88,6 +109,7 @@ export class UsersService {
         { name: { contains: query.search, mode: 'insensitive' } },
         { username: { contains: query.search, mode: 'insensitive' } },
         { email: { contains: query.search, mode: 'insensitive' } },
+        { employeeId: { contains: query.search, mode: 'insensitive' } },
       ];
     }
 
@@ -158,6 +180,7 @@ export class UsersService {
           lastName: dto.lastName ?? null,
           email: dto.email,
           username: dto.username,
+          employeeId: cleanEmployeeId(dto.employeeId),
           password,
           roleId: dto.roleId,
           warehouseId: dto.warehouseId,
@@ -238,7 +261,7 @@ export class UsersService {
       if (scope.warehouseId) dto = { ...dto, warehouseId: scope.warehouseId };
     }
     if (dto.roleId !== undefined) {
-      await this.ensureRoleExists(dto.roleId);
+      await this.ensureRoleExists(dto.roleId, existing.roleId);
     }
     if (dto.warehouseId) {
       await this.ensureWarehouseExists(dto.warehouseId);
@@ -247,6 +270,8 @@ export class UsersService {
     const data: Prisma.UserUpdateInput = {
       email: dto.email,
       username: dto.username,
+      employeeId:
+        dto.employeeId === undefined ? undefined : cleanEmployeeId(dto.employeeId),
       isActive: dto.isActive,
     };
 
@@ -308,10 +333,15 @@ export class UsersService {
     return { id, deleted: true };
   }
 
-  private async ensureRoleExists(roleId: number) {
+  // `currentRoleId`: on an update, keeping a role that has since been set
+  // inactive is allowed; only (re)assigning an inactive role is refused.
+  private async ensureRoleExists(roleId: number, currentRoleId?: number) {
     const role = await this.prisma.role.findUnique({ where: { id: roleId } });
     if (!role) {
       throw new BadRequestException(`Role ${roleId} does not exist`);
+    }
+    if (!role.isActive && roleId !== currentRoleId) {
+      throw new BadRequestException(`Role "${role.name}" is inactive and cannot be assigned`);
     }
   }
 
@@ -341,8 +371,7 @@ export class UsersService {
       e instanceof Prisma.PrismaClientKnownRequestError &&
       e.code === 'P2002'
     ) {
-      const target = (e.meta?.target as string[])?.join(', ') ?? 'field';
-      return new BadRequestException(`${target} already in use`);
+      return uniqueViolation(e);
     }
     return e;
   }

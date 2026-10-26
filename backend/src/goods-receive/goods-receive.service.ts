@@ -26,9 +26,24 @@ const GR_SORTABLE: Record<string, (d: SortDir) => GrOrder> = {
 
 const grInclude = {
   warehouse: { select: { id: true, name: true } },
-  // Own received lines (PO source). Empty for PIB (which uses MRN items).
-  items: { orderBy: { lineNumber: 'asc' as const } },
+  // Own received lines (PO / TO source). Empty for PIB (which uses MRN items).
+  items: {
+    orderBy: { lineNumber: 'asc' as const },
+    include: { bin: { select: { binLabel: true } } },
+  },
 } satisfies Prisma.GoodsReceiveInclude;
+
+// TO header shown on a TO-sourced GR detail.
+const toHeaderSelect = {
+  id: true,
+  oracleId: true,
+  tranId: true,
+  statusName: true,
+  fromLocationName: true,
+  toLocationName: true,
+  warehouse: { select: { name: true } },
+} satisfies Prisma.TransferOrderSelect;
+type ToHeader = Prisma.TransferOrderGetPayload<{ select: typeof toHeaderSelect }>;
 
 // PO header shown on a PO-sourced GR detail.
 const poHeaderSelect = {
@@ -139,12 +154,48 @@ export class GoodsReceiveService {
             select: poHeaderSelect,
           })
         : null;
-    return this.serializeDetail(gr, po);
+    // TO source: the Transfer Order being received.
+    const to =
+      gr.sourceType === 'TO'
+        ? await this.prisma.transferOrder.findUnique({
+            where: { id: gr.sourceDocId },
+            select: toHeaderSelect,
+          })
+        : null;
+    return this.serializeDetail(gr, po, to, await this.itemMaterials(gr));
   }
 
   // Fill the actual received quantity for the GR's items.
   async updateActuals(id: string, dto: UpdateActualsDto, scope: WarehouseScope) {
     const gr = await this.getScoped(id, scope);
+    // TO source: the lines are the GR's own items (planned qty in `qty`).
+    if (gr.sourceType === 'TO') {
+      if (gr.status !== 'Open' && gr.status !== 'SyncFailed') {
+        throw new BadRequestException(`Cannot edit a Goods Receive that is ${gr.status}`);
+      }
+      const byId = new Map(gr.items.map((it) => [it.id, it]));
+      for (const row of dto.items) {
+        const item = byId.get(row.id);
+        if (!item) throw new BadRequestException(`Item ${row.id} is not part of this GR`);
+        if (row.qtyActual > item.qty + 1e-9) {
+          throw new BadRequestException(
+            `Actual (${row.qtyActual}) cannot exceed planned (${item.qty}) for "${item.materialCode ?? item.itemDisplay ?? row.id}"`,
+          );
+        }
+      }
+      await this.prisma.$transaction(
+        dto.items.map((row) =>
+          this.prisma.goodsReceiveItem.update({
+            where: { id: row.id },
+            data: {
+              qtyActual: row.qtyActual,
+              ...(row.binId !== undefined ? { binId: row.binId } : {}),
+            },
+          }),
+        ),
+      );
+      return this.findOne(id, scope);
+    }
     const items = gr.mrn?.items ?? [];
 
     const itemById = new Map(items.map((it) => [it.id, it]));
@@ -184,7 +235,7 @@ export class GoodsReceiveService {
     );
 
     const updated = await this.getScoped(id, scope);
-    return this.serializeDetail(updated);
+    return this.serializeDetail(updated, null, null, await this.itemMaterials(updated));
   }
 
   private async getScoped(
@@ -205,6 +256,36 @@ export class GoodsReceiveService {
     return { ...gr, mrn };
   }
 
+  /**
+   * PN (material code) and primary UoM for each received line, keyed by the
+   * line's id: TO lines by their material, PIB (MRN) lines by Oracle item id.
+   */
+  private async itemMaterials(gr: GrWithSource) {
+    const out = new Map<string, { code: string | null; uom: string | null }>();
+    const select = { id: true, erpDocId: true, materialCode: true, primaryUom: { select: { uomCode: true } } };
+    if (gr.sourceType === 'TO') {
+      const ids = gr.items.map((it) => it.materialId).filter((v): v is string => !!v);
+      const mats = ids.length ? await this.prisma.material.findMany({ where: { id: { in: ids } }, select }) : [];
+      const byId = new Map(mats.map((m) => [m.id, m]));
+      for (const it of gr.items) {
+        const m = it.materialId ? byId.get(it.materialId) : undefined;
+        out.set(it.id, { code: it.materialCode ?? m?.materialCode ?? null, uom: m?.primaryUom?.uomCode ?? null });
+      }
+      return out;
+    }
+    const items = gr.mrn?.items ?? [];
+    const erpIds = [...new Set(items.map((it) => it.itemId).filter((v): v is number => v != null))].map(String);
+    const mats = erpIds.length
+      ? await this.prisma.material.findMany({ where: { erpDocId: { in: erpIds } }, select })
+      : [];
+    const byErp = new Map(mats.map((m) => [m.erpDocId, m]));
+    for (const it of items) {
+      const m = it.itemId != null ? byErp.get(String(it.itemId)) : undefined;
+      out.set(it.id, { code: m?.materialCode ?? null, uom: m?.primaryUom?.uomCode ?? null });
+    }
+    return out;
+  }
+
   private serializeList(gr: GrRow, mrn: PibMrn | null) {
     return {
       id: gr.id,
@@ -212,7 +293,7 @@ export class GoodsReceiveService {
       status: gr.status,
       source_type: gr.sourceType,
       shipment_number: gr.sourceDocNumber,
-      receiving_location_name: mrn?.receivingLocationName ?? null,
+      receiving_location_name: mrn?.receivingLocationName ?? (gr.sourceType === 'TO' ? (gr.warehouse?.name ?? null) : null),
       warehouse: gr.warehouse,
       item_count: mrn?.items.length ?? gr.items.length,
       created_at: gr.createdAt,
@@ -220,7 +301,12 @@ export class GoodsReceiveService {
   }
 
   // Goods Receive hides shipment amount and all *_id fields (names only).
-  private serializeDetail(gr: GrWithSource, po: PoHeader | null = null) {
+  private serializeDetail(
+    gr: GrWithSource,
+    po: PoHeader | null = null,
+    to: ToHeader | null = null,
+    materials = new Map<string, { code: string | null; uom: string | null }>(),
+  ) {
     const m = gr.mrn;
     return {
       id: gr.id,
@@ -247,6 +333,17 @@ export class GoodsReceiveService {
         item_display: it.itemDisplay,
         qty_actual: it.qty,
       })),
+      // TO header (TO source only).
+      to: to
+        ? {
+            id: to.id,
+            oracle_id: to.oracleId,
+            tran_id: to.tranId,
+            status_name: to.statusName,
+            origin_warehouse: to.warehouse?.name ?? to.fromLocationName,
+            destination_warehouse: gr.warehouse?.name ?? to.toLocationName,
+          }
+        : null,
       // MRN information shown on the Goods Receive screen (PIB source).
       mrn: m
         ? {
@@ -266,8 +363,28 @@ export class GoodsReceiveService {
           }
         : null,
       shipment_number: gr.sourceDocNumber,
-      receiving_location_name: m?.receivingLocationName ?? null,
-      items: (m?.items ?? []).map((it) => ({
+      // TO source: received at the destination warehouse.
+      receiving_location_name: m?.receivingLocationName ?? (gr.sourceType === 'TO' ? (gr.warehouse?.name ?? null) : null),
+      // TO source: the received lines in the same shape as MRN items, so the
+      // receive/putaway screen reads them the same way.
+      items: gr.sourceType === 'TO'
+        ? gr.items.map((it) => ({
+            id: it.id,
+            item_name: it.materialCode ?? it.itemDisplay,
+            po_number: to?.tranId ?? null,
+            vendor_name: to ? (to.warehouse?.name ?? to.fromLocationName) : null,
+            item_description: it.itemDisplay,
+            qty_expected: it.qty,
+            qty_actual: it.qtyActual,
+            qty_remaining: it.qtyRemaining,
+            bin_id: it.binId,
+            bin_label: it.bin?.binLabel ?? null,
+            receiving_location_name: gr.warehouse?.name ?? null,
+            line_number: it.lineNumber,
+            material_code: materials.get(it.id)?.code ?? it.materialCode,
+            uom: materials.get(it.id)?.uom ?? null,
+          }))
+        : (m?.items ?? []).map((it) => ({
         id: it.id,
         item_name: it.itemName,
         po_number: it.poNumber,
@@ -279,6 +396,8 @@ export class GoodsReceiveService {
         bin_id: it.binId,
         bin_label: it.bin?.binLabel ?? null,
         receiving_location_name: it.receivingLocationName,
+        material_code: materials.get(it.id)?.code ?? null,
+        uom: materials.get(it.id)?.uom ?? null,
       })),
       created_at: gr.createdAt,
     };

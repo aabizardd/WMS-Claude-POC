@@ -351,6 +351,15 @@ export default function SalesOrderDetailPage() {
         submitting={submitting}
         pickable={pickable}
         pickers={pickers}
+        docInfo={[
+          { label: 'Transaction ID', value: so.tran_id },
+          { label: 'SO ID', value: '-' },
+          { label: 'ERP Doc ID', value: so.oracle_id },
+          { label: 'Doc Type', value: 'Sales Order' },
+          { label: 'Warehouse Name', value: so.warehouse?.name ?? so.location_name },
+          { label: 'Ownership', value: so.ownership ?? so.subsidiary_name },
+          { label: 'Customer', value: so.customer_name },
+        ]}
         loadError={genError}
         preselectedIds={preselected}
         onClose={() => setGenOpen(false)}

@@ -48,13 +48,14 @@ const INBOUND_TYPES: InboundType[] = [
   },
   {
     key: 'stock-transfer',
-    title: 'Inbound from Stock Transfer',
-    description: 'Receive stock transferred from another warehouse.',
+    title: 'Inbound from Transfer Stock',
+    description: 'Transfer Orders from another warehouse: TO → Goods Receive → Putaway.',
     accent: 'bg-violet-600',
     icon: (
       <path d="M4 7h13l-3-3m3 3l-3 3M20 17H7l3 3m-3-3l3-3" />
     ),
-    enabled: false,
+    to: '/admin/inbound/transfer',
+    enabled: true,
   },
 ];
 

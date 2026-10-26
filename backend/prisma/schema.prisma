@@ -14,6 +14,9 @@ model Role {
   id          Int              @id @default(autoincrement())
   name        String           @unique
   description String?
+  // An inactive role cannot be given to users, and users holding it are
+  // refused access (login and every request). The admin role stays active.
+  isActive    Boolean          @default(true)
   users       User[]
   permissions RolePermission[]
   createdAt   DateTime         @default(now())
@@ -54,6 +57,8 @@ model User {
   lastName    String?    @map("last_name")
   email       String     @unique
   username    String     @unique
+  // Company employee number; optional, unique when set.
+  employeeId  String?    @unique @map("employee_id")
   password    String
   isActive    Boolean    @default(true)
   roleId      Int
@@ -320,6 +325,7 @@ model Bin {
   adjustmentItems    InventoryAdjustmentItem[]
   salesDeliveryItems SalesDeliveryItem[]
   stockMovements     StockMovement[]
+  goodsReceiveItems  GoodsReceiveItem[]
 
   @@index([warehouseId])
   @@index([aisleId])
@@ -533,6 +539,8 @@ enum GoodsReceiveSource {
   PO
   CUSTOMER_RETURN
   TRANSFER_RETURN
+  // Inbound from Transfer Stock: receiving a Transfer Order at its destination.
+  TO
 }
 
 model GoodsReceive {
@@ -580,9 +588,25 @@ model GoodsReceiveItem {
   materialId  String? @map("material_id")
   qty         Float   @default(0) // actual received qty sent to Oracle
 
+  // TO source: the bin the received qty lands in, what is left to put away,
+  // and the Transfer Order line it receives.
+  binId               String?            @map("bin_id")
+  bin                 Bin?               @relation(fields: [binId], references: [id])
+  // TO source: `qty` is the planned qty of the GR List; this is what was
+  // actually received (sent to Oracle on Receive).
+  qtyActual           Float              @default(0) @map("qty_actual")
+  qtyRemaining        Float              @default(0) @map("qty_remaining")
+  materialCode        String?            @map("material_code")
+  transferOrderItemId String?            @map("transfer_order_item_id")
+  transferOrderItem   TransferOrderItem? @relation(fields: [transferOrderItemId], references: [id])
+
+  putawayItems PutawayItem[]
+
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([goodsReceiveId])
+  @@index([binId])
+  @@index([transferOrderItemId])
   @@map("goods_receive_items")
 }
 
@@ -742,9 +766,11 @@ model TransferOrderItem {
   // Resolved WMS material (item_id -> materials.erp_doc_id). Optional.
   materialId String? @map("material_id")
 
-  pickingItems  PickingItem[]
-  packingItems  PackingItem[]
-  deliveryItems DeliveryItem[]
+  pickingItems      PickingItem[]
+  packingItems      PackingItem[]
+  deliveryItems     DeliveryItem[]
+  // Goods Receive lines receiving this line at the destination.
+  goodsReceiveItems GoodsReceiveItem[]
 
   @@unique([transferOrderId, lineNumber])
   @@index([transferOrderId])
@@ -1239,8 +1265,11 @@ model PutawayItem {
   putawayId String  @map("putaway_id")
   putaway   Putaway @relation(fields: [putawayId], references: [id], onDelete: Cascade)
 
-  mrnItemId String  @map("mrn_item_id")
-  mrnItem   MrnItem @relation(fields: [mrnItemId], references: [id])
+  // Exactly one source line: an MRN item (PIB) or a Goods Receive item (TO).
+  mrnItemId String?           @map("mrn_item_id")
+  mrnItem   MrnItem?          @relation(fields: [mrnItemId], references: [id], onDelete: Restrict)
+  grItemId  String?           @map("gr_item_id")
+  grItem    GoodsReceiveItem? @relation(fields: [grItemId], references: [id])
 
   itemName     String? @map("item_name")
   poNumber     String? @map("po_number")
@@ -1261,6 +1290,7 @@ model PutawayItem {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([putawayId])
+  @@index([grItemId])
   @@index([binId])
   @@map("putaway_items")
 }

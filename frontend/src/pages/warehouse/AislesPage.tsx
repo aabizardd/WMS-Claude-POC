@@ -4,15 +4,15 @@ export default function AislesPage() {
   return (
     <SimpleMasterPage
       config={{
-        title: 'Aisles',
-        subtitle: 'Master data of warehouse aisles.',
+        noun: 'Aisle',
         endpoint: '/aisles',
         permission: 'aisles',
         codeKey: 'aisleCode',
         nameKey: 'aisleName',
-        codeLabel: 'Code',
-        nameLabel: 'Name',
-        addLabel: '+ Add Aisle',
+        codeLabel: 'Aisle ID',
+        nameLabel: 'Aisle Name',
+        addLabel: 'Add Aisle',
+        countKey: 'bins',
       }}
     />
   );

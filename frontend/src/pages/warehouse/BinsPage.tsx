@@ -1,47 +1,51 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import api from '../../lib/api';
-import type { Bin, Paginated } from '../../types';
+import type { Bin } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
-import { useSort } from '../../hooks/useSort';
-import SortableTh from '../../components/SortableTh';
+import MasterList, { type MasterColumn } from '../../components/master/MasterList';
+import { Cell, StatusPill, fmtDateTime, icons } from '../../components/master/MasterKit';
 
-const LIMIT = 10;
+// WMS dev's Bin columns; the volume is length × width × height.
+const COLUMNS: MasterColumn<Bin>[] = [
+  { label: 'Status', sortKey: 'status', width: 120, render: (b) => <StatusPill active={b.is_active} /> },
+  { label: 'Bin ID', sortKey: 'bin_code', render: (b) => <Cell>{b.bin_code}</Cell> },
+  { label: 'Warehouse Name', sortKey: 'warehouse', render: (b) => <Cell>{b.warehouse_name?.warehouse_name}</Cell> },
+  { label: 'Aisle Name', sortKey: 'aisle', render: (b) => <Cell>{b.aisle?.aisle_name}</Cell> },
+  { label: 'Shelf Label', sortKey: 'shelf', render: (b) => <Cell>{b.shelf?.shelf_label}</Cell> },
+  { label: 'Bin Label', sortKey: 'bin_label', render: (b) => <Cell>{b.bin_label}</Cell> },
+  { label: 'Bin Length', render: (b) => <Cell>{b.bin_length}</Cell> },
+  { label: 'Bin Width', render: (b) => <Cell>{b.bin_width}</Cell> },
+  { label: 'Bin Height', render: (b) => <Cell>{b.bin_height}</Cell> },
+  {
+    label: 'UoM',
+    render: (b) => (
+      <Cell>
+        {b.dimension_uom?.uom_code
+          ? `${b.dimension_uom.uom_code}${b.dimension_uom.uom_name ? ` - ${b.dimension_uom.uom_name}` : ''}`
+          : null}
+      </Cell>
+    ),
+  },
+  { label: 'Bin Volume', render: (b) => <Cell>{b.bin_length * b.bin_width * b.bin_height}</Cell> },
+  { label: 'Created By', render: (b) => <Cell>{b.created_by}</Cell> },
+  { label: 'Created At', sortKey: 'created_at', render: (b) => <Cell>{fmtDateTime(b.created_at)}</Cell> },
+  { label: 'Last Modified By', render: (b) => <Cell>{b.modified_by}</Cell> },
+  { label: 'Last Modified At', render: (b) => <Cell>{fmtDateTime(b.modified_at)}</Cell> },
+];
 
 export default function BinsPage() {
   const { has } = useAuth();
+  const navigate = useNavigate();
   const toast = useToast();
   const confirm = useConfirm();
   const canCreate = has('bins:create');
   const canUpdate = has('bins:update');
   const canDelete = has('bins:delete');
-
-  const [data, setData] = useState<Paginated<Bin> | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [searchInput, setSearchInput] = useState('');
-  const { sort, toggle, params } = useSort();
-  const onSort = (col: string) => {
-    setPage(1);
-    toggle(col);
-  };
-
-  async function load() {
-    setLoading(true);
-    const r = await api.get<Paginated<Bin>>('/bins', {
-      params: { page, limit: LIMIT, search: search || undefined, ...params() },
-    });
-    setData(r.data);
-    setLoading(false);
-  }
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, sort.sortBy, sort.order]);
+  const [reloadKey, setReloadKey] = useState(0);
 
   async function handleDelete(b: Bin) {
     const ok = await confirm({
@@ -54,175 +58,28 @@ export default function BinsPage() {
     try {
       await api.delete(`/bins/${b.id}`);
       toast.success('Bin deleted');
-      await load();
+      setReloadKey((k) => k + 1);
     } catch (err) {
-      if (axios.isAxiosError(err))
-        toast.error(err.response?.data?.message ?? 'Delete failed');
+      if (axios.isAxiosError(err)) toast.error(err.response?.data?.message ?? 'Delete failed');
       else toast.error('Delete failed');
     }
   }
 
-  function onSearch(e: FormEvent) {
-    e.preventDefault();
-    setPage(1);
-    setSearch(searchInput.trim());
-  }
-
-  const totalPage = data?.total_page ?? 0;
-
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-800">Bins</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            {data ? `${data.total_data} bins` : 'Storage bins'} across warehouses.
-          </p>
-        </div>
-        {canCreate && (
-          <Link to="/admin/bins/new" className="btn-primary">
-            + Add Bin
-          </Link>
-        )}
-      </div>
-
-      <form onSubmit={onSearch} className="flex gap-2">
-        <input
-          className="input max-w-xs"
-          placeholder="Search bin label / code…"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-        />
-        <button type="submit" className="btn-secondary">
-          Search
-        </button>
-        {search && (
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => {
-              setSearchInput('');
-              setSearch('');
-              setPage(1);
-            }}
-          >
-            Clear
-          </button>
-        )}
-      </form>
-
-      <div className="card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-              <tr>
-                <SortableTh label="Bin Label" col="bin_label" sort={sort} onSort={onSort} />
-                <SortableTh label="Warehouse" col="warehouse" sort={sort} onSort={onSort} />
-                <SortableTh label="Aisle" col="aisle" sort={sort} onSort={onSort} />
-                <SortableTh label="Shelf" col="shelf" sort={sort} onSort={onSort} />
-                <SortableTh label="Area Type" col="area_type" sort={sort} onSort={onSort} />
-                <th className="px-6 py-3">L×W×H</th>
-                <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
-                <th className="px-6 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {loading ? (
-                <tr>
-                  <td colSpan={8} className="px-6 py-10 text-center text-slate-400">
-                    Loading…
-                  </td>
-                </tr>
-              ) : data && data.rows.length > 0 ? (
-                data.rows.map((b) => (
-                  <tr key={b.id} className="hover:bg-slate-50">
-                    <td className="px-6 py-3 font-medium text-slate-800">
-                      {b.bin_label}
-                    </td>
-                    <td className="px-6 py-3 text-slate-600">
-                      {b.warehouse_name?.warehouse_name ?? '—'}
-                    </td>
-                    <td className="px-6 py-3 text-slate-600">
-                      {b.aisle?.aisle_name ?? '—'}
-                    </td>
-                    <td className="px-6 py-3 text-slate-600">
-                      {b.shelf?.shelf_label ?? '—'}
-                    </td>
-                    <td className="px-6 py-3 text-slate-600">
-                      {b.warehouse_area_type?.area_type_name ?? '—'}
-                    </td>
-                    <td className="px-6 py-3 text-slate-600">
-                      {b.bin_length}×{b.bin_width}×{b.bin_height}
-                      {b.dimension_uom?.uom_code
-                        ? ` ${b.dimension_uom.uom_code}`
-                        : ''}
-                    </td>
-                    <td className="px-6 py-3">
-                      {b.is_active ? (
-                        <span className="text-xs font-medium text-emerald-600">
-                          Active
-                        </span>
-                      ) : (
-                        <span className="text-xs font-medium text-slate-400">
-                          Inactive
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-6 py-3">
-                      <div className="flex justify-end gap-2">
-                        <Link
-                          to={`/admin/bins/${b.id}`}
-                          className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
-                        >
-                          {canUpdate ? 'Edit' : 'View'}
-                        </Link>
-                        {canDelete && (
-                          <button
-                            onClick={() => handleDelete(b)}
-                            className="rounded-md px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
-                          >
-                            Delete
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={8} className="px-6 py-10 text-center text-slate-400">
-                    No bins found.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {totalPage > 1 && (
-          <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3 text-sm">
-            <span className="text-slate-500">
-              Page {page} of {totalPage}
-            </span>
-            <div className="flex gap-2">
-              <button
-                className="btn-secondary"
-                disabled={page <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-              >
-                Prev
-              </button>
-              <button
-                className="btn-secondary"
-                disabled={page >= totalPage}
-                onClick={() => setPage((p) => Math.min(totalPage, p + 1))}
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
+    <MasterList<Bin>
+      endpoint="/bins"
+      columns={COLUMNS}
+      reloadKey={reloadKey}
+      addLabel={canCreate ? 'Add Bin Location' : undefined}
+      onAdd={() => navigate('/admin/bins/new')}
+      rowActions={(b) => [
+        {
+          label: canUpdate ? 'Edit' : 'View',
+          icon: canUpdate ? icons.pencil : icons.eye,
+          onClick: () => navigate(`/admin/bins/${b.id}`),
+        },
+        ...(canDelete ? [{ label: 'Delete', icon: icons.trash, onClick: () => handleDelete(b) }] : []),
+      ]}
+    />
   );
 }

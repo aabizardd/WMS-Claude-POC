@@ -25,6 +25,11 @@ export class CreateUserDto {
   @IsNotEmpty()
   username!: string;
 
+  // Empty string clears it.
+  @IsOptional()
+  @IsString()
+  employeeId?: string | null;
+
   @IsString()
   @MinLength(6)
   password!: string;

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { DeliveryService } from './delivery.service';
 import { GenerateDeliveryDto } from './dto/generate-delivery.dto';
 import { QueryDeliveryDto } from './dto/query-delivery.dto';
@@ -42,5 +42,12 @@ export class DeliveryController {
   @RequirePermissions('delivery:update')
   generateShipment(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.service.generateShipment(id, user);
+  }
+
+  // Delete an Open delivery plan; its packings reopen (packed again).
+  @Delete(':id')
+  @RequirePermissions('delivery:delete')
+  remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.service.remove(id, user);
   }
 }

@@ -27,6 +27,8 @@ import CustomersPage from './pages/customer/CustomersPage';
 import DepartmentsPage from './pages/department/DepartmentsPage';
 import ClassesPage from './pages/class/ClassesPage';
 import SubsidiariesPage from './pages/subsidiary/SubsidiariesPage';
+import OwnershipsPage from './pages/ownership/OwnershipsPage';
+import ProfilePage from './pages/profile/ProfilePage';
 import InboundLayout from './pages/inbound/InboundLayout';
 import InboundLandingPage from './pages/inbound/InboundLandingPage';
 import MrnTab from './pages/inbound/MrnTab';
@@ -39,9 +41,12 @@ import LocalInboundLayout from './pages/inbound/LocalInboundLayout';
 import PoTab from './pages/inbound/PoTab';
 import PoDetailPage from './pages/inbound/PoDetailPage';
 import { InboundPlaceholder } from './pages/inbound/InboundLayout';
+import TransferInboundLayout from './pages/inbound/TransferInboundLayout';
+import TransferInDetailPage from './pages/inbound/TransferInDetailPage';
 import InventoryLandingPage from './pages/inventory/InventoryLandingPage';
 import InventoryPage from './pages/inventory/InventoryPage';
 import InventoryQtySourcePage from './pages/inventory/InventoryQtySourcePage';
+import InventoryQtyDocumentsPage from './pages/inventory/InventoryQtyDocumentsPage';
 import InventoryDetailPage from './pages/inventory/InventoryDetailPage';
 import SalesDeliveryListPage from './pages/sales-delivery/SalesDeliveryListPage';
 import SalesDeliveryCreatePage from './pages/sales-delivery/SalesDeliveryCreatePage';
@@ -83,6 +88,8 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="master-data" element={<MasterDataPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          {/* The signed-in user's own profile (no permission needed). */}
+          <Route path="profile" element={<ProfilePage />} />
           <Route
             path="sync-logs"
             element={
@@ -242,6 +249,16 @@ export default function App() {
             }
           />
 
+          {/* Ownership Setting: vendors and customers in one list */}
+          <Route
+            path="ownerships"
+            element={
+              <RequirePermission permission={['vendors:read', 'customers:read']}>
+                <OwnershipsPage />
+              </RequirePermission>
+            }
+          />
+
           {/* Vendor Management */}
           <Route
             path="vendors"
@@ -318,7 +335,7 @@ export default function App() {
               path="putaway"
               element={
                 <RequirePermission permission="putaway:read">
-                  <PutawayTab />
+                  <PutawayTab source="PIB" />
                 </RequirePermission>
               }
             />
@@ -326,7 +343,7 @@ export default function App() {
               path="history"
               element={
                 <RequirePermission permission="putaway:read">
-                  <PutawayTab history />
+                  <PutawayTab history source="PIB" />
                 </RequirePermission>
               }
             />
@@ -397,6 +414,66 @@ export default function App() {
               element={<InboundPlaceholder title="History (Local Vendor)" />}
             />
           </Route>
+          {/* Inbound from Transfer Stock (tabbed) — source is a Transfer Order coming in. */}
+          <Route path="inbound/transfer" element={<TransferInboundLayout />}>
+            <Route index element={<Navigate to="to" replace />} />
+            <Route
+              path="to"
+              element={
+                <RequirePermission permission="transfer-orders:read">
+                  <TransferOrderTab direction="in" />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="goods-receive"
+              element={
+                <RequirePermission permission="goods-receive:read">
+                  <GoodsReceiveTab source="TO" basePath="/admin/inbound/transfer" />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="putaway"
+              element={
+                <RequirePermission permission="putaway:read">
+                  <PutawayTab source="TO" basePath="/admin/inbound/transfer" />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="history"
+              element={
+                <RequirePermission permission="putaway:read">
+                  <PutawayTab history source="TO" basePath="/admin/inbound/transfer" />
+                </RequirePermission>
+              }
+            />
+          </Route>
+          <Route
+            path="inbound/transfer/to/:id"
+            element={
+              <RequirePermission permission="transfer-orders:read">
+                <TransferInDetailPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="inbound/transfer/goods-receive/:id"
+            element={
+              <RequirePermission permission="goods-receive:read">
+                <GoodsReceiveDetailPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="inbound/transfer/putaway/:id"
+            element={
+              <RequirePermission permission="putaway:read">
+                <PutawayDetailPage />
+              </RequirePermission>
+            }
+          />
           <Route
             path="inbound/local/po/:id"
             element={
@@ -421,6 +498,23 @@ export default function App() {
             element={
               <RequirePermission permission="inventory:read">
                 <InventoryDetailPage />
+              </RequirePermission>
+            }
+          />
+          {/* Every SO / TO behind the list's total Reserved / In Transit cards. */}
+          <Route
+            path="inventory/reserved"
+            element={
+              <RequirePermission permission="inventory:read">
+                <InventoryQtyDocumentsPage key="reserved" type="reserved" />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="inventory/in-transit"
+            element={
+              <RequirePermission permission="inventory:read">
+                <InventoryQtyDocumentsPage key="in-transit" type="in-transit" />
               </RequirePermission>
             }
           />

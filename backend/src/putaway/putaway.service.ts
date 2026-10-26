@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { highestSeq } from '../common/doc-sequence';
 import { InventoryService } from '../inventory/inventory.service';
 import type { GeneratePutawayDto } from './dto/generate-putaway.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
@@ -37,6 +38,7 @@ const detailInclude = {
   items: {
     include: {
       mrnItem: { select: { qtyRemaining: true } },
+      grItem: { select: { qtyRemaining: true } },
       picker: { select: { id: true, name: true } },
       bin: { select: { id: true, binLabel: true } },
     },
@@ -69,6 +71,8 @@ export class PutawayService {
       limit?: number;
       search?: string;
       history?: string | boolean;
+      /** GR source (PIB / TO) — keeps each inbound door's putaways apart. */
+      source?: string;
       sort_by?: string;
       sort_order?: string;
     },
@@ -84,6 +88,9 @@ export class PutawayService {
     // History tab = Closed only; Putaway tab = active (Open / OnProgress).
     const isHistory = query.history === true || query.history === 'true';
     where.status = isHistory ? 'Closed' : { not: 'Closed' };
+    if (query.source === 'PIB' || query.source === 'TO') {
+      where.goodsReceive = { sourceType: query.source };
+    }
     if (query.search) {
       where.OR = [
         { putawayCode: { contains: query.search, mode: 'insensitive' } },
@@ -137,9 +144,11 @@ export class PutawayService {
     let goodsReceiveId: string | null = null;
     let warehouseId: string | null = null;
     const itemRows: {
-      mrnItemId: string;
+      mrnItemId: string | null;
+      grItemId: string | null;
       plannedQty: number;
       pickerId: number | null;
+      binId: string;
       itemName: string | null;
       poNumber: string | null;
       vendorName: string | null;
@@ -147,6 +156,44 @@ export class PutawayService {
     }[] = [];
 
     for (const row of dto.items) {
+      if (!row.binId) {
+        throw new BadRequestException('Please select Destination Bin for all selected materials');
+      }
+      // TO source: the line is a Goods Receive item.
+      if (row.grItemId) {
+        const grItem = await this.prisma.goodsReceiveItem.findUnique({
+          where: { id: row.grItemId },
+          include: { goodsReceive: { select: { id: true, warehouseId: true, sourceDocNumber: true } } },
+        });
+        if (!grItem) throw new BadRequestException(`Goods Receive item ${row.grItemId} not found`);
+        if (row.plannedQty <= 0) {
+          throw new BadRequestException(`Planned qty must be > 0 for item ${row.grItemId}`);
+        }
+        if (row.plannedQty > grItem.qtyRemaining + 1e-9) {
+          throw new BadRequestException(
+            `Planned qty (${row.plannedQty}) exceeds remaining (${grItem.qtyRemaining}) for "${grItem.materialCode ?? grItem.itemDisplay ?? row.grItemId}"`,
+          );
+        }
+        if (!goodsReceiveId) {
+          goodsReceiveId = grItem.goodsReceive.id;
+          warehouseId = grItem.goodsReceive.warehouseId;
+        } else if (goodsReceiveId !== grItem.goodsReceive.id) {
+          throw new BadRequestException(`All items must belong to the same Goods Receive`);
+        }
+        itemRows.push({
+          mrnItemId: null,
+          grItemId: grItem.id,
+          plannedQty: row.plannedQty,
+          pickerId: row.pickerId ?? null,
+          binId: row.binId,
+          itemName: grItem.itemDisplay,
+          poNumber: grItem.goodsReceive.sourceDocNumber,
+          vendorName: null,
+          materialCode: grItem.materialCode,
+        });
+        continue;
+      }
+      if (!row.mrnItemId) throw new BadRequestException('Each item needs mrnItemId or grItemId');
       const mrnItem = await this.prisma.mrnItem.findUnique({
         where: { id: row.mrnItemId },
       });
@@ -190,8 +237,10 @@ export class PutawayService {
 
       itemRows.push({
         mrnItemId: mrnItem.id,
+        grItemId: null,
         plannedQty: row.plannedQty,
         pickerId: row.pickerId ?? null,
+        binId: row.binId,
         itemName: mrnItem.itemName,
         poNumber: mrnItem.poNumber,
         vendorName: mrnItem.vendorName,
@@ -201,6 +250,24 @@ export class PutawayService {
 
     if (itemRows.length === 0) {
       throw new BadRequestException('No valid items to putaway');
+    }
+
+    // Every destination bin must be an active bin of the receiving warehouse.
+    const binIds = [...new Set(itemRows.map((it) => it.binId))];
+    const bins = await this.prisma.bin.findMany({
+      where: { id: { in: binIds } },
+      select: { id: true, binLabel: true, warehouseId: true, isActive: true },
+    });
+    const binById = new Map(bins.map((b) => [b.id, b]));
+    for (const id of binIds) {
+      const b = binById.get(id);
+      if (!b) throw new BadRequestException(`Destination bin ${id} not found`);
+      if (!b.isActive) throw new BadRequestException(`Destination bin "${b.binLabel}" is inactive`);
+      if (warehouseId && b.warehouseId !== warehouseId) {
+        throw new BadRequestException(
+          `Destination bin "${b.binLabel}" is not in the Goods Receive's warehouse`,
+        );
+      }
     }
 
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -222,12 +289,14 @@ export class PutawayService {
           items: {
             create: itemRows.map((it) => ({
               mrnItemId: it.mrnItemId,
+              grItemId: it.grItemId,
               itemName: it.itemName,
               poNumber: it.poNumber,
               materialCode: it.materialCode,
               vendorName: it.vendorName,
               plannedQty: it.plannedQty,
               pickerId: it.pickerId,
+              binId: it.binId,
             })),
           },
         },
@@ -235,10 +304,17 @@ export class PutawayService {
       });
 
       for (const it of itemRows) {
-        await tx.mrnItem.update({
-          where: { id: it.mrnItemId },
-          data: { qtyRemaining: { decrement: it.plannedQty } },
-        });
+        if (it.grItemId) {
+          await tx.goodsReceiveItem.update({
+            where: { id: it.grItemId },
+            data: { qtyRemaining: { decrement: it.plannedQty } },
+          });
+        } else if (it.mrnItemId) {
+          await tx.mrnItem.update({
+            where: { id: it.mrnItemId },
+            data: { qtyRemaining: { decrement: it.plannedQty } },
+          });
+        }
       }
 
       if (hasPicker) {
@@ -316,7 +392,7 @@ export class PutawayService {
   ) {
     const putaway = await this.prisma.putaway.findUnique({
       where: { id },
-      include: { items: { include: { mrnItem: true } }, goodsReceive: true },
+      include: { items: { include: { mrnItem: true, grItem: true } }, goodsReceive: true },
     });
     if (!putaway) throw new NotFoundException(`Putaway ${id} not found`);
 
@@ -351,8 +427,13 @@ export class PutawayService {
           },
         });
 
-        // Add back unused qty to mrn_item remaining
-        if (remaining > 0) {
+        // Add back unused qty to the source line's remaining.
+        if (remaining > 0 && it.grItemId) {
+          await tx.goodsReceiveItem.update({
+            where: { id: it.grItemId },
+            data: { qtyRemaining: { increment: remaining } },
+          });
+        } else if (remaining > 0 && it.mrnItemId) {
           await tx.mrnItem.update({
             where: { id: it.mrnItemId },
             data: { qtyRemaining: { increment: remaining } },
@@ -364,21 +445,36 @@ export class PutawayService {
         // Resolve the inventory row the same way it was keyed on receive:
         // (material_code, warehouse).
         const mrnItem = it.mrnItem;
-        const material =
-          mrnItem.itemId != null
-            ? await tx.material.findUnique({
-                where: { erpDocId: String(mrnItem.itemId) },
-                select: { materialCode: true },
-              })
-            : null;
-        const materialCode =
-          material?.materialCode ??
-          mrnItem.itemName ??
-          `ITEM-${mrnItem.itemId}`;
-        const inv = await tx.inventoryManagement.findFirst({
-          where: { materialCode, warehouseId: putaway.warehouseId },
-          select: { id: true },
-        });
+        const grItem = it.grItem;
+        let inv: { id: string } | null = null;
+        let receiveBinId: string | null = null;
+        if (grItem) {
+          // TO source: keyed the way the TO receive created it.
+          receiveBinId = grItem.binId;
+          inv = await tx.inventoryManagement.findFirst({
+            where: grItem.materialId
+              ? { materialId: grItem.materialId, warehouseId: putaway.warehouseId }
+              : { materialCode: grItem.materialCode ?? grItem.itemDisplay ?? '', warehouseId: putaway.warehouseId },
+            select: { id: true },
+          });
+        } else if (mrnItem) {
+          receiveBinId = mrnItem.binId;
+          const material =
+            mrnItem.itemId != null
+              ? await tx.material.findUnique({
+                  where: { erpDocId: String(mrnItem.itemId) },
+                  select: { materialCode: true },
+                })
+              : null;
+          const materialCode =
+            material?.materialCode ??
+            mrnItem.itemName ??
+            `ITEM-${mrnItem.itemId}`;
+          inv = await tx.inventoryManagement.findFirst({
+            where: { materialCode, warehouseId: putaway.warehouseId },
+            select: { id: true },
+          });
+        }
         if (inv) {
           const putawayTotal = row.actualQty + row.qualityIssue + row.qtyIssue;
           // Source bin (receive bin): remove the whole putaway amount.
@@ -389,7 +485,7 @@ export class PutawayService {
           };
           await this.inventory.adjustBinStock(
             inv.id,
-            mrnItem.binId ?? null,
+            receiveBinId,
             { avail: -putawayTotal },
             { ...putawaySource, note: 'Moved out of the receive bin' },
             tx,
@@ -490,9 +586,14 @@ export class PutawayService {
       this.logger.log(`Updated quality discrepancy for GR ${gr.sourceDocNumber}`);
     } else {
       const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-      const count = await this.prisma.discrepancy.count({
-        where: { discrepancyId: { startsWith: `DISC-${today}` } },
-      });
+      const count = highestSeq(
+        (
+          await this.prisma.discrepancy.findMany({
+            where: { discrepancyId: { startsWith: `DISC-${today}` } },
+            select: { discrepancyId: true },
+          })
+        ).map((r) => r.discrepancyId),
+      );
       const seq = String(count + 1).padStart(3, '0');
       const discId = `DISC-${today}-${seq}`;
 
@@ -555,9 +656,14 @@ export class PutawayService {
       );
     } else if (detailRows.length > 0) {
       const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-      const count = await this.prisma.discrepancy.count({
-        where: { discrepancyId: { startsWith: `DISC-${today}` } },
-      });
+      const count = highestSeq(
+        (
+          await this.prisma.discrepancy.findMany({
+            where: { discrepancyId: { startsWith: `DISC-${today}` } },
+            select: { discrepancyId: true },
+          })
+        ).map((r) => r.discrepancyId),
+      );
       const seq = String(count + 1).padStart(3, '0');
       const discId = `DISC-${today}-${seq}`;
 
@@ -590,7 +696,7 @@ export class PutawayService {
     const mrnId =
       grDoc?.sourceType === 'PIB' ? grDoc.sourceDocId : '__none__';
 
-    const [total, notClosed, itemsWithRemaining] = await this.prisma.$transaction([
+    const [total, notClosed, mrnRemaining, grRemaining] = await this.prisma.$transaction([
       this.prisma.putaway.count({ where: { grId: goodsReceiveId } }),
       this.prisma.putaway.count({
         where: { grId: goodsReceiveId, status: { not: 'Closed' } },
@@ -598,7 +704,12 @@ export class PutawayService {
       this.prisma.mrnItem.count({
         where: { mrnId, qtyRemaining: { gt: 0 } },
       }),
+      // TO source keeps its remaining on the GR's own lines.
+      this.prisma.goodsReceiveItem.count({
+        where: { goodsReceiveId, qtyRemaining: { gt: 0 } },
+      }),
     ]);
+    const itemsWithRemaining = mrnRemaining + grRemaining;
 
     const allPutawaysClosed = total > 0 && notClosed === 0;
     const allItemsFulfilled = itemsWithRemaining === 0;
@@ -638,6 +749,7 @@ export class PutawayService {
       items: p.items.map((it) => ({
         id: it.id,
         mrn_item_id: it.mrnItemId,
+        gr_item_id: it.grItemId,
         item_name: it.itemName,
         po_number: it.poNumber,
         material_code: it.materialCode,
@@ -649,7 +761,7 @@ export class PutawayService {
         remaining_qty: it.remainingQty,
         bin_id: it.binId,
         bin_label: it.bin?.binLabel ?? null,
-        qty_remaining: it.mrnItem.qtyRemaining,
+        qty_remaining: it.mrnItem?.qtyRemaining ?? it.grItem?.qtyRemaining ?? 0,
         picker: it.picker ? { id: it.picker.id, name: it.picker.name } : null,
       })),
     };

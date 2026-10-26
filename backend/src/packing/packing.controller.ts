@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Post,
@@ -55,5 +56,12 @@ export class PackingController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.service.progress(id, dto, user);
+  }
+
+  // Delete an Open packing; its pickings reopen (picked again).
+  @Delete(':id')
+  @RequirePermissions('packing:delete')
+  remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.service.remove(id, user);
   }
 }

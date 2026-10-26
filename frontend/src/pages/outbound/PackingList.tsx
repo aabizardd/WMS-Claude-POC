@@ -8,6 +8,7 @@ import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import { useSort } from '../../hooks/useSort';
 import SortableTh from '../../components/SortableTh';
+import { deleteOutboundDoc } from './outboundDelete';
 
 const LIMIT = 10;
 
@@ -37,6 +38,7 @@ export default function PackingList({
   const toast = useToast();
   const confirm = useConfirm();
   const canDeliver = has('delivery:create') && canGenerateDelivery;
+  const canDelete = has('packing:delete');
 
   const [data, setData] = useState<Paginated<PackingRow> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -277,13 +279,24 @@ export default function PackingList({
                       <span className={`badge ${statusBadge(p.status)}`}>{p.status}</span>
                     </td>
                     <td className="px-6 py-3">
-                      <div className="flex justify-end">
+                      <div className="flex justify-end gap-2">
                         <Link
                           to={`${basePath}/packing/${p.id}`}
                           className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
                         >
                           Detail
                         </Link>
+                        {!selectionMode && canDelete && p.status === 'Open' && (
+                          <button
+                            onClick={async () => {
+                              if (await deleteOutboundDoc('packing', p.id, p.packing_id, confirm, toast))
+                                await load();
+                            }}
+                            className="rounded-md px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
+                          >
+                            Delete
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

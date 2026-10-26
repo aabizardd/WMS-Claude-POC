@@ -134,6 +134,7 @@ export default function RoleFormPage() {
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [isActive, setIsActive] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [isAdminRole, setIsAdminRole] = useState(false);
   const [search, setSearch] = useState('');
@@ -161,6 +162,7 @@ export default function RoleFormPage() {
           const role = res[1].data as Role;
           setName(role.name);
           setDescription(role.description ?? '');
+          setIsActive(role.isActive ?? true);
           setSelected(new Set(role.permissionIds ?? []));
           setIsAdminRole(role.name === 'admin');
         }
@@ -368,6 +370,7 @@ export default function RoleFormPage() {
     const payload = {
       name,
       description: description || undefined,
+      isActive,
       permissionIds: [...selected],
     };
     try {
@@ -473,6 +476,23 @@ export default function RoleFormPage() {
               />
             </div>
           </div>
+          <label className="mt-4 flex items-start gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+              checked={isActive}
+              onChange={(e) => setIsActive(e.target.checked)}
+              // The superuser role always stays active.
+              disabled={viewOnly || isAdminRole}
+            />
+            <span>
+              Active
+              <span className="mt-0.5 block text-xs text-slate-400">
+                An inactive role cannot be given to users, and users who hold it can no longer
+                sign in.
+              </span>
+            </span>
+          </label>
         </div>
 
         {/* Permissions — grouped by module, collapsible + searchable */}

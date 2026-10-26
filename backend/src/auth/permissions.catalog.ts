@@ -63,10 +63,12 @@ const RESOURCES: { resource: string; label: string; actions: string[] }[] = [
   { resource: 'transfer-orders', label: 'Transfer Orders', actions: ['read', 'sync'] },
   // Outbound — Picking generated from Sales Order — read, create (generate).
   { resource: 'picking', label: 'Picking', actions: ['read', 'create', 'update', 'delete'] },
-  // Outbound — Packing generated from (Closed) Picking — read, create, update (progress).
-  { resource: 'packing', label: 'Packing', actions: ['read', 'create', 'update'] },
-  // Outbound — Delivery generated from Packing — read, create.
-  { resource: 'delivery', label: 'Delivery', actions: ['read', 'create', 'update'] },
+  // Outbound — Packing generated from (Closed) Picking — read, create, update
+  // (progress), delete (an Open packing; its pickings reopen).
+  { resource: 'packing', label: 'Packing', actions: ['read', 'create', 'update', 'delete'] },
+  // Outbound — Delivery generated from Packing — read, create, delete (an Open
+  // delivery plan; its packings reopen).
+  { resource: 'delivery', label: 'Delivery', actions: ['read', 'create', 'update', 'delete'] },
   // Complaint — users create & see their own; admin manages (update status).
   { resource: 'complaints', label: 'Complaints', actions: ['read', 'create', 'update'] },
   // Sync Log — view failed Oracle syncs and retry them (admin/ops).

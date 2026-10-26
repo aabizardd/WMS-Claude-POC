@@ -2,6 +2,8 @@ export interface Role {
   id: number;
   name: string;
   description?: string | null;
+  /** Inactive roles cannot be assigned, and their users are refused access. */
+  isActive?: boolean;
   userCount?: number;
   permissions?: Permission[];
   permissionIds?: string[];
@@ -16,6 +18,7 @@ export interface User {
   lastName: string | null;
   email: string;
   username: string;
+  employeeId?: string | null;
   isActive: boolean;
   roleId: number;
   role: { id: number; name: string };
@@ -202,6 +205,10 @@ export interface GoodsReceiveItem {
   bin_id: string | null;
   bin_label: string | null;
   receiving_location_name: string | null;
+  /** PN / material code of the received line. */
+  material_code?: string | null;
+  /** The material's primary UoM code. */
+  uom?: string | null;
 }
 
 export interface GoodsReceiveDetailMrn {
@@ -230,6 +237,15 @@ export interface GoodsReceiveDetail {
   warehouse: { id: string; name: string } | null;
   mrn: GoodsReceiveDetailMrn;
   items: GoodsReceiveItem[];
+  // TO source only: the Transfer Order being received (Inbound from Transfer Stock).
+  to?: {
+    id: string;
+    oracle_id: string | null;
+    tran_id: string | null;
+    status_name: string | null;
+    origin_warehouse: string | null;
+    destination_warehouse: string | null;
+  } | null;
   // PO source only: PO header + the received lines submitted to Oracle.
   po: {
     id: string;
@@ -573,6 +589,13 @@ export interface TransferOrderLine {
   remaining_qty?: number;
   /** Shipped through closed deliveries. */
   actual_delivery?: number;
+  /** Inbound (TO In) only. */
+  material_type?: string | null;
+  material_category?: string | null;
+  shipped_qty?: number;
+  gr_qty?: number;
+  receive_qty?: number;
+  remain_qty?: number;
 }
 
 export interface TransferOrderDetail {
@@ -665,6 +688,22 @@ export interface Shelf {
   shelfCode: string;
   isActive: boolean;
   _count?: { bins: number };
+}
+
+/** A row of Ownership Setting: a vendor or a customer, told apart by `type`. */
+export type OwnershipType = 'Vendor' | 'Customer';
+export interface Ownership {
+  id: string;
+  type: OwnershipType;
+  oracle_id: string;
+  entity_id: string | null;
+  company_name: string | null;
+  email: string | null;
+  phone: string | null;
+  /** Vendors only; customers carry no subsidiary. */
+  subsidiary_display: string | null;
+  last_modified: string | null;
+  created_at: string;
 }
 
 export interface Vendor {
@@ -1340,6 +1379,8 @@ export interface PickableItem {
   item_name: string | null;
   material_code: string | null;
   material_name: string | null;
+  /** The material's primary UoM code. */
+  uom?: string | null;
   quantity: number;
   remaining_qty: number;
   available_bins: PickableBin[];

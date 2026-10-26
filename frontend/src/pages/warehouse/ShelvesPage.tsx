@@ -4,15 +4,15 @@ export default function ShelvesPage() {
   return (
     <SimpleMasterPage
       config={{
-        title: 'Shelves',
-        subtitle: 'Master data of warehouse shelves.',
+        noun: 'Shelf',
         endpoint: '/shelves',
         permission: 'shelves',
         codeKey: 'shelfCode',
         nameKey: 'shelfLabel',
-        codeLabel: 'Code',
-        nameLabel: 'Label',
-        addLabel: '+ Add Shelf',
+        codeLabel: 'Shelf Code',
+        nameLabel: 'Shelf Label',
+        addLabel: 'Add Shelf',
+        countKey: 'bins',
       }}
     />
   );

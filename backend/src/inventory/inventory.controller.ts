@@ -18,6 +18,17 @@ export class InventoryController {
     return this.service.findAll(query, user);
   }
 
+  /** Reserved / In Transit documents of every inventory row (filtered, paged). */
+  @Get('qty-sources/:type')
+  @RequirePermissions('inventory:read')
+  qtySourcesAll(
+    @Param('type') type: string,
+    @Query() query: { page?: string; limit?: string; filters?: string },
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.service.qtySourcesAll(type, query, user);
+  }
+
   @Get(':id')
   @RequirePermissions('inventory:read')
   findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {

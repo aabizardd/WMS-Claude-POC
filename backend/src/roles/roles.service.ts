@@ -21,6 +21,7 @@ type RoleOrder = Prisma.RoleOrderByWithRelationInput;
 const SORTABLE: Record<string, (d: SortDir) => RoleOrder> = {
   name: (d) => ({ name: d }),
   description: (d) => ({ description: d }),
+  status: (d) => ({ isActive: d }),
   users: (d) => ({ users: { _count: d } }),
   permissions: (d) => ({ permissions: { _count: d } }),
 };
@@ -73,11 +74,12 @@ export class RolesService {
     };
   }
 
-  // Lightweight lookup for dropdowns (id + name only).
+  // Lightweight lookup for dropdowns. Inactive roles are included (flagged) so
+  // a user's current role still shows; the form only offers active ones.
   options() {
     return this.prisma.role.findMany({
       orderBy: { name: 'asc' },
-      select: { id: true, name: true },
+      select: { id: true, name: true, isActive: true },
     });
   }
 
@@ -99,6 +101,7 @@ export class RolesService {
         data: {
           name: dto.name,
           description: dto.description,
+          isActive: dto.isActive ?? true,
           permissions: dto.permissionIds?.length
             ? {
                 create: dto.permissionIds.map((permissionId) => ({
@@ -116,7 +119,11 @@ export class RolesService {
   }
 
   async update(id: number, dto: UpdateRoleDto) {
-    await this.ensureExists(id);
+    const existing = await this.ensureExists(id);
+    // Deactivating the superuser role would lock every admin out.
+    if (dto.isActive === false && existing.name === 'admin') {
+      throw new BadRequestException('The admin role cannot be set inactive');
+    }
     await this.validatePermissions(dto.permissionIds);
 
     try {
@@ -124,7 +131,11 @@ export class RolesService {
       const role = await this.prisma.$transaction(async (tx) => {
         await tx.role.update({
           where: { id },
-          data: { name: dto.name, description: dto.description },
+          data: {
+            name: dto.name,
+            description: dto.description,
+            isActive: dto.isActive,
+          },
         });
 
         if (dto.permissionIds) {
@@ -171,6 +182,7 @@ export class RolesService {
   private async ensureExists(id: number) {
     const role = await this.prisma.role.findUnique({ where: { id } });
     if (!role) throw new NotFoundException(`Role ${id} not found`);
+    return role;
   }
 
   private async validatePermissions(permissionIds?: string[]) {
@@ -189,6 +201,7 @@ export class RolesService {
       id: role.id,
       name: role.name,
       description: role.description,
+      isActive: role.isActive,
       userCount: role._count.users,
       permissions: role.permissions.map((rp) => ({
         id: rp.permission.id,

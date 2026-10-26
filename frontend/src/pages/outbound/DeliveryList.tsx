@@ -10,6 +10,10 @@ import type {
 } from '../../types';
 import { useSort } from '../../hooks/useSort';
 import { useToast } from '../../context/ToastContext';
+import { useAuth } from '../../context/AuthContext';
+import { useConfirm } from '../../context/ConfirmContext';
+import { TrashIcon } from '../../components/icons';
+import { deleteOutboundDoc } from './outboundDelete';
 import RowActionMenu from '../../components/RowActionMenu';
 import TablePager from '../../components/TablePager';
 import MultiValueInput from '../../components/MultiValueInput';
@@ -126,6 +130,9 @@ export default function DeliveryList({
 }: DeliveryListProps = {}) {
   const navigate = useNavigate();
   const toast = useToast();
+  const confirm = useConfirm();
+  const { has } = useAuth();
+  const canDelete = has('delivery:delete');
   const isTransfer = source === 'TRANSFER_ORDER';
   const { primary: PRIMARY_FIELDS, extra: EXTRA_FIELDS } = isTransfer ? TO_FILTERS : SO_FILTERS;
   const FILTER_FIELDS = [...PRIMARY_FIELDS, ...EXTRA_FIELDS];
@@ -389,7 +396,22 @@ export default function DeliveryList({
                       <DeliveryRowCells row={d} visible={visible} basePath={basePath} />
                       <td className={stickyActionsCellClass(open)} onClick={(e) => e.stopPropagation()}>
                         <RowActionMenu
-                          actions={[{ label: 'Detail', icon: <DetailIcon />, onClick: () => navigate(detailPath) }]}
+                          actions={[
+                            { label: 'Detail', icon: <DetailIcon />, onClick: () => navigate(detailPath) },
+                            // Only a plan not shipped yet can be deleted.
+                            ...(canDelete && d.status === 'Open' && !d.sdo_id
+                              ? [
+                                  {
+                                    label: 'Delete',
+                                    icon: <TrashIcon />,
+                                    onClick: async () => {
+                                      if (await deleteOutboundDoc('delivery', d.id, d.delivery_id, confirm, toast))
+                                        setReloadKey((k) => k + 1);
+                                    },
+                                  },
+                                ]
+                              : []),
+                          ]}
                         />
                       </td>
                     </tr>,

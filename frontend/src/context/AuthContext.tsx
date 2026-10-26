@@ -13,6 +13,8 @@ interface AuthContextValue {
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
+  // Re-read the signed-in user (after they edit their own profile).
+  refresh: () => Promise<void>;
   // RBAC: true if the user holds the permission (admin is a superuser).
   has: (permission: string) => boolean;
   hasAny: (permissions: string[]) => boolean;
@@ -47,6 +49,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(res.data.user);
   }
 
+  async function refresh() {
+    const res = await api.get<AuthUser>('/auth/me');
+    setUser(res.data);
+  }
+
   function logout() {
     localStorage.removeItem(TOKEN_KEY);
     setUser(null);
@@ -64,7 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, login, logout, has, hasAny }}
+      value={{ user, loading, login, logout, refresh, has, hasAny }}
     >
       {children}
     </AuthContext.Provider>

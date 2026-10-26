@@ -77,10 +77,33 @@ export interface DocRow {
   status: string | null;
   /** Customer (SO), destination (reserved TO) or origin (in-transit TO). */
   party: string | null;
-  /** Picking codes holding the reservation. */
+  /** Picking codes holding the reservation (reserved) or delivery codes (in transit). */
   references: string[];
+  /** Packing codes of those lines; empty before packing. */
+  packing_ids: string[];
+  /** The material and warehouse the row is about (the all-documents page). */
+  material_code?: string | null;
+  material_name?: string | null;
+  warehouse_name?: string | null;
+  /** Reserved only: the pickings and packings, with ids for links. */
+  pickings?: { id: string; code: string }[];
+  packings?: { id: string; code: string }[];
+  /** In Transit only: the shipped deliveries, by SD number (id = delivery id). */
+  sds?: { id: string; code: string }[];
+  /** In Transit only: shipped by those SDs, and received at the destination (TO In). */
+  qty_delivered?: number;
+  qty_received?: number;
   qty: number;
+  /** Reserved only: what picking holds (picked, or requested while open). */
+  qty_picking?: number;
+  /** Reserved only: what closed packings actually packed; null before packing. */
+  qty_packing?: number | null;
+  /** Reserved only: picked but not packed — released from reserved. */
+  packing_diff?: number;
 }
+
+/** Cancelled SO / TO hold no Reserved or In Transit stock of their own. */
+const isCancelled = (status: string | null) => /cancel/i.test(status ?? '');
 
 export interface WarehouseScope {
   // Controllers pass the full AuthUser, so the acting user is available for the
@@ -531,7 +554,6 @@ export class InventoryService {
         warehouseId: true,
         materialId: true,
         materialCode: true,
-        qtyInTransit: true,
         material: { select: { materialName: true } },
         warehouse: { select: { name: true } },
         binStocks: { select: { reservedQty: true } },
@@ -545,114 +567,32 @@ export class InventoryService {
       material_name: inv.material?.materialName ?? null,
       warehouse_name: inv.warehouse?.name ?? null,
     };
-    const sameMaterial = inv.materialId
-      ? { materialId: inv.materialId }
-      : { materialCode: inv.materialCode };
 
     if (type === 'reserved') {
-      const lines = await this.prisma.pickingItem.findMany({
-        where: { ...sameMaterial, picking: { warehouseId: inv.warehouseId } },
-        select: {
-          requestQty: true,
-          actualQty: true,
-          picking: {
-            select: {
-              pickingCode: true,
-              status: true,
-              salesOrder: { select: { id: true, tranId: true, oracleId: true, statusName: true, customerName: true } },
-              transferOrder: { select: { id: true, tranId: true, oracleId: true, statusName: true, toLocationName: true } },
-            },
-          },
-          packingItems: {
-            where: { packing: { status: 'Closed' } },
-            select: { qtyIssue: true, qualityIssue: true },
-          },
-          deliveryItems: { where: { delivery: { status: 'Closed' } }, select: { qty: true } },
+      const { rows, cancelledQty } = await this.reservedRows(
+        {
+          ...(inv.materialId ? { materialId: inv.materialId } : { materialCode: inv.materialCode }),
+          picking: { warehouseId: inv.warehouseId },
         },
-      });
-      const docs = new Map<string, DocRow>();
-      for (const l of lines) {
-        const pk = l.picking;
-        const held = pk.status === 'Closed' ? l.actualQty : l.requestQty;
-        const notPacked = l.packingItems.reduce((s, p) => s + p.qtyIssue + p.qualityIssue, 0);
-        const shipped = l.deliveryItems.reduce((s, d) => s + d.qty, 0);
-        const qty = Math.max(0, held - notPacked - shipped);
-        if (qty <= 0) continue;
-        const so = pk.salesOrder;
-        const to = pk.transferOrder;
-        const doc = so ?? to;
-        if (!doc) continue;
-        const key = `${so ? 'SO' : 'TO'}|${doc.id}`;
-        const row =
-          docs.get(key) ??
-          ({
-            doc_type: so ? 'SO' : 'TO',
-            doc_id: doc.id,
-            doc_number: doc.tranId,
-            erp_doc_id: doc.oracleId,
-            status: doc.statusName,
-            party: so ? so.customerName : (to?.toLocationName ?? null),
-            references: [],
-            qty: 0,
-          } satisfies DocRow);
-        row.qty += qty;
-        if (!row.references.includes(pk.pickingCode)) row.references.push(pk.pickingCode);
-        docs.set(key, row);
-      }
-      const rows = [...docs.values()].sort((a, b) => b.qty - a.qty);
+        false,
+      );
       return {
         ...header,
         type,
         header_qty: inv.binStocks.reduce((s, b) => s + b.reservedQty, 0),
         documents_qty: rows.reduce((s, r) => s + r.qty, 0),
+        cancelled_qty: cancelledQty,
         rows,
       };
     }
 
-    // In transit: TO out of this warehouse, shipped by a closed delivery and
-    // not received at the destination yet.
-    const lines = await this.prisma.transferOrderItem.findMany({
-      where: {
+    const rows = await this.inTransitRows(
+      {
         ...(inv.materialId ? { materialId: inv.materialId } : {}),
         transferOrder: { warehouseId: inv.warehouseId },
-        deliveryItems: { some: { delivery: { status: 'Closed' } } },
       },
-      select: {
-        received: true,
-        transferOrder: {
-          select: { id: true, tranId: true, oracleId: true, statusName: true, toLocationName: true },
-        },
-        deliveryItems: {
-          where: { delivery: { status: 'Closed' } },
-          select: { qty: true, delivery: { select: { deliveryCode: true } } },
-        },
-      },
-    });
-    const docs = new Map<string, DocRow>();
-    for (const l of lines) {
-      const shipped = l.deliveryItems.reduce((s, d) => s + d.qty, 0);
-      const qty = Math.max(0, shipped - l.received);
-      if (qty <= 0) continue;
-      const to = l.transferOrder;
-      const row =
-        docs.get(to.id) ??
-        ({
-          doc_type: 'TO',
-          doc_id: to.id,
-          doc_number: to.tranId,
-          erp_doc_id: to.oracleId,
-          status: to.statusName,
-          party: to.toLocationName,
-          references: [],
-          qty: 0,
-        } satisfies DocRow);
-      row.qty += qty;
-      for (const d of l.deliveryItems) {
-        if (!row.references.includes(d.delivery.deliveryCode)) row.references.push(d.delivery.deliveryCode);
-      }
-      docs.set(to.id, row);
-    }
-    const rows = [...docs.values()].sort((a, b) => b.qty - a.qty);
+      false,
+    );
     const documentsQty = rows.reduce((s, r) => s + r.qty, 0);
     return {
       ...header,
@@ -662,6 +602,324 @@ export class InventoryService {
       documents_qty: documentsQty,
       rows,
     };
+  }
+
+  /**
+   * Reserved / In Transit documents across every inventory row in scope — the
+   * page behind the Inventory List's total cards. Filters (values OR-ed, fields
+   * AND-ed) apply per document + material; the result is one row per document
+   * with its matching materials under `lines`, paged by document.
+   */
+  async qtySourcesAll(
+    type: string,
+    query: { page?: number | string; limit?: number | string; filters?: string },
+    scope: WarehouseScope,
+  ) {
+    if (type !== 'reserved' && type !== 'in-transit') {
+      throw new BadRequestException('type must be reserved or in-transit');
+    }
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 10));
+    let filters: { field: string; values: string[] }[] = [];
+    if (query.filters) {
+      try {
+        const parsed: unknown = JSON.parse(query.filters);
+        if (Array.isArray(parsed)) filters = parsed as typeof filters;
+      } catch {
+        throw new BadRequestException('filters must be a JSON array of {field, values}');
+      }
+    }
+    // Admin may narrow to the header's site; everyone else sees their warehouse.
+    const warehouseId = scope.role === 'admin' ? scope.warehouseId : (scope.warehouseId ?? '__no_warehouse__');
+
+    let all: DocRow[];
+    let cancelledQty = 0;
+    if (type === 'reserved') {
+      const res = await this.reservedRows(warehouseId ? { picking: { warehouseId } } : {}, true);
+      all = res.rows;
+      cancelledQty = res.cancelledQty;
+    } else {
+      all = await this.inTransitRows(warehouseId ? { transferOrder: { warehouseId } } : {}, true);
+    }
+
+    const has = (text: string | null | undefined, v: string) => !!text && text.toLowerCase().includes(v);
+    const codes = (refs: { code: string }[] | undefined, v: string) => (refs ?? []).some((d) => has(d.code, v));
+    const match: Partial<Record<string, (r: DocRow, v: string) => boolean>> = {
+      material_code: (r, v) => has(r.material_code, v),
+      material_name: (r, v) => has(r.material_name, v),
+      warehouse: (r, v) => has(r.warehouse_name, v),
+      tran_id: (r, v) => has(r.doc_number, v),
+      erp_doc_id: (r, v) => has(r.erp_doc_id, v),
+      party: (r, v) => has(r.party, v),
+      picking_id: (r, v) => codes(r.pickings, v),
+      packing_id: (r, v) => codes(r.packings, v),
+      sd_id: (r, v) => codes(r.sds, v),
+      // Exact: SO or TO (a dropdown, not free text).
+      doc_type: (r, v) => r.doc_type.toLowerCase() === v,
+    };
+    const active = filters.flatMap((f) => {
+      const test = match[f.field];
+      const values = (f.values ?? []).map((v) => String(v).trim().toLowerCase()).filter(Boolean);
+      return test && values.length ? [{ test, values }] : [];
+    });
+    const lines = all.filter((r) => active.every((f) => f.values.some((v) => f.test(r, v))));
+
+    // One row per document; its matching materials go in `lines` (the accordion).
+    const docs = new Map<string, DocRow & { lines: DocRow[] }>();
+    const addRefs = (into: { code: string; id: string }[] | undefined, from: { code: string; id: string }[] | undefined) => {
+      for (const d of from ?? []) if (into && !into.some((x) => x.id === d.id)) into.push(d);
+    };
+    for (const l of lines) {
+      const key = `${l.doc_type}|${l.doc_id}`;
+      let doc = docs.get(key);
+      if (!doc) {
+        doc = {
+          ...l,
+          references: [],
+          packing_ids: [],
+          pickings: [],
+          packings: [],
+          sds: [],
+          qty: 0,
+          qty_picking: 0,
+          qty_packing: null,
+          packing_diff: 0,
+          qty_delivered: 0,
+          qty_received: 0,
+          lines: [],
+        };
+        docs.set(key, doc);
+      }
+      doc.lines.push(l);
+      doc.qty += l.qty;
+      doc.qty_picking = (doc.qty_picking ?? 0) + (l.qty_picking ?? 0);
+      if (l.qty_packing != null) doc.qty_packing = (doc.qty_packing ?? 0) + l.qty_packing;
+      doc.packing_diff = (doc.packing_diff ?? 0) + (l.packing_diff ?? 0);
+      doc.qty_delivered = (doc.qty_delivered ?? 0) + (l.qty_delivered ?? 0);
+      doc.qty_received = (doc.qty_received ?? 0) + (l.qty_received ?? 0);
+      addRefs(doc.pickings, l.pickings);
+      addRefs(doc.packings, l.packings);
+      addRefs(doc.sds, l.sds);
+    }
+    const documents = [...docs.values()].sort((a, b) => b.qty - a.qty);
+
+    const sum = (pick: (r: DocRow) => number | null | undefined) => lines.reduce((t, r) => t + (pick(r) ?? 0), 0);
+    return {
+      type,
+      total_data: documents.length,
+      total_page: Math.ceil(documents.length / limit) || 0,
+      attributes: { page, limit, filters },
+      totals: {
+        qty: sum((r) => r.qty),
+        qty_picking: sum((r) => r.qty_picking),
+        qty_packing: sum((r) => r.qty_packing),
+        packing_diff: sum((r) => r.packing_diff),
+        qty_delivered: sum((r) => r.qty_delivered),
+        qty_received: sum((r) => r.qty_received),
+        documents: documents.length,
+        materials: lines.length,
+      },
+      cancelled_qty: cancelledQty,
+      rows: documents.slice((page - 1) * limit, page * limit),
+    };
+  }
+
+  /**
+   * Reserved stock per SO / TO: stock is reserved when a picking is generated
+   * and released when its delivery ships. Per picking line that leaves the
+   * picked qty (the requested qty while the picking is still open), less what
+   * packing could not pack and less what closed deliveries already took out.
+   * Cancelled documents are left out (their qty is reported separately).
+   * `perMaterial` keeps one row per document + material + warehouse.
+   */
+  private async reservedRows(where: Prisma.PickingItemWhereInput, perMaterial: boolean) {
+    const lines = await this.prisma.pickingItem.findMany({
+      where,
+      select: {
+        requestQty: true,
+        actualQty: true,
+        materialId: true,
+        materialCode: true,
+        materialName: true,
+        picking: {
+          select: {
+            id: true,
+            pickingCode: true,
+            status: true,
+            warehouseId: true,
+            warehouse: { select: { name: true } },
+            salesOrder: { select: { id: true, tranId: true, oracleId: true, statusName: true, customerName: true } },
+            transferOrder: { select: { id: true, tranId: true, oracleId: true, statusName: true, toLocationName: true } },
+          },
+        },
+        packingItems: {
+          select: {
+            actualQty: true,
+            qtyIssue: true,
+            qualityIssue: true,
+            packing: { select: { id: true, packingCode: true, status: true } },
+          },
+        },
+        deliveryItems: { where: { delivery: { status: 'Closed' } }, select: { qty: true } },
+      },
+    });
+    const docs = new Map<string, DocRow>();
+    let cancelledQty = 0;
+    for (const l of lines) {
+      const pk = l.picking;
+      const held = pk.status === 'Closed' ? l.actualQty : l.requestQty;
+      // Only a closed packing has settled what was (not) packed.
+      const packed = l.packingItems.filter((p) => p.packing.status === 'Closed');
+      const notPacked = packed.reduce((s, p) => s + p.qtyIssue + p.qualityIssue, 0);
+      const shipped = l.deliveryItems.reduce((s, d) => s + d.qty, 0);
+      const qty = Math.max(0, held - notPacked - shipped);
+      if (qty <= 0) continue;
+      const so = pk.salesOrder;
+      const to = pk.transferOrder;
+      const doc = so ?? to;
+      if (!doc) continue;
+      if (isCancelled(doc.statusName)) {
+        cancelledQty += qty;
+        continue;
+      }
+      const key = `${so ? 'SO' : 'TO'}|${doc.id}` + (perMaterial ? `|${l.materialId ?? l.materialCode}|${pk.warehouseId}` : '');
+      const row =
+        docs.get(key) ??
+        ({
+          doc_type: so ? 'SO' : 'TO',
+          doc_id: doc.id,
+          doc_number: doc.tranId,
+          erp_doc_id: doc.oracleId,
+          status: doc.statusName,
+          party: so ? so.customerName : (to?.toLocationName ?? null),
+          material_code: l.materialCode,
+          material_name: l.materialName,
+          warehouse_name: pk.warehouse?.name ?? null,
+          references: [],
+          packing_ids: [],
+          pickings: [],
+          packings: [],
+          qty: 0,
+          qty_picking: 0,
+          qty_packing: null,
+          packing_diff: 0,
+        } satisfies DocRow);
+      row.qty += qty;
+      row.qty_picking = (row.qty_picking ?? 0) + held;
+      row.packing_diff = (row.packing_diff ?? 0) + notPacked;
+      if (packed.length) {
+        row.qty_packing = (row.qty_packing ?? 0) + packed.reduce((s, p) => s + p.actualQty, 0);
+      }
+      for (const p of l.packingItems) {
+        if (!row.packing_ids.includes(p.packing.packingCode)) {
+          row.packing_ids.push(p.packing.packingCode);
+          row.packings!.push({ id: p.packing.id, code: p.packing.packingCode });
+        }
+      }
+      if (!row.references.includes(pk.pickingCode)) {
+        row.references.push(pk.pickingCode);
+        row.pickings!.push({ id: pk.id, code: pk.pickingCode });
+      }
+      docs.set(key, row);
+    }
+    return { rows: [...docs.values()].sort((a, b) => b.qty - a.qty), cancelledQty };
+  }
+
+  /**
+   * In Transit per TO: what TO-out deliveries shipped (closed by Generate
+   * Shipment) and the destination has not received yet. Cancelled TOs are left
+   * out. `perMaterial` keeps one row per TO + material + origin warehouse.
+   */
+  private async inTransitRows(where: Prisma.TransferOrderItemWhereInput, perMaterial: boolean) {
+    const lines = await this.prisma.transferOrderItem.findMany({
+      where: { ...where, deliveryItems: { some: { delivery: { status: 'Closed' } } } },
+      select: {
+        received: true,
+        materialId: true,
+        itemName: true,
+        transferOrder: {
+          select: {
+            id: true,
+            tranId: true,
+            oracleId: true,
+            statusName: true,
+            toLocationName: true,
+            warehouseId: true,
+            warehouse: { select: { name: true } },
+          },
+        },
+        deliveryItems: {
+          where: { delivery: { status: 'Closed' } },
+          select: {
+            qty: true,
+            delivery: {
+              select: {
+                id: true,
+                deliveryCode: true,
+                sdoId: true,
+                packing: { select: { id: true, packingCode: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    const materialIds = [...new Set(lines.map((l) => l.materialId).filter((x): x is string => !!x))];
+    const mats = materialIds.length
+      ? await this.prisma.material.findMany({
+          where: { id: { in: materialIds } },
+          select: { id: true, materialCode: true, materialName: true },
+        })
+      : [];
+    const matById = new Map(mats.map((m) => [m.id, m]));
+
+    const docs = new Map<string, DocRow>();
+    for (const l of lines) {
+      const shipped = l.deliveryItems.reduce((s, d) => s + d.qty, 0);
+      const qty = Math.max(0, shipped - l.received);
+      if (qty <= 0) continue;
+      const to = l.transferOrder;
+      if (isCancelled(to.statusName)) continue;
+      const mat = l.materialId ? matById.get(l.materialId) : null;
+      const key = to.id + (perMaterial ? `|${l.materialId ?? l.itemName}|${to.warehouseId}` : '');
+      const row =
+        docs.get(key) ??
+        ({
+          doc_type: 'TO',
+          doc_id: to.id,
+          doc_number: to.tranId,
+          erp_doc_id: to.oracleId,
+          status: to.statusName,
+          party: to.toLocationName,
+          material_code: mat?.materialCode ?? l.itemName,
+          material_name: mat?.materialName ?? null,
+          warehouse_name: to.warehouse?.name ?? null,
+          references: [],
+          packing_ids: [],
+          sds: [],
+          packings: [],
+          qty: 0,
+          qty_delivered: 0,
+          qty_received: 0,
+        } satisfies DocRow);
+      row.qty += qty;
+      row.qty_delivered = (row.qty_delivered ?? 0) + shipped;
+      row.qty_received = (row.qty_received ?? 0) + l.received;
+      for (const d of l.deliveryItems) {
+        if (!row.references.includes(d.delivery.deliveryCode)) {
+          row.references.push(d.delivery.deliveryCode);
+          // Shown by its SD number; a delivery without one falls back to its code.
+          row.sds!.push({ id: d.delivery.id, code: d.delivery.sdoId ?? d.delivery.deliveryCode });
+        }
+        const pack = d.delivery.packing;
+        if (pack && !row.packing_ids.includes(pack.packingCode)) {
+          row.packing_ids.push(pack.packingCode);
+          row.packings!.push({ id: pack.id, code: pack.packingCode });
+        }
+      }
+      docs.set(key, row);
+    }
+    return [...docs.values()].sort((a, b) => b.qty - a.qty);
   }
 
   async transferHistory(id: string, scope: WarehouseScope) {
@@ -1072,12 +1330,13 @@ export class InventoryService {
       select: {
         materialId: true,
         received: true,
-        transferOrder: { select: { warehouseId: true } },
+        transferOrder: { select: { warehouseId: true, statusName: true } },
         deliveryItems: { where: { delivery: { status: 'Closed' } }, select: { qty: true } },
       },
     });
     for (const l of lines) {
       if (!l.materialId || !l.transferOrder.warehouseId) continue;
+      if (isCancelled(l.transferOrder.statusName)) continue;
       const qty = Math.max(0, l.deliveryItems.reduce((s, d) => s + d.qty, 0) - l.received);
       if (qty <= 0) continue;
       const key = `${l.transferOrder.warehouseId}|${l.materialId}`;

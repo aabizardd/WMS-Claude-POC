@@ -7,6 +7,7 @@ import type { GoodsReceiveDetail } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { grStatusBadgeClass, grStatusLabel } from '../../lib/grStatus';
 import SearchableSelect from '../../components/SearchableSelect';
+import GeneratePutawayModal, { type PutawayLine } from '../../components/GeneratePutawayModal';
 import ActionMenu from '../../components/ActionMenu';
 import { printDoc } from '../../lib/print';
 import { PrintIcon } from '../../components/icons';
@@ -53,8 +54,8 @@ export default function GoodsReceiveDetailPage() {
   const [putawaySuccess, setPutawaySuccess] = useState('');
   const [putawaySuccessModal, setPutawaySuccessModal] = useState(false);
   const [pickers, setPickers] = useState<{ id: number; name: string }[]>([]);
-  const [putawayPlanned, setPutawayPlanned] = useState<Record<string, number>>({});
-  const [putawayPicker, setPutawayPicker] = useState<Record<string, string>>({});
+  const [putawayBins, setPutawayBins] = useState<BinOption[]>([]);
+  const [putawayOptionsLoading, setPutawayOptionsLoading] = useState(false);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollStartRef = useRef<number>(0);
@@ -240,37 +241,35 @@ export default function GoodsReceiveDetailPage() {
     if (!gr) return;
     setPutawayError('');
     setPutawayOpen(true);
-    const itemsWithRemaining = gr.items.filter((it) => it.qty_remaining > 0);
-    setPutawayPlanned(
-      Object.fromEntries(
-        itemsWithRemaining.map((it) => [it.id, it.qty_remaining]),
-      ),
-    );
-    setPutawayPicker(
-      Object.fromEntries(itemsWithRemaining.map((it) => [it.id, ''])),
-    );
+    // Pickers and the warehouse's bins for the modal's dropdowns.
+    setPutawayOptionsLoading(true);
+    const params = { warehouseId: gr.warehouse?.id ?? undefined };
     try {
-      const r = await api.get<{ id: number; name: string }[]>('/users/pickers', {
-        params: { warehouseId: gr.warehouse?.id ?? undefined },
-      });
-      setPickers(r.data);
+      const [pu, bi] = await Promise.all([
+        api.get<{ id: number; name: string }[]>('/users/pickers', { params }),
+        api.get<BinOption[]>('/bins/options', { params }),
+      ]);
+      setPickers(pu.data);
+      setPutawayBins(bi.data);
     } catch {
       setPickers([]);
+      setPutawayBins([]);
+    } finally {
+      setPutawayOptionsLoading(false);
     }
   }
 
-  async function handleGeneratePutaway() {
+  async function handleGeneratePutaway(lines: PutawayLine[]) {
     if (!gr) return;
     setPutawayError('');
     setPutawayLoading(true);
-    const itemsWithRemaining = gr.items.filter((it) => it.qty_remaining > 0);
     const payload = {
-      items: itemsWithRemaining.map((it) => ({
-        mrnItemId: it.id,
-        plannedQty: putawayPlanned[it.id] ?? it.qty_remaining,
-        pickerId: putawayPicker[it.id]
-          ? Number(putawayPicker[it.id])
-          : undefined,
+      items: lines.map((l) => ({
+        // A TO-sourced GR's lines are its own Goods Receive items.
+        ...(gr.source_type === 'TO' ? { grItemId: l.itemId } : { mrnItemId: l.itemId }),
+        plannedQty: l.plannedQty,
+        binId: l.binId,
+        pickerId: l.pickerId,
       })),
     };
     try {
@@ -425,6 +424,9 @@ export default function GoodsReceiveDetailPage() {
   }
 
   const mrn = gr.mrn;
+  // Inbound from Transfer Stock: received from a Transfer Order, no MRN.
+  const isTo = gr.source_type === 'TO';
+  const listPath = isTo ? '/admin/inbound/transfer/goods-receive' : '/admin/inbound/pib/goods-receive';
   const warehouseId = gr.warehouse?.id;
   const isOpen = gr.status === 'Open';
   const editable = canUpdate && isOpen;
@@ -440,16 +442,16 @@ export default function GoodsReceiveDetailPage() {
         { label: 'Status', value: grStatusLabel(gr.status) },
         { label: 'Shipment Number', value: gr.shipment_number },
         { label: 'Warehouse', value: gr.warehouse?.name },
-        { label: 'Oracle ID', value: m.oracle_id },
-        { label: 'Oracle Status', value: m.oracle_status },
-        { label: 'Receiving Location', value: m.receiving_location_name },
-        { label: 'Vessel Number', value: m.vessel_number },
-        { label: 'Bill of Lading', value: m.bill_of_lading },
-        { label: 'Port', value: m.port },
-        { label: 'Expected Delivery', value: m.expected_delivery_date },
-        { label: 'Actual Delivery', value: m.actual_delivery_date },
-        { label: 'Date Created', value: m.date_created },
-        { label: 'Memo', value: m.memo },
+        { label: 'Oracle ID', value: m?.oracle_id },
+        { label: 'Oracle Status', value: m?.oracle_status },
+        { label: 'Receiving Location', value: m?.receiving_location_name },
+        { label: 'Vessel Number', value: m?.vessel_number },
+        { label: 'Bill of Lading', value: m?.bill_of_lading },
+        { label: 'Port', value: m?.port },
+        { label: 'Expected Delivery', value: m?.expected_delivery_date },
+        { label: 'Actual Delivery', value: m?.actual_delivery_date },
+        { label: 'Date Created', value: m?.date_created },
+        { label: 'Memo', value: m?.memo },
       ],
       tables: [
         {
@@ -474,7 +476,7 @@ export default function GoodsReceiveDetailPage() {
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <Link
-            to="/admin/inbound/pib/goods-receive"
+            to={listPath}
             className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
             aria-label="Back"
           >
@@ -520,6 +522,29 @@ export default function GoodsReceiveDetailPage() {
         </div>
       )}
 
+      {isTo && gr.to && (
+        <div className="card p-5">
+          <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
+            Transfer Order Information
+          </h3>
+          <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
+            <Meta
+              label="Transaction ID"
+              value={
+                <Link to={`/admin/inbound/transfer/to/${gr.to.id}`} className="text-brand-700 hover:underline">
+                  {gr.to.tran_id}
+                </Link>
+              }
+            />
+            <Meta label="ERP Doc ID" value={gr.to.oracle_id} />
+            <Meta label="TO Status" value={gr.to.status_name} />
+            <Meta label="Origin Warehouse" value={gr.to.origin_warehouse} />
+            <Meta label="Destination Warehouse" value={gr.to.destination_warehouse} />
+          </dl>
+        </div>
+      )}
+
+      {!isTo && (
       <div className="card p-5">
         <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
           MRN Information
@@ -537,6 +562,7 @@ export default function GoodsReceiveDetailPage() {
           <Meta label="Memo" value={mrn.memo} />
         </dl>
       </div>
+      )}
 
       <form onSubmit={handleConfirm} className="space-y-4">
         {error && (
@@ -556,8 +582,8 @@ export default function GoodsReceiveDetailPage() {
               <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-5 py-3">Item</th>
-                  <th className="px-5 py-3">PO Number</th>
-                  <th className="px-5 py-3">Vendor</th>
+                  <th className="px-5 py-3">{isTo ? 'TO Number' : 'PO Number'}</th>
+                  <th className="px-5 py-3">{isTo ? 'Origin Warehouse' : 'Vendor'}</th>
                   <th className="px-5 py-3">Recv. Location</th>
                   <th className="px-5 py-3 text-right">Expected</th>
                   <th className="px-5 py-3 text-right">Remaining</th>
@@ -642,7 +668,7 @@ export default function GoodsReceiveDetailPage() {
           {savedAt && (
             <span className="text-xs text-emerald-600">Saved at {savedAt}</span>
           )}
-          <Link to="/admin/inbound/pib/goods-receive" className="btn-secondary">
+          <Link to={listPath} className="btn-secondary">
             {editable ? 'Cancel' : 'Back'}
           </Link>
           {editable && (
@@ -735,109 +761,18 @@ export default function GoodsReceiveDetailPage() {
         </div>
       </Modal>
 
-      <Modal
+      <GeneratePutawayModal
         open={putawayOpen}
-        title="Generate Putaway"
+        grNumber={gr.gr_number}
+        items={gr.items.filter((it) => it.qty_remaining > 0)}
+        bins={putawayBins}
+        pickers={pickers}
+        loadingOptions={putawayOptionsLoading}
+        submitting={putawayLoading}
+        error={putawayError}
         onClose={() => setPutawayOpen(false)}
-      >
-        <div className="space-y-4">
-          {putawayError && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
-              {putawayError}
-            </div>
-          )}
-
-          <p className="text-sm text-slate-500">
-            Select items and planned quantities for putaway. Picker assignment
-            is optional.
-          </p>
-
-          <div className="max-h-80 overflow-y-auto space-y-2">
-            {gr.items
-              .filter((it) => it.qty_remaining > 0)
-              .map((it) => (
-                <div
-                  key={it.id}
-                  className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3"
-                >
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-slate-800">
-                      {it.item_name ?? '—'}
-                    </div>
-                    <div className="mt-0.5 text-xs text-slate-500">
-                      PO: {it.po_number ?? '—'} · Remaining: {it.qty_remaining}
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-400">
-                      Planned Qty
-                    </label>
-                    <input
-                      type="number"
-                      step="any"
-                      min={1}
-                      max={it.qty_remaining}
-                      className="input mt-0.5 w-20 text-right text-sm"
-                      value={putawayPlanned[it.id] ?? it.qty_remaining}
-                      onChange={(e) =>
-                        setPutawayPlanned((p) => ({
-                          ...p,
-                          [it.id]: Number(e.target.value),
-                        }))
-                      }
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-400">
-                      Picker
-                    </label>
-                    <SearchableSelect
-                      className="mt-0.5 w-40"
-                      value={putawayPicker[it.id] ?? ''}
-                      onChange={(v) =>
-                        setPutawayPicker((p) => ({ ...p, [it.id]: v }))
-                      }
-                      placeholder="— Auto —"
-                      searchPlaceholder="Search picker…"
-                      options={pickers.map((pu) => ({
-                        value: String(pu.id),
-                        label: pu.name,
-                      }))}
-                    />
-                  </div>
-                </div>
-              ))}
-          </div>
-
-          {gr.items.filter((it) => it.qty_remaining > 0).length === 0 && (
-            <p className="text-sm text-slate-400 text-center">
-              No items with remaining quantity to putaway.
-            </p>
-          )}
-
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => setPutawayOpen(false)}
-              disabled={putawayLoading}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={handleGeneratePutaway}
-              disabled={
-                putawayLoading ||
-                gr.items.filter((it) => it.qty_remaining > 0).length === 0
-              }
-            >
-              {putawayLoading ? 'Generating…' : 'Generate Putaway'}
-            </button>
-          </div>
-        </div>
-      </Modal>
+        onSubmit={handleGeneratePutaway}
+      />
     </div>
   );
 }

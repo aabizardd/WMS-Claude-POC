@@ -27,11 +27,16 @@ const SORTABLE: Record<string, (d: SortDir) => ToOrder> = {
 };
 const DEFAULT_ORDER: ToOrder = { lastModified: 'desc' };
 
+/** TOs not fulfilled yet have nothing to receive: left out of the inbound view. */
+const NOT_INBOUND_STATUSES = ['Pending Approval', 'Pending Fulfillment'];
+
 /** A line's resolved WMS material (lines carry only its id). */
 type MatInfo = {
   materialName: string;
   materialCode: string;
   primaryUom?: { uomCode: string } | null;
+  materialType?: { materialTypeName: string } | null;
+  materialCategory?: { materialCategoryName: string } | null;
 };
 
 /** Orders only reach WMS through the Oracle sync, which is who last changed them. */
@@ -93,7 +98,10 @@ export class TransferOrdersService {
     const limit = query.limit ?? 10;
     const orderBy = buildOrderBy(query.sort_by, query.sort_order, SORTABLE, DEFAULT_ORDER);
 
-    const where: Prisma.TransferOrderWhereInput = { ...this.scopeWhere(scope) };
+    const where: Prisma.TransferOrderWhereInput =
+      query.direction === 'in'
+        ? { ...this.inboundScopeWhere(scope), statusName: { notIn: NOT_INBOUND_STATUSES } }
+        : { ...this.scopeWhere(scope) };
     if (query.status && query.status !== 'all') {
       where.statusName = query.status;
     }
@@ -135,6 +143,10 @@ export class TransferOrdersService {
     }));
     const matById = await this.materialsById(withLines.flatMap((r) => r.items));
     const available = await this.availableStock(withLines);
+    const inboundQty =
+      query.direction === 'in'
+        ? await this.inboundQtyByLine(withLines.flatMap((r) => r.items.map((l) => l.id)))
+        : null;
     const totals = await this.lineTotals(where);
 
     return {
@@ -159,9 +171,12 @@ export class TransferOrdersService {
         created_at: r.createdAt,
         ...('items' in r
           ? {
-              items: (r.items as ToLine[]).map((l) =>
-                this.serializeLine(l, matById, available, r.warehouseId),
-              ),
+              items: (r.items as ToLine[]).map((l) => ({
+                ...this.serializeLine(l, matById, available, r.warehouseId),
+                ...(inboundQty
+                  ? this.inboundLine(l, l.materialId ? matById.get(l.materialId) : null, inboundQty)
+                  : {}),
+              })),
             }
           : {}),
       })),
@@ -178,10 +193,58 @@ export class TransferOrdersService {
             materialName: true,
             materialCode: true,
             primaryUom: { select: { uomCode: true } },
+            materialType: { select: { materialTypeName: true } },
+            materialCategory: { select: { materialCategoryName: true } },
           },
         })
       : [];
     return new Map<string, MatInfo>(mats.map((m) => [m.id, m]));
+  }
+
+  /**
+   * Per TO line, the planned qty on GRs not received yet (Open / Sync Failed).
+   * Received qty itself is the line's `received` — Oracle's figure, which a
+   * WMS receive also raises.
+   */
+  private async inboundQtyByLine(lineIds: string[]) {
+    const rows = lineIds.length
+      ? await this.prisma.goodsReceiveItem.findMany({
+          where: { transferOrderItemId: { in: lineIds } },
+          select: {
+            transferOrderItemId: true,
+            qty: true,
+            qtyActual: true,
+            goodsReceive: { select: { status: true } },
+          },
+        })
+      : [];
+    const openPlanned = new Map<string, number>();
+    for (const r of rows) {
+      const id = r.transferOrderItemId;
+      if (!id) continue;
+      const open = r.goodsReceive.status === 'Open' || r.goodsReceive.status === 'SyncFailed';
+      if (open) openPlanned.set(id, (openPlanned.get(id) ?? 0) + r.qty);
+    }
+    return { openPlanned };
+  }
+
+  /** The inbound (TO In) view of one line: shipped, on a GR, received, remain. */
+  private inboundLine(
+    l: { id: string; fulfilled: number; received: number },
+    mat: MatInfo | null | undefined,
+    qty: { openPlanned: Map<string, number> },
+  ) {
+    // On a GR = already received + planned on GRs still to be received.
+    const grQty = l.received + (qty.openPlanned.get(l.id) ?? 0);
+    return {
+      material_type: mat?.materialType?.materialTypeName ?? null,
+      material_category: mat?.materialCategory?.materialCategoryName ?? null,
+      shipped_qty: l.fulfilled,
+      gr_qty: grQty,
+      receive_qty: l.received,
+      // Still to be put on a GR.
+      remain_qty: Math.max(0, l.fulfilled - grQty),
+    };
   }
 
   /**
@@ -244,6 +307,70 @@ export class TransferOrdersService {
     }
     totals.actual_delivery = delivered._sum.qty ?? 0;
     return totals;
+  }
+
+  // Inbound to Transfer Stock is scoped to the TO's DESTINATION warehouse.
+  private inboundScopeWhere(scope: WarehouseScope): Prisma.TransferOrderWhereInput {
+    if (scope.role === 'admin') {
+      return scope.warehouseId ? { toWarehouseId: scope.warehouseId } : {};
+    }
+    return { toWarehouseId: scope.warehouseId ?? '__no_warehouse__' };
+  }
+
+  /**
+   * One TO seen from its destination (Inbound from Transfer Stock): per line
+   * what was fulfilled in Oracle, what is already received and what is still
+   * outstanding to receive.
+   */
+  async findOneInbound(id: string, scope: WarehouseScope) {
+    const to = await this.prisma.transferOrder.findFirst({
+      where: { id, ...this.inboundScopeWhere(scope), statusName: { notIn: NOT_INBOUND_STATUSES } },
+      include: {
+        warehouse: { select: { id: true, name: true, subsidiaryName: true } },
+        items: { orderBy: { lineNumber: 'asc' } },
+      },
+    });
+    if (!to) throw new NotFoundException(`Transfer order ${id} not found`);
+    const [matById, destination, inboundQty] = await Promise.all([
+      this.materialsById(to.items),
+      to.toWarehouseId
+        ? this.prisma.warehouse.findUnique({ where: { id: to.toWarehouseId }, select: { id: true, name: true } })
+        : null,
+      this.inboundQtyByLine(to.items.map((l) => l.id)),
+    ]);
+    return {
+      id: to.id,
+      oracle_id: to.oracleId,
+      tran_id: to.tranId,
+      status_name: to.statusName,
+      ownership: to.warehouse?.subsidiaryName ?? null,
+      origin_warehouse: to.warehouse?.name ?? to.fromLocationName,
+      destination_warehouse_id: destination?.id ?? to.toWarehouseId,
+      destination_warehouse: destination?.name ?? to.toLocationName,
+      memo: to.memo,
+      created_by: to.createdBy,
+      created_at: to.createdAt,
+      last_modified_by: SYNC_ACTOR,
+      last_modified: to.lastModified,
+      items: to.items.map((l) => {
+        const mat = l.materialId ? matById.get(l.materialId) : null;
+        return {
+          ...this.inboundLine(l, mat, inboundQty),
+          id: l.id,
+          line_number: l.lineNumber,
+          item_name: l.itemName,
+          material_id: l.materialId,
+          material_code: mat?.materialCode ?? null,
+          material_name: mat?.materialName ?? null,
+          uom: mat?.primaryUom?.uomCode ?? null,
+          quantity: l.quantity,
+          fulfilled: l.fulfilled,
+          received: l.received,
+          // What Oracle will still accept on an item receipt for this line.
+          outstanding: Math.max(0, l.fulfilled - l.received),
+        };
+      }),
+    };
   }
 
   // Distinct statuses present (within scope) for the FE status filter.

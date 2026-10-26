@@ -8,7 +8,9 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { highestSeq } from '../common/doc-sequence';
 import { InventoryService } from '../inventory/inventory.service';
+import { reopenPacking } from '../common/outbound-revert';
 import type { GenerateDeliveryDto } from './dto/generate-delivery.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { subsidiarySingleFilter } from '../common/subsidiary-filter';
@@ -435,9 +437,14 @@ export class DeliveryService {
     }
 
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const baseCount = await this.prisma.delivery.count({
-      where: { deliveryCode: { startsWith: `DEL-${today}` } },
-    });
+    const baseCount = highestSeq(
+      (
+        await this.prisma.delivery.findMany({
+          where: { deliveryCode: { startsWith: `DEL-${today}` } },
+          select: { deliveryCode: true },
+        })
+      ).map((r) => r.deliveryCode),
+    );
 
     /**
      * Packings that belong together ship together: same warehouse and same
@@ -513,6 +520,51 @@ export class DeliveryService {
 
     this.logger.log(`Generated ${createdCodes.length} delivery(ies): ${createdCodes.join(', ')}`);
     return { created: createdCodes.length, delivery_codes: createdCodes };
+  }
+
+  // ---------- delete ----------
+
+  /**
+   * Delete an Open delivery plan (no shipment generated yet). Every packing it
+   * covers goes back to Open with its progress cleared, so it is packed again:
+   * the stock a closed packing had moved into the issue buckets returns to
+   * Reserved and its discrepancies are removed. Generating the plan itself
+   * moved no stock.
+   */
+  async remove(id: string, scope: WarehouseScope) {
+    const d = await this.prisma.delivery.findUnique({
+      where: { id },
+      include: { items: { select: { packingId: true } } },
+    });
+    if (!d || (scope.role !== 'admin' && d.warehouseId !== scope.warehouseId)) {
+      throw new NotFoundException(`Delivery ${id} not found`);
+    }
+    if (d.status !== 'Open' || d.sdoId) {
+      throw new BadRequestException(
+        'Only an Open delivery plan without a shipment can be deleted',
+      );
+    }
+
+    const packingIds = [
+      ...new Set([d.packingId, ...d.items.map((it) => it.packingId)].filter((v): v is string => !!v)),
+    ];
+    await this.prisma.$transaction(async (tx) => {
+      await tx.delivery.delete({ where: { id } });
+      for (const packingId of packingIds) {
+        await reopenPacking(
+          tx,
+          this.inventory,
+          packingId,
+          scope.userId,
+          `Delivery plan ${d.deliveryCode} deleted — packing reopened`,
+        );
+      }
+    });
+
+    this.logger.log(
+      `Delivery ${d.deliveryCode} deleted; ${packingIds.length} packing(s) reopened`,
+    );
+    return { deleted: true, reopened_packings: packingIds.length };
   }
 
   // ---------- generate shipment ----------

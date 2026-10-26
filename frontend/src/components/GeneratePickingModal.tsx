@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import Modal from './Modal';
+import { useEffect, useState, type ReactNode } from 'react';
 import SearchableSelect from './SearchableSelect';
 import type { Pickable, PickableItem } from '../types';
 
@@ -10,16 +9,11 @@ export interface PickAllocation {
   pickerId: number;
 }
 
-// One bin allocation row for a material. A material can be picked from more
-// than one bin, each with its own qty and picker.
-interface Alloc {
+// One material's choices: the bin it is picked from, how much, and by whom.
+interface ItemForm {
   binId: string;
   qty: number;
   pickerId: string;
-}
-interface ItemForm {
-  selected: boolean;
-  allocations: Alloc[];
 }
 
 interface Props {
@@ -28,11 +22,16 @@ interface Props {
   submitting: boolean;
   pickable: Pickable | null;
   pickers: { id: number; name: string }[];
+  /** Read-only document header (Transaction ID, Doc Type, Warehouse, …), as on WMS dev. */
+  docInfo?: { label: string; value: ReactNode }[];
   // "remaining" for SO, "remaining (committed)" for TO — only wording.
   remainingHint?: string;
   // Error from loading the pickable data (set by the parent).
   loadError?: string;
-  /** Items to start ticked (e.g. the materials checked on the detail page). */
+  /**
+   * The materials to pick, chosen on the detail page (as on WMS dev, the modal
+   * itself has no selection). Empty or absent = every pickable material.
+   */
   preselectedIds?: string[];
   onClose: () => void;
   // Resolves on success (parent closes/reloads); throw an Error to surface the
@@ -40,16 +39,36 @@ interface Props {
   onSubmit: (allocations: PickAllocation[]) => Promise<void>;
 }
 
-function newAlloc(it: PickableItem, qty: number): Alloc {
-  return { binId: (it.available_bins ?? [])[0]?.bin_id ?? '', qty, pickerId: '' };
+const fmt = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+
+function binAvail(it: PickableItem, binId: string): number | null {
+  if (!binId) return null;
+  return (it.available_bins ?? []).find((b) => b.bin_id === binId)?.avail_qty ?? null;
 }
 
+/** First bin with stock, and as much of the remaining qty as it holds. */
+function initialForm(it: PickableItem): ItemForm {
+  const bin = (it.available_bins ?? [])[0];
+  return {
+    binId: bin?.bin_id ?? '',
+    qty: bin ? Math.min(it.remaining_qty, bin.avail_qty) : it.remaining_qty,
+    pickerId: '',
+  };
+}
+
+/**
+ * Generate Picking List — laid out like WMS dev's: the document's header
+ * fields, then the Material List with Bin, Quantity, UoM and Picker per
+ * material. On top of WMS dev: every row shows the PN / material code, and the
+ * table's first row sets one picker for every material.
+ */
 export default function GeneratePickingModal({
   open,
   loading,
   submitting,
   pickable,
   pickers,
+  docInfo,
   remainingHint,
   loadError,
   preselectedIds,
@@ -58,94 +77,78 @@ export default function GeneratePickingModal({
 }: Props) {
   const [forms, setForms] = useState<Record<string, ItemForm>>({});
   const [error, setError] = useState('');
+  // One picker for every line, so a long order is not assigned row by row.
+  const [pickerForAll, setPickerForAll] = useState('');
 
   // Rebuild the form whenever a fresh pickable is loaded.
   useEffect(() => {
     setError('');
-    if (!pickable) {
-      setForms({});
-      return;
-    }
+    setPickerForAll('');
     setForms(
-      Object.fromEntries(
-        pickable.items.map((it) => [
-          it.id,
-          {
-            selected: !!preselectedIds?.includes(it.id),
-            allocations: [newAlloc(it, it.remaining_qty)],
-          } as ItemForm,
-        ]),
-      ),
+      pickable ? Object.fromEntries(pickable.items.map((it) => [it.id, initialForm(it)])) : {},
     );
-    // Preselection is read with each fresh pickable, not tracked on its own.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pickable]);
 
-  function patchItem(itemId: string, patch: Partial<ItemForm>) {
-    setForms((f) => ({ ...f, [itemId]: { ...f[itemId], ...patch } }));
+  // Close on Escape, like the other dialogs.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !submitting && onClose();
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, submitting, onClose]);
+
+  if (!open) return null;
+
+  const all = pickable?.items ?? [];
+  const items = preselectedIds?.length ? all.filter((it) => preselectedIds.includes(it.id)) : all;
+  const totalQty = items.reduce((s, it) => s + (Number(forms[it.id]?.qty) || 0), 0);
+  const pickerOptions = pickers.map((p) => ({ value: String(p.id), label: p.name }));
+
+  function patch(itemId: string, p: Partial<ItemForm>) {
+    setForms((f) => ({ ...f, [itemId]: { ...f[itemId], ...p } }));
   }
-  function patchAlloc(itemId: string, idx: number, patch: Partial<Alloc>) {
-    setForms((f) => {
-      const item = f[itemId];
-      const allocations = item.allocations.map((a, i) => (i === idx ? { ...a, ...patch } : a));
-      return { ...f, [itemId]: { ...item, allocations } };
-    });
-  }
-  function binAvail(it: PickableItem, binId: string): number | null {
-    if (!binId) return null;
-    return (it.available_bins ?? []).find((b) => b.bin_id === binId)?.avail_qty ?? null;
+  /** Give every material this picker; a row can still be changed after. */
+  function applyPickerToAll(pickerId: string) {
+    setPickerForAll(pickerId);
+    setForms((f) =>
+      Object.fromEntries(Object.entries(f).map(([id, row]) => [id, { ...row, pickerId }])),
+    );
   }
 
   async function handleSubmit() {
-    if (!pickable) return;
     setError('');
-    const chosen = pickable.items.filter((it) => forms[it.id]?.selected);
-    if (chosen.length === 0) {
-      setError('Select at least one item.');
+    if (items.length === 0) {
+      setError('There is no material to pick.');
       return;
     }
-
     const allocations: PickAllocation[] = [];
-    for (const it of chosen) {
+    for (const it of items) {
       const f = forms[it.id];
-      const label = it.item_name ?? it.material_code ?? '—';
-      const seenBins = new Set<string>();
-      let total = 0;
-      for (const a of f.allocations) {
-        if (!a.binId) {
-          setError(`Bin source is required for "${label}".`);
-          return;
-        }
-        if (seenBins.has(a.binId)) {
-          setError(`The same bin is selected more than once for "${label}".`);
-          return;
-        }
-        seenBins.add(a.binId);
-        const qty = Number(a.qty);
-        if (!(qty > 0)) {
-          setError(`Qty must be greater than 0 for "${label}".`);
-          return;
-        }
-        const avail = binAvail(it, a.binId);
-        if (avail != null && qty > avail) {
-          setError(`Qty (${qty}) exceeds available stock (${avail}) in the selected bin for "${label}".`);
-          return;
-        }
-        if (!a.pickerId) {
-          setError(`Picker is required for "${label}".`);
-          return;
-        }
-        total += qty;
-        allocations.push({ itemId: it.id, binId: a.binId, qty, pickerId: Number(a.pickerId) });
-      }
-      if (total > it.remaining_qty + 1e-9) {
-        setError(
-          `Total qty (${total}) across bins exceeds remaining (${it.remaining_qty}) for "${label}".`,
-        );
+      const label = it.material_code ?? it.item_name ?? '—';
+      if (!f?.binId) {
+        setError(`Bin is required for ${label}.`);
         return;
       }
+      const qty = Number(f.qty);
+      if (!(qty > 0)) {
+        setError(`Quantity must be greater than 0 for ${label}.`);
+        return;
+      }
+      if (qty > it.remaining_qty + 1e-9) {
+        setError(`Quantity (${qty}) exceeds remaining (${it.remaining_qty}) for ${label}.`);
+        return;
+      }
+      const avail = binAvail(it, f.binId);
+      if (avail != null && qty > avail) {
+        setError(`Quantity (${qty}) exceeds available stock (${avail}) in the bin for ${label}.`);
+        return;
+      }
+      if (!f.pickerId) {
+        setError(`Picker is required for ${label}.`);
+        return;
+      }
+      allocations.push({ itemId: it.id, binId: f.binId, qty, pickerId: Number(f.pickerId) });
     }
-
     try {
       await onSubmit(allocations);
     } catch (e) {
@@ -153,137 +156,272 @@ export default function GeneratePickingModal({
     }
   }
 
+  const th =
+    'sticky top-0 z-10 whitespace-nowrap border-b border-neutral-200 bg-neutral-50 px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400';
+  const td = 'border-b border-neutral-100 px-3 py-3 align-middle dark:border-slate-700/70';
+  const readonlyBox =
+    'flex h-9 items-center rounded-lg border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-800 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100';
+
   return (
-    <Modal
-      open={open}
-      title="Generate Picking"
-      maxWidthClass="max-w-3xl"
-      onClose={() => (submitting ? null : onClose())}
-    >
-      <div className="space-y-4">
-        {(error || loadError) && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {error || loadError}
-          </div>
-        )}
-        {loading ? (
-          <div className="py-6 text-center text-sm text-slate-400">Loading picking data…</div>
-        ) : !pickable || pickable.items.length === 0 ? (
-          <p className="py-4 text-center text-sm text-slate-400">
-            No items with remaining quantity to pick.
-          </p>
-        ) : (
-          <>
-            <p className="text-sm text-slate-500">
-              Select items, quantity, bin source, and picker. Partial item and partial qty are
-              supported; qty cannot exceed {remainingHint ?? 'remaining'}.
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div
+        className="absolute inset-0 bg-slate-900/50 backdrop-blur-[2px]"
+        onClick={() => !submitting && onClose()}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="gen-picking-title"
+        className="relative z-10 flex max-h-[90vh] w-full max-w-[1100px] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_22px_60px_rgba(15,23,42,0.32)] dark:border-slate-700 dark:bg-slate-800"
+      >
+        {/* Header */}
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-neutral-200 px-6 py-5 dark:border-slate-700">
+          <div>
+            <h2
+              id="gen-picking-title"
+              className="text-2xl font-semibold leading-snug text-neutral-900 dark:text-white"
+            >
+              Generate Picking List
+            </h2>
+            <p className="mt-1 text-[13px] text-neutral-500 dark:text-slate-400">
+              Choose the bin, quantity and picker for each material. Quantity cannot exceed{' '}
+              {remainingHint ?? 'remaining'} or the stock available in the bin.
             </p>
-            <div className="max-h-96 space-y-2 overflow-y-auto">
-              {pickable.items.map((it) => {
-                const f = forms[it.id];
-                if (!f) return null;
-                return (
-                  <div key={it.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
-                        checked={f.selected}
-                        onChange={(e) => patchItem(it.id, { selected: e.target.checked })}
-                      />
-                      {it.item_name ?? it.material_code ?? '—'}
-                      <span className="text-xs font-normal text-slate-400">
-                        ({it.material_code ?? 'unmatched'}) · Remaining: {it.remaining_qty}
-                      </span>
-                    </label>
-
-                    {f.selected && (
-                      <div className="mt-3 space-y-2">
-                        {(it.available_bins ?? []).length === 0 && (
-                          <p className="text-[11px] text-amber-600">
-                            No bin with stock for this material.
-                          </p>
-                        )}
-                        {f.allocations.map((a, idx) => {
-                          const avail = binAvail(it, a.binId);
-                          return (
-                            <div
-                              key={idx}
-                              className="grid grid-cols-1 gap-2 rounded-md border border-slate-200 bg-white p-2 sm:grid-cols-[1fr_auto_1fr]"
-                            >
-                              <div>
-                                <label className="block text-xs text-slate-400">Bin Source</label>
-                                <SearchableSelect
-                                  className="mt-0.5"
-                                  value={a.binId}
-                                  onChange={(v) => patchAlloc(it.id, idx, { binId: v })}
-                                  placeholder="— Select —"
-                                  searchPlaceholder="Search bin…"
-                                  options={(it.available_bins ?? []).map((b) => ({
-                                    value: b.bin_id ?? '',
-                                    label: `${b.bin_label ?? '—'} (avail ${b.avail_qty})`,
-                                  }))}
-                                />
-                                {avail != null && (
-                                  <p className="mt-0.5 text-[11px] text-slate-500">
-                                    Available in bin: <span className="font-medium">{avail}</span>
-                                  </p>
-                                )}
-                              </div>
-                              <div className="w-24">
-                                <label className="block text-xs text-slate-400">Qty</label>
-                                <input
-                                  type="number"
-                                  step="any"
-                                  min={0}
-                                  max={avail ?? undefined}
-                                  className="input mt-0.5 w-full text-right text-sm"
-                                  value={a.qty}
-                                  onChange={(e) =>
-                                    patchAlloc(it.id, idx, { qty: Number(e.target.value) })
-                                  }
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-xs text-slate-400">Picker</label>
-                                <SearchableSelect
-                                  className="mt-0.5"
-                                  value={a.pickerId}
-                                  onChange={(v) => patchAlloc(it.id, idx, { pickerId: v })}
-                                  placeholder="— Select —"
-                                  searchPlaceholder="Search picker…"
-                                  options={pickers.map((p) => ({
-                                    value: String(p.id),
-                                    label: p.name,
-                                  }))}
-                                />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
-
-        <div className="flex justify-end gap-2 pt-2">
-          <button type="button" className="btn-secondary" onClick={onClose} disabled={submitting}>
-            Cancel
-          </button>
+          </div>
           <button
             type="button"
-            className="btn-primary"
-            onClick={handleSubmit}
-            disabled={submitting || loading || !pickable || pickable.items.length === 0}
+            onClick={onClose}
+            disabled={submitting}
+            className="rounded-lg p-1.5 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-slate-700"
+            aria-label="Close"
           >
-            {submitting ? 'Generating…' : 'Generate Picking'}
+            <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
         </div>
+
+        {/* Body */}
+        <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
+          {(error || loadError) && (
+            <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
+              <svg className="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10" />
+                <path strokeLinecap="round" d="M12 8v4M12 16h.01" />
+              </svg>
+              {error || loadError}
+            </div>
+          )}
+
+          {docInfo && docInfo.length > 0 && (
+            <section className="grid grid-cols-1 gap-x-4 gap-y-3 rounded-xl border border-neutral-200 bg-neutral-50/60 p-4 sm:grid-cols-2 lg:grid-cols-4 dark:border-slate-700 dark:bg-slate-900/30">
+              {docInfo.map((f) => (
+                <div key={f.label}>
+                  <div className="mb-1 text-xs font-medium text-neutral-600 dark:text-slate-400">{f.label}</div>
+                  <div className={readonlyBox}>
+                    <span className="truncate">{f.value || '-'}</span>
+                  </div>
+                </div>
+              ))}
+            </section>
+          )}
+
+          {/* Material List */}
+          <section className="overflow-hidden rounded-xl border border-neutral-200 shadow-sm dark:border-slate-700">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-semibold text-neutral-900 dark:text-white">Material List</h3>
+                <span className="rounded-full bg-[#E1E4F8] px-2 py-0.5 text-xs font-semibold text-[#5166AE] dark:bg-[#5166AE]/25 dark:text-[#c7cff0]">
+                  {items.length} {items.length === 1 ? 'material' : 'materials'}
+                </span>
+              </div>
+              <span className="text-xs text-neutral-500">
+                Total qty <span className="font-semibold text-neutral-800 dark:text-slate-100">{fmt(totalQty)}</span>
+              </span>
+            </div>
+
+            {loading ? (
+              <div className="py-12 text-center text-sm text-neutral-400">Loading picking data…</div>
+            ) : items.length === 0 ? (
+              <div className="py-12 text-center text-sm text-neutral-400">
+                No materials with remaining quantity to pick.
+              </div>
+            ) : (
+              <div className="max-h-[52vh] overflow-auto">
+                <table className="w-full min-w-[960px] border-separate border-spacing-0 text-sm">
+                  <thead>
+                    <tr>
+                      <th className={`${th} w-12`}>No</th>
+                      <th className={th}>Material</th>
+                      <th className={`${th} text-right`}>Remaining</th>
+                      <th className={`${th} w-56`}>
+                        Bin <span className="text-red-500">*</span>
+                      </th>
+                      <th className={`${th} text-right`}>Available</th>
+                      <th className={`${th} w-28`}>
+                        Quantity <span className="text-red-500">*</span>
+                      </th>
+                      <th className={th}>UoM</th>
+                      <th className={`${th} w-56`}>
+                        Picker <span className="text-red-500">*</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {/* Picker for all items — set once, fills the Picker of every row below. */}
+                    <tr className="bg-[#F5F6FD] dark:bg-[#5166AE]/10">
+                      <td colSpan={7} className="border-b border-[#E1E4F8] px-3 py-3 dark:border-[#5166AE]/30">
+                        <div className="flex items-center gap-3">
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#E1E4F8] text-[#5166AE] dark:bg-[#5166AE]/30 dark:text-[#c7cff0]">
+                            <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                              <circle cx="9" cy="7" r="4" />
+                              <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+                            </svg>
+                          </span>
+                          <div>
+                            <div className="text-sm font-semibold text-[#3F4F8C] dark:text-[#c7cff0]">
+                              Picker for all items
+                            </div>
+                            <div className="text-xs text-neutral-500">
+                              Pick one here to assign it to all {items.length} materials — any row can still be changed.
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="border-b border-[#E1E4F8] px-3 py-3 dark:border-[#5166AE]/30">
+                        <SearchableSelect
+                          value={pickerForAll}
+                          onChange={applyPickerToAll}
+                          placeholder="Assign to all…"
+                          searchPlaceholder="Search picker…"
+                          options={pickerOptions}
+                        />
+                      </td>
+                    </tr>
+
+                    {items.map((it, i) => {
+                      const f = forms[it.id];
+                      if (!f) return null;
+                      const avail = binAvail(it, f.binId);
+                      const qty = Number(f.qty) || 0;
+                      const overAvail = avail != null && qty > avail;
+                      const overRemaining = qty > it.remaining_qty + 1e-9;
+                      const noBins = (it.available_bins ?? []).length === 0;
+                      return (
+                        <tr
+                          key={it.id}
+                          className="bg-white transition-colors hover:bg-neutral-50/80 dark:bg-slate-800 dark:hover:bg-slate-700/40"
+                        >
+                          <td className={`${td} text-neutral-400`}>{i + 1}</td>
+                          <td className={td}>
+                            <div className="max-w-[17rem]">
+                              <div
+                                className="truncate font-medium text-neutral-900 dark:text-white"
+                                title={it.material_name ?? it.item_name ?? undefined}
+                              >
+                                {it.material_name ?? it.item_name ?? '—'}
+                              </div>
+                              {/* PN / material code, always shown at item level. */}
+                              <span
+                                className="mt-1 inline-flex max-w-full items-center truncate rounded-md bg-[#E1E4F8] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#5166AE] dark:bg-[#5166AE]/25 dark:text-[#c7cff0]"
+                                title="PN / Material Code"
+                              >
+                                PN · {it.material_code ?? 'unmatched'}
+                              </span>
+                            </div>
+                          </td>
+                          <td className={`${td} text-right font-semibold tabular-nums text-neutral-800 dark:text-slate-100`}>
+                            {fmt(it.remaining_qty)}
+                          </td>
+                          <td className={td}>
+                            {noBins ? (
+                              <span className="inline-flex items-center rounded-md bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">
+                                No bin with stock
+                              </span>
+                            ) : (
+                              <SearchableSelect
+                                value={f.binId}
+                                onChange={(v) => {
+                                  // Re-fit the qty to the new bin's stock.
+                                  const a = binAvail(it, v);
+                                  patch(it.id, {
+                                    binId: v,
+                                    qty: a != null ? Math.min(it.remaining_qty, a) : f.qty,
+                                  });
+                                }}
+                                placeholder="Select bin…"
+                                searchPlaceholder="Search bin…"
+                                options={(it.available_bins ?? []).map((b) => ({
+                                  value: b.bin_id ?? '',
+                                  label: `${b.bin_label ?? '—'} (avail ${b.avail_qty})`,
+                                }))}
+                              />
+                            )}
+                          </td>
+                          <td
+                            className={`${td} text-right tabular-nums ${
+                              overAvail ? 'font-semibold text-red-600' : 'text-neutral-600 dark:text-slate-300'
+                            }`}
+                          >
+                            {avail == null ? '-' : fmt(avail)}
+                          </td>
+                          <td className={td}>
+                            <input
+                              type="number"
+                              step="any"
+                              min={0}
+                              max={Math.min(it.remaining_qty, avail ?? it.remaining_qty)}
+                              aria-invalid={overAvail || overRemaining}
+                              className={`input w-full text-right text-sm tabular-nums ${
+                                overAvail || overRemaining
+                                  ? 'border-red-400 focus:border-red-500 focus:ring-red-500/30'
+                                  : ''
+                              }`}
+                              value={f.qty}
+                              onChange={(e) => patch(it.id, { qty: Number(e.target.value) })}
+                            />
+                          </td>
+                          <td className={`${td} text-neutral-600 dark:text-slate-300`}>{it.uom ?? '-'}</td>
+                          <td className={td}>
+                            <SearchableSelect
+                              value={f.pickerId}
+                              onChange={(v) => patch(it.id, { pickerId: v })}
+                              placeholder="Select picker…"
+                              searchPlaceholder="Search picker…"
+                              options={pickerOptions}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </div>
+
+        {/* Footer */}
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-neutral-200 bg-neutral-50/60 px-6 py-4 dark:border-slate-700 dark:bg-slate-900/40">
+          <p className="text-xs text-neutral-500">
+            {items.length} material(s) · {fmt(totalQty)} qty will be reserved for picking
+          </p>
+          <div className="flex gap-2">
+            <button type="button" className="btn-secondary" onClick={onClose} disabled={submitting}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-2 rounded-lg bg-[#5166AE] px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#43579a] disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={handleSubmit}
+              disabled={submitting || loading || items.length === 0}
+            >
+              {submitting ? 'Generating…' : 'Generate Picking'}
+            </button>
+          </div>
+        </div>
       </div>
-    </Modal>
+    </div>
   );
 }

@@ -29,10 +29,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // Cheap indexed lookup by primary key.
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, isActive: true },
+      select: { id: true, isActive: true, role: { select: { isActive: true } } },
     });
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Account is inactive or no longer exists');
+    }
+    // Setting a role inactive also cuts off sessions already open with it.
+    if (!user.role.isActive) {
+      throw new UnauthorizedException('Your role is inactive');
     }
 
     return {

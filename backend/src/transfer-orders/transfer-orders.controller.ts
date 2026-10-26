@@ -53,6 +53,13 @@ export class TransferOrdersController {
     return this.service.getLastSyncAt();
   }
 
+  /** A TO seen from its destination warehouse (Inbound from Transfer Stock). */
+  @Get('inbound/:id')
+  @RequirePermissions('transfer-orders:read')
+  findOneInbound(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.service.findOneInbound(id, user);
+  }
+
   @Get(':id')
   @RequirePermissions('transfer-orders:read')
   findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {

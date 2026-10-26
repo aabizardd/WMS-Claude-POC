@@ -16,7 +16,16 @@ function statusBadge(status: string) {
   return map[status] ?? 'bg-slate-100 text-slate-600';
 }
 
-export default function PutawayTab({ history = false }: { history?: boolean }) {
+export default function PutawayTab({
+  history = false,
+  source,
+  basePath = '/admin/inbound/pib',
+}: {
+  history?: boolean;
+  /** GR source served by this tab (PIB / TO); omitted → every putaway. */
+  source?: 'PIB' | 'TO';
+  basePath?: string;
+}) {
   const [data, setData] = useState<Paginated<PutawayRow> | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -36,6 +45,7 @@ export default function PutawayTab({ history = false }: { history?: boolean }) {
         limit: LIMIT,
         search: search || undefined,
         history: history || undefined,
+        source: source || undefined,
         ...params(),
       },
     });
@@ -144,7 +154,7 @@ export default function PutawayTab({ history = false }: { history?: boolean }) {
                     <td className="px-6 py-3">
                       <div className="flex justify-end">
                         <Link
-                          to={`/admin/inbound/pib/putaway/${p.id}`}
+                          to={`${basePath}/putaway/${p.id}`}
                           className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
                         >
                           View

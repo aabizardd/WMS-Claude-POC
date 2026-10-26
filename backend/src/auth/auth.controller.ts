@@ -1,7 +1,8 @@
-import { Body, Controller, Get, HttpCode, Ip, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Ip, Post, Put } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { Public } from './decorators/public.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 
@@ -20,5 +21,16 @@ export class AuthController {
   @Get('me')
   me(@CurrentUser('userId') userId: number) {
     return this.authService.me(userId);
+  }
+
+  // The signed-in user's own profile — no permission needed beyond signing in.
+  @Get('profile')
+  profile(@CurrentUser('userId') userId: number) {
+    return this.authService.profile(userId);
+  }
+
+  @Put('profile')
+  updateProfile(@CurrentUser('userId') userId: number, @Body() dto: UpdateProfileDto) {
+    return this.authService.updateProfile(userId, dto);
   }
 }

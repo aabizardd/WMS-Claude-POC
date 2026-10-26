@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import api from '../../lib/api';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import type { PackingDetail } from '../../types';
+import { progressConfirm } from './progressConfirm';
+import { deleteOutboundDoc } from './outboundDelete';
 
 interface RowInput {
   actual: number;
@@ -46,6 +48,8 @@ export default function PackingDetailPage() {
   const toast = useToast();
   const confirm = useConfirm();
   const canUpdate = has('packing:update');
+  const canDelete = has('packing:delete');
+  const navigate = useNavigate();
 
   const [pk, setPk] = useState<PackingDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,9 +59,16 @@ export default function PackingDetailPage() {
 
   function resetInputs(data: PackingDetail) {
     // Inputs are keyed per material group, not per underlying packing item.
-    const keys = new Set(data.items.map((it) => groupKey(it)));
+    // Actual starts at the max (the group's remaining); issues start at 0.
+    const remainingByKey = new Map<string, number>();
+    for (const it of data.items) {
+      const k = groupKey(it);
+      remainingByKey.set(k, (remainingByKey.get(k) ?? 0) + it.remaining_qty);
+    }
     setInputs(
-      Object.fromEntries([...keys].map((k) => [k, { actual: 0, qtyIssue: 0, quality: 0 }])),
+      Object.fromEntries(
+        [...remainingByKey].map(([k, rem]) => [k, { actual: rem, qtyIssue: 0, quality: 0 }]),
+      ),
     );
   }
 
@@ -79,8 +90,19 @@ export default function PackingDetailPage() {
 
   const editable = canUpdate && pk?.status !== 'Closed';
 
+  // Entering an issue takes it off Actual, so the row never exceeds remaining.
   function patch(key: string, p: Partial<RowInput>) {
-    setInputs((s) => ({ ...s, [key]: { ...s[key], ...p } }));
+    const remaining = (pk?.items ?? [])
+      .filter((it) => groupKey(it) === key)
+      .reduce((sum, it) => sum + it.remaining_qty, 0);
+    setInputs((s) => {
+      const next = { ...s[key], ...p };
+      if ('qtyIssue' in p || 'quality' in p) {
+        const left = remaining - (Number(next.qtyIssue) || 0) - (Number(next.quality) || 0);
+        next.actual = Math.max(0, Math.round(left * 1e6) / 1e6);
+      }
+      return { ...s, [key]: next };
+    });
   }
 
   // Material groups: same material merged into one display row, target &
@@ -176,13 +198,22 @@ export default function PackingDetailPage() {
       return;
     }
 
-    const ok = await confirm({
-      title: 'Save packing progress?',
-      description:
-        'The packing status will update automatically. When remaining reaches 0 it will be Closed and inventory/discrepancy settled.',
-      type: 'info',
-      confirmText: 'Save',
-    });
+    const ok = await confirm(
+      progressConfirm(
+        'packing',
+        groups
+          .filter((g) => g.remaining > 0)
+          .map((g) => {
+            const f = inputs[g.key] ?? { actual: 0, qtyIssue: 0, quality: 0 };
+            return {
+              remaining: g.remaining,
+              actual: Number(f.actual) || 0,
+              qtyIssue: Number(f.qtyIssue) || 0,
+              quality: Number(f.quality) || 0,
+            };
+          }),
+      ),
+    );
     if (!ok) return;
 
     setSaving(true);
@@ -238,7 +269,22 @@ export default function PackingDetailPage() {
             </p>
           </div>
         </div>
-        <span className={`badge ${statusBadge(pk.status)}`}>{pk.status}</span>
+        <div className="flex items-center gap-2">
+          {canDelete && pk.status === 'Open' && (
+            <button
+              className="btn-secondary text-red-600 hover:bg-red-50"
+              onClick={async () => {
+                if (await deleteOutboundDoc('packing', pk.id, pk.packing_id, confirm, toast))
+                  navigate(
+                    `${pk.source_type === 'TRANSFER_ORDER' ? '/admin/outbound/transfer-stock' : '/admin/outbound/sales-order'}/packing`,
+                  );
+              }}
+            >
+              Delete
+            </button>
+          )}
+          <span className={`badge ${statusBadge(pk.status)}`}>{pk.status}</span>
+        </div>
       </div>
 
       <div className="card p-5">

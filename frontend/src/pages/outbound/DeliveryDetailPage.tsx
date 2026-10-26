@@ -9,6 +9,7 @@ import type { DeliveryDetail, ShipmentResult } from '../../types';
 import TablePager from '../../components/TablePager';
 import ToolbarMenu, { ExportIcon, PrintIcon } from '../../components/ToolbarMenu';
 import { deliveryStatusPill, formatDateTime } from './deliveryColumns';
+import { deleteOutboundDoc } from './outboundDelete';
 
 export default function DeliveryDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -17,6 +18,7 @@ export default function DeliveryDetailPage() {
   const navigate = useNavigate();
   const confirm = useConfirm();
   const canShip = has('delivery:update');
+  const canDelete = has('delivery:delete');
 
   const [dl, setDl] = useState<DeliveryDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -169,6 +171,18 @@ export default function DeliveryDetailPage() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h5M20 20v-5h-5M5 19a9 9 0 0014.13-3M19 5A9 9 0 004.87 8" />
             </svg>
           </button>
+          {canDelete && dl.status === 'Open' && !dl.sdo_id && (
+            <button
+              className="btn-secondary text-red-600 hover:bg-red-50"
+              disabled={shipping}
+              onClick={async () => {
+                if (await deleteOutboundDoc('delivery', dl.id, dl.delivery_id, confirm, toast))
+                  navigate(`${basePath}/delivery`);
+              }}
+            >
+              Delete
+            </button>
+          )}
           {canShip && dl.status !== 'Closed' && (
             <button className="btn-primary" onClick={handleGenerateShipment} disabled={shipping}>
               {shipping ? 'Generating…' : 'Generate Shipment'}

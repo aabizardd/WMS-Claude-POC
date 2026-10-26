@@ -20,9 +20,9 @@ export class QueryGoodsReceiveDto extends SortableQueryDto {
   @IsString()
   search?: string;
 
-  // Source filter: PIB (Inbound from PIB tab) vs PO (Local Vendor tab).
-  // Omitted → all sources.
+  // Source filter: PIB (Inbound from PIB tab), PO (Local Vendor tab) or TO
+  // (Transfer Stock tab). Omitted → all sources.
   @IsOptional()
-  @IsIn(['PIB', 'PO', 'CUSTOMER_RETURN', 'TRANSFER_RETURN'])
+  @IsIn(['PIB', 'PO', 'CUSTOMER_RETURN', 'TRANSFER_RETURN', 'TO'])
   source?: string;
 }

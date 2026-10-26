@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import api from '../../lib/api';
 import Modal from '../../components/Modal';
 import NumberInput from '../../components/NumberInput';
 import SearchableSelect from '../../components/SearchableSelect';
+import PickerForAll from '../../components/PickerForAll';
 import ActionMenu from '../../components/ActionMenu';
 import { PrintIcon } from '../../components/icons';
 import { printDoc } from '../../lib/print';
@@ -30,6 +31,11 @@ export default function PutawayDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { has } = useAuth();
   const canAssign = has('putaway:update');
+  // The same page serves PIB and Transfer Stock putaways; go back to the one it came from.
+  const { pathname } = useLocation();
+  const listPath = pathname.startsWith('/admin/inbound/transfer/')
+    ? '/admin/inbound/transfer/putaway'
+    : '/admin/inbound/pib/putaway';
 
   const [pt, setPt] = useState<PutawayDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -37,6 +43,7 @@ export default function PutawayDetailPage() {
 
   const [pickers, setPickers] = useState<{ id: number; name: string }[]>([]);
   const [pickerSelects, setPickerSelects] = useState<Record<string, string>>({});
+  const [pickerForAll, setPickerForAll] = useState('');
   const [assigning, setAssigning] = useState(false);
   const [assignMsg, setAssignMsg] = useState('');
   const [assignModal, setAssignModal] = useState(false);
@@ -193,7 +200,7 @@ export default function PutawayDetailPage() {
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error || 'Putaway not found.'}
         </div>
-        <Link to="/admin/inbound/pib/putaway" className="btn-secondary">← Back to Putaway</Link>
+        <Link to={listPath} className="btn-secondary">← Back to Putaway</Link>
       </div>
     );
   }
@@ -235,7 +242,7 @@ export default function PutawayDetailPage() {
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
-          <Link to="/admin/inbound/pib/putaway" className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Back">
+          <Link to={listPath} className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Back">
             <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
             </svg>
@@ -309,6 +316,20 @@ export default function PutawayDetailPage() {
               )}
             </div>
           </div>
+          {/* One picker for every line, then Assign Pickers to save. */}
+          {canAssign && !putawayMode && pt.items.length > 0 && (
+            <div className="border-b border-slate-200 bg-brand-50/50 px-4 py-3">
+              <PickerForAll
+                className="max-w-sm"
+                value={pickerForAll}
+                pickers={pickers}
+                onChange={(v) => {
+                  setPickerForAll(v);
+                  setPickerSelects(Object.fromEntries(pt.items.map((it) => [it.id, v])));
+                }}
+              />
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-200 text-sm">
               <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">

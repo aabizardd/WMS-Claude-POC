@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
+import ModuleFrame from './ModuleFrame';
 import { useWarehouse } from '../../context/WarehouseContext';
 
 const COLLAPSE_KEY = 'wms_sidebar_collapsed';
@@ -41,9 +42,11 @@ export default function AdminLayout() {
         <main className="print-reset mx-auto w-full max-w-7xl p-4 sm:p-6 lg:p-8">
           {/* Remount page content when the active warehouse changes so all
               warehouse-scoped data re-fetches. */}
-          <div key={activeWarehouseId ?? 'none'}>
-            <Outlet />
-          </div>
+          <ModuleFrame>
+            <div key={activeWarehouseId ?? 'none'}>
+              <Outlet />
+            </div>
+          </ModuleFrame>
         </main>
       </div>
     </div>
