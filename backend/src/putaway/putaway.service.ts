@@ -11,6 +11,7 @@ import { InventoryService } from '../inventory/inventory.service';
 import type { GeneratePutawayDto } from './dto/generate-putaway.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { findGrForMrn } from '../goods-receive/gr-source.util';
+import { scopeWhere, inScope } from '../common/warehouse-scope';
 
 type PutawayOrder = Prisma.PutawayOrderByWithRelationInput;
 const PUTAWAY_SORTABLE: Record<string, (d: SortDir) => PutawayOrder> = {
@@ -23,7 +24,8 @@ const PUTAWAY_SORTABLE: Record<string, (d: SortDir) => PutawayOrder> = {
 
 export interface WarehouseScope {
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
 }
 
 const listInclude = {
@@ -59,10 +61,7 @@ export class PutawayService {
   ) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.PutawayWhereInput {
-    if (scope.role === 'admin') {
-      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
-    }
-    return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
+    return scopeWhere(scope, 'warehouseId');
   }
 
   async findAll(
@@ -133,7 +132,7 @@ export class PutawayService {
     });
     if (
       !pt ||
-      (scope.role !== 'admin' && pt.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, pt.warehouseId))
     ) {
       throw new NotFoundException(`Putaway ${id} not found`);
     }
@@ -309,6 +308,13 @@ export class PutawayService {
             where: { id: it.grItemId },
             data: { qtyRemaining: { decrement: it.plannedQty } },
           });
+          // Transfer IN: the received qty enters stock now, in the Destination Bin.
+          await this.moveTransferStock(tx, it.grItemId, warehouseId, it.binId, it.plannedQty, {
+            module: 'putaway',
+            id: created.id,
+            number: putawayCode,
+            note: 'Generated putaway — stock into the destination bin',
+          });
         } else if (it.mrnItemId) {
           await tx.mrnItem.update({
             where: { id: it.mrnItemId },
@@ -409,6 +415,12 @@ export class PutawayService {
     }
 
     let hasRemaining = false;
+    // Transfer IN: one confirm settles the putaway — what was not handled has
+    // gone back to the GR to be put away on a new putaway.
+    const isTransfer = putaway.goodsReceive?.sourceType === 'TO';
+    if (isTransfer && putaway.status === 'Closed') {
+      throw new BadRequestException(`Putaway ${putaway.putawayCode} is already Closed`);
+    }
 
     await this.prisma.$transaction(async (tx) => {
       for (const row of items) {
@@ -423,7 +435,8 @@ export class PutawayService {
             qualityIssue: row.qualityIssue,
             qtyIssue: row.qtyIssue,
             remainingQty: remaining,
-            binId: row.binId,
+            // Transfer IN: the Destination Bin was fixed when it was generated.
+            binId: it.grItemId ? it.binId : row.binId,
           },
         });
 
@@ -446,18 +459,33 @@ export class PutawayService {
         // (material_code, warehouse).
         const mrnItem = it.mrnItem;
         const grItem = it.grItem;
+        if (grItem) {
+          // Transfer IN: the planned qty already sits in the Destination Bin
+          // (added on generate). Good qty stays available there; the issues move
+          // to their buckets, and what was not handled leaves the bin again —
+          // it goes back to the GR to be put away later.
+          const inv = await this.transferInventory(tx, grItem, putaway.warehouseId);
+          await this.inventory.adjustBinStock(
+            inv.id,
+            it.binId,
+            {
+              avail: -(row.qualityIssue + row.qtyIssue + remaining),
+              quality: row.qualityIssue,
+              qtyIssue: row.qtyIssue,
+            },
+            {
+              module: 'putaway',
+              id: putaway.id,
+              number: putaway.putawayCode,
+              note: 'Putaway confirmed in the destination bin',
+            },
+            tx,
+          );
+          continue;
+        }
         let inv: { id: string } | null = null;
         let receiveBinId: string | null = null;
-        if (grItem) {
-          // TO source: keyed the way the TO receive created it.
-          receiveBinId = grItem.binId;
-          inv = await tx.inventoryManagement.findFirst({
-            where: grItem.materialId
-              ? { materialId: grItem.materialId, warehouseId: putaway.warehouseId }
-              : { materialCode: grItem.materialCode ?? grItem.itemDisplay ?? '', warehouseId: putaway.warehouseId },
-            select: { id: true },
-          });
-        } else if (mrnItem) {
+        if (mrnItem) {
           receiveBinId = mrnItem.binId;
           const material =
             mrnItem.itemId != null
@@ -507,12 +535,12 @@ export class PutawayService {
 
       await tx.putaway.update({
         where: { id },
-        data: { status: hasRemaining ? 'OnProgress' : 'Closed' },
+        data: { status: hasRemaining && !isTransfer ? 'OnProgress' : 'Closed' },
       });
     });
 
     // Record discrepancies for this GR from the closed putaway(s).
-    if (!hasRemaining && putaway.goodsReceive?.id) {
+    if ((!hasRemaining || isTransfer) && putaway.goodsReceive?.id) {
       try {
         await this.recordQualityDiscrepancy(putaway.goodsReceive.id);
       } catch (e) {
@@ -687,6 +715,96 @@ export class PutawayService {
   //  1) every Putaway document of the GR is Closed, and
   //  2) every GR item has remaining qty = 0 (nothing left to putaway).
   // Otherwise the GR stays On Progress.
+  // ---------- Transfer IN stock ----------
+
+  /** The destination warehouse's inventory row of a Transfer IN line (created if missing). */
+  private async transferInventory(
+    tx: Prisma.TransactionClient,
+    grItem: { id: string; materialId: string | null; materialCode: string | null; itemDisplay: string | null },
+    warehouseId: string | null,
+  ) {
+    const materialCode = grItem.materialCode ?? grItem.itemDisplay ?? `ITEM-${grItem.id}`;
+    const found = await tx.inventoryManagement.findFirst({
+      where: grItem.materialId
+        ? { materialId: grItem.materialId, warehouseId }
+        : { materialCode, warehouseId },
+      select: { id: true },
+    });
+    return (
+      found ??
+      (await tx.inventoryManagement.create({
+        data: { materialCode, materialId: grItem.materialId, warehouseId },
+        select: { id: true },
+      }))
+    );
+  }
+
+  /**
+   * Put `qty` of a Transfer IN line into `destBinId` (negative = take it out).
+   * GRs received before receive stopped touching stock still hold their qty
+   * in the receive bin; that bin gives / takes it back so nothing doubles.
+   */
+  private async moveTransferStock(
+    tx: Prisma.TransactionClient,
+    grItemId: string,
+    warehouseId: string | null,
+    destBinId: string | null,
+    qty: number,
+    source: { module: 'putaway'; id: string; number: string; note: string },
+  ) {
+    const grItem = await tx.goodsReceiveItem.findUniqueOrThrow({ where: { id: grItemId } });
+    const inv = await this.transferInventory(tx, grItem, warehouseId);
+    if (grItem.binId) {
+      await this.inventory.adjustBinStock(inv.id, grItem.binId, { avail: -qty }, { ...source, note: `${source.note} (from the receive bin)` }, tx);
+    }
+    await this.inventory.adjustBinStock(inv.id, destBinId, { avail: qty }, source, tx);
+  }
+
+  /**
+   * Delete a putaway nothing has been put away on yet. Its planned qty goes
+   * back to the GR / MRN line to be generated again; for Transfer IN the stock
+   * added to the Destination Bin on generate is taken out again.
+   */
+  async remove(id: string, scope: WarehouseScope) {
+    const pt = await this.prisma.putaway.findUnique({
+      where: { id },
+      include: { items: true },
+    });
+    if (!pt || (scope.role !== 'admin' && !inScope(scope, pt.warehouseId))) {
+      throw new NotFoundException(`Putaway ${id} not found`);
+    }
+    const processed = pt.items.some((it) => it.actualQty + it.qualityIssue + it.qtyIssue > 0);
+    if (pt.status === 'Closed' || processed) {
+      throw new BadRequestException(
+        `Putaway ${pt.putawayCode} has already been put away and cannot be deleted`,
+      );
+    }
+    await this.prisma.$transaction(async (tx) => {
+      for (const it of pt.items) {
+        if (it.grItemId) {
+          await tx.goodsReceiveItem.update({
+            where: { id: it.grItemId },
+            data: { qtyRemaining: { increment: it.plannedQty } },
+          });
+          await this.moveTransferStock(tx, it.grItemId, pt.warehouseId, it.binId, -it.plannedQty, {
+            module: 'putaway',
+            id: pt.id,
+            number: pt.putawayCode,
+            note: 'Putaway deleted — stock out of the destination bin',
+          });
+        } else if (it.mrnItemId) {
+          await tx.mrnItem.update({
+            where: { id: it.mrnItemId },
+            data: { qtyRemaining: { increment: it.plannedQty } },
+          });
+        }
+      }
+      await tx.putaway.delete({ where: { id } });
+    });
+    this.logger.log(`Putaway ${pt.putawayCode} deleted and rolled back`);
+    return { deleted: true };
+  }
+
   private async maybeCloseGoodsReceive(goodsReceiveId: string) {
     // Resolve the GR's source MRN (PIB) to count its remaining items.
     const grDoc = await this.prisma.goodsReceive.findUnique({

@@ -37,6 +37,8 @@ interface Pib {
   date_created?: string | null;
   last_modified?: string | null;
   port?: string | null;
+  // Nomor Aju (customs registration number), a custom field on the shipment.
+  custrecord_msi_aju_no?: string | number | null;
   items?: PibItem[];
 }
 
@@ -88,6 +90,27 @@ export class MrnSyncService {
       sort_order: 'desc',
       filters,
     });
+  }
+
+  /**
+   * Refresh ONE inbound shipment (MRN) from the bridge by its Oracle id, e.g.
+   * right after its Goods Receive: the regular sync only pulls in-transit
+   * shipments, so a received one would otherwise keep its old Oracle data.
+   */
+  async syncOne(oracleId: string): Promise<boolean> {
+    const res = await this.erp.post<PibResponse>('/inbound-shipments/get', {
+      page: 1,
+      page_size: 1,
+      filters: { id: oracleId },
+    });
+    const pib = (res?.data ?? [])[0];
+    if (!pib || String(pib.id) !== String(oracleId)) {
+      this.logger.warn(`syncOne: inbound shipment ${oracleId} not returned by the bridge`);
+      return false;
+    }
+    await this.upsert(pib);
+    this.logger.log(`syncOne: inbound shipment ${oracleId} refreshed (status ${pib.status ?? '-'})`);
+    return true;
   }
 
   async sync(options: SyncOptions = {}): Promise<SyncResult> {
@@ -185,6 +208,10 @@ export class MrnSyncService {
       memo: pib.memo ?? null,
       vesselNumber: pib.vessel_number ?? null,
       billOfLading: pib.bill_of_lading ?? null,
+      ajuNumber:
+        pib.custrecord_msi_aju_no != null && String(pib.custrecord_msi_aju_no).trim()
+          ? String(pib.custrecord_msi_aju_no).trim()
+          : null,
       port: pib.port ?? null,
       dateCreated: pib.date_created ?? null,
       lastModified: lm && !isNaN(lm.getTime()) ? lm : null,

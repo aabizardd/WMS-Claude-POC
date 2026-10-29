@@ -22,8 +22,9 @@ export interface User {
   isActive: boolean;
   roleId: number;
   role: { id: number; name: string };
-  warehouseId: string | null;
-  warehouse: { id: string; name: string } | null;
+  /** Every warehouse the user works in (sorted by name). */
+  warehouseIds: string[];
+  warehouses: { id: string; name: string }[];
   departmentId: string | null;
   department: { id: string; name: string | null } | null;
   subsidiaryId: string | null;
@@ -52,7 +53,8 @@ export interface AuthUser {
   username: string;
   role: string;
   permissions: string[];
-  warehouseId: string | null;
+  /** The warehouses the user is assigned; a non-admin sees all of them together. */
+  warehouseIds: string[];
 }
 
 export interface Permission {
@@ -172,6 +174,8 @@ export interface Mrn {
   memo: string | null;
   vessel_number: string | null;
   bill_of_lading: string | null;
+  /** Nomor Aju: the PIB's customs registration number (Oracle custrecord_msi_aju_no). */
+  aju_number: string | null;
   port: string | null;
   date_created: string | null;
   last_modified: string | null;
@@ -799,10 +803,17 @@ export interface IaTypeInfo {
   oracle_hit: 'always' | 'conditional';
 }
 
+/** One list row: a document in one of its warehouses. */
 export interface InventoryAdjustmentRow {
+  /** "{adjustment_id}:{warehouse_id}" — unique per row. */
   id: string;
+  adjustment_id: string;
   adjustment_number: string;
+  warehouse_id: string;
   warehouse: string | null;
+  warehouse_parent: string | null;
+  /** Warehouses the whole document spans. */
+  warehouse_count: number;
   adjustment_type: IaType;
   adjustment_type_label: string;
   status: IaStatus;
@@ -810,11 +821,30 @@ export interface InventoryAdjustmentRow {
   bin_count: number;
   total_qty: number;
   discrepancy_count: number;
+  class_name: string | null;
+  department_name: string | null;
+  ownership: string | null;
   oracle_id?: string;
   oracle_approval_status?: string;
   oracle_error?: string | null;
   created_by: string | null;
   created_at: string;
+  /** Every line, for the list's accordion. */
+  items: InventoryAdjustmentItemRow[];
+}
+
+/** List filter fields; all free text except created_at (a date range). */
+export type IaFilterField =
+  | 'material_code'
+  | 'warehouse'
+  | 'created_at'
+  | 'bin'
+  | 'material_name'
+  | 'type'
+  | 'created_by';
+export interface IaFilter {
+  field: IaFilterField;
+  values: string[];
 }
 
 export interface AdjMaterialOption {
@@ -823,11 +853,30 @@ export interface AdjMaterialOption {
   material_name: string | null;
   uom_code?: string | null;
   allows_decimal?: boolean;
+  /** Stock in the type's bucket across the user's warehouses. */
+  in_stock?: number;
+  bin_count?: number;
+}
+
+/** Another document still waiting to take stock from a bin. */
+export interface AdjPendingDoc {
+  id: string;
+  adjustment_number: string;
+  status: string;
+  qty: number;
+  created_by: string | null;
 }
 
 export interface AdjBinOption {
   bin_id: string | null;
+  bin_code: string | null;
   bin_label: string | null;
+  warehouse_id: string | null;
+  warehouse_name: string | null;
+  warehouse_parent: string | null;
+  /** Reductions on pending documents; a new one may not use them. */
+  pending_qty: number;
+  pending_docs: AdjPendingDoc[];
   qty_available: number;
   qty_issue: number;
   quality_issue: number;
@@ -851,8 +900,14 @@ export interface InventoryAdjustmentItemRow {
   material_id: string | null;
   material_code: string | null;
   material_name: string | null;
+  warehouse_id: string | null;
+  warehouse_name: string | null;
+  warehouse_parent: string | null;
   bin_id: string | null;
+  bin_code: string | null;
   bin_label: string | null;
+  /** The bin's bucket (Available, or the Issue bucket) when the document was made. */
+  before_qty: number;
   qty_adjustment: number;
   qty_passed: number;
   qty_non_passed: number;
@@ -891,6 +946,9 @@ export interface InventoryAdjustmentDetail {
   adjustment_number: string;
   warehouse: string | null;
   warehouse_id: string | null;
+  ownership: string | null;
+  department_id: string | null;
+  department_name: string | null;
   class_id: string | null;
   class_name: string | null;
   class_oracle_id: string | null;
@@ -1464,6 +1522,8 @@ export interface SalesDeliveryRow {
   document_type: SalesDeliveryDocumentType;
   source_delivery_number: string | null;
   status: SalesDeliveryStatus;
+  /** NetSuite internal id (a generated dummy in the POC). */
+  netsuite_id: string | null;
   from_warehouse: string | null;
   to_warehouse: string | null;
   customer: string | null;
@@ -1500,6 +1560,8 @@ export interface SalesDeliveryDetail {
   source_delivery_id: string | null;
   source_delivery_number: string | null;
   status: SalesDeliveryStatus;
+  /** NetSuite internal id (a generated dummy in the POC). */
+  netsuite_id: string | null;
   from_warehouse_id: string;
   from_warehouse: string | null;
   to_warehouse_id: string;
@@ -1574,6 +1636,7 @@ export interface SalesOrderFilter {
 /** Columns the Sales Delivery list can be filtered on (mirrors the server). */
 export type SalesDeliveryFilterField =
   | 'delivery_number'
+  | 'netsuite_id'
   | 'document_type'
   | 'from_warehouse'
   /** Exact Origin warehouse id (tracking dropdown). */
@@ -1598,4 +1661,231 @@ export interface SalesDeliveryFilter {
   field: SalesDeliveryFilterField;
   /** Several values on one column mean "any of these" (OR). */
   values: string[];
+}
+
+// ---------- Transfer IN (Inbound from Transfer Order), as WMS dev lays it out ----------
+
+export interface TransferMaterialFields {
+  material_code: string | null;
+  material_name: string | null;
+  material_type: string | null;
+  material_category: string | null;
+  uom: string | null;
+  material_length: number | null;
+  material_width: number | null;
+  material_height: number | null;
+  material_weight: number | null;
+}
+
+export interface TransferGrRow {
+  id: string;
+  status: string;
+  to_id: string;
+  transaction_id: string | null;
+  gr_number: string;
+  erp_doc_id: string | null;
+  document_type: string;
+  ownership: string | null;
+  warehouse: string | null;
+  origin_warehouse: string | null;
+  item_count: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  /** With include_items: the GR's lines for the list's accordion. */
+  items?: TransferGrListLine[];
+}
+
+/** A GR line in the list's accordion: material info and every qty bucket. */
+export interface TransferGrListLine {
+  id: string;
+  line_number: number | null;
+  material_code: string | null;
+  material_name: string | null;
+  material_type: string | null;
+  material_category: string | null;
+  uom: string | null;
+  planned_qty: number;
+  actual_qty: number;
+  putaway_qty: number;
+  remain_qty: number;
+}
+
+export type TransferGrFilterField =
+  | 'material_code'
+  | 'origin_warehouse'
+  | 'created_at'
+  | 'material_name'
+  | 'transaction_id'
+  | 'destination_warehouse'
+  | 'erp_doc_id'
+  | 'created_by';
+
+export interface TransferGrFilter {
+  field: TransferGrFilterField;
+  values: string[];
+}
+
+export interface TransferGrItem extends TransferMaterialFields {
+  id: string;
+  line_number: number | null;
+  planned_qty: number;
+  actual_qty: number;
+  putaway_qty: number;
+  remain_qty: number;
+}
+
+export interface TransferGrDetail extends Omit<TransferGrRow, 'warehouse' | 'item_count'> {
+  warehouse: { id: string; name: string } | null;
+  can_receive: boolean;
+  can_delete: boolean;
+  items: TransferGrItem[];
+}
+
+export interface TransferPutawayRow {
+  id: string;
+  status: string;
+  transaction_id: string | null;
+  putaway_code: string;
+  gr_id: string | null;
+  gr_number: string | null;
+  destination_location: string | null;
+  ownership: string | null;
+  warehouse: string | null;
+  can_delete: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TransferPutawayItem extends TransferMaterialFields {
+  id: string;
+  line_number: number | null;
+  planned_qty: number;
+  actual_qty: number;
+  quality_issue: number;
+  qty_issue: number;
+  remaining_qty: number;
+  picker: { id: number; name: string } | null;
+  bin: { id: string; label: string } | null;
+}
+
+export interface TransferPutawayDetail extends Omit<TransferPutawayRow, 'warehouse' | 'destination_location'> {
+  warehouse: { id: string; name: string } | null;
+  can_putaway: boolean;
+  items: TransferPutawayItem[];
+}
+
+export interface TransferHistoryRow {
+  id: string;
+  transaction_id: string | null;
+  gr_number: string | null;
+  putaway_code: string;
+  material_code: string | null;
+  material_name: string | null;
+  material_type: string | null;
+  material_category: string | null;
+  request_qty: number;
+  receive_qty: number;
+  warehouse: string | null;
+  destination_bin: string | null;
+  origin_warehouse: string | null;
+  ownership: string | null;
+  created_at: string;
+}
+
+// ---------- Inbound from PIB, as WMS dev lays it out ----------
+
+/** The MRN (Oracle inbound shipment) fields every PIB GR screen shows. */
+export interface PibShipmentFields {
+  erp_doc_id: string | null;
+  /** Nomor Aju: the customs registration number (Oracle custrecord_msi_aju_no). */
+  aju_number: string | null;
+  expected_shipping_date: string | null;
+  actual_shipping_date: string | null;
+  expected_delivery_date: string | null;
+  actual_delivery_date: string | null;
+  vessel_number: string | null;
+  bill_of_lading: string | null;
+  port: string | null;
+}
+
+export interface PibGrRow extends PibShipmentFields {
+  id: string;
+  status: string;
+  mrn_id: string;
+  transaction_id: string | null;
+  gr_number: string;
+  ownership: string | null;
+  warehouse: string | null;
+  item_count: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  /** With include_items: the GR's lines for the list's accordion. */
+  items?: TransferGrListLine[];
+}
+
+export type PibGrFilterField =
+  | 'material_code'
+  | 'aju_number'
+  | 'warehouse'
+  | 'created_at'
+  | 'vessel_number'
+  | 'material_name'
+  | 'bill_of_lading'
+  | 'transaction_id'
+  | 'erp_doc_id';
+
+export interface PibGrFilter {
+  field: PibGrFilterField;
+  values: string[];
+}
+
+/** A PIB GR line: an MRN item with its PO and supplier. */
+export interface PibGrItem extends TransferGrItem {
+  po_number: string | null;
+  erp_po_id: number | null;
+  supplier: string | null;
+}
+
+export interface PibGrDetail extends Omit<PibGrRow, 'warehouse' | 'item_count' | 'items'> {
+  warehouse: { id: string; name: string } | null;
+  can_receive: boolean;
+  items: PibGrItem[];
+}
+
+export interface PibPutawayRow extends TransferPutawayRow {
+  aju_number: string | null;
+}
+
+export interface PibPutawayItem extends TransferPutawayItem {
+  po_number: string | null;
+  erp_po_id: number | null;
+}
+
+export interface PibPutawayDetail extends Omit<PibPutawayRow, 'warehouse' | 'destination_location'> {
+  warehouse: { id: string; name: string } | null;
+  can_putaway: boolean;
+  items: PibPutawayItem[];
+}
+
+export interface PibHistoryRow {
+  id: string;
+  transaction_id: string | null;
+  aju_number: string | null;
+  po_number: string | null;
+  gr_number: string | null;
+  putaway_code: string;
+  material_code: string | null;
+  material_name: string | null;
+  material_type: string | null;
+  material_category: string | null;
+  request_qty: number;
+  receive_qty: number;
+  warehouse: string | null;
+  destination_bin: string | null;
+  supplier: string | null;
+  ownership: string | null;
+  created_by: string | null;
+  created_at: string;
 }

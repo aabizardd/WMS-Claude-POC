@@ -8,6 +8,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateComplaintDto } from './dto/create-complaint.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { scopeWhere, soleWarehouse } from '../common/warehouse-scope';
 
 type ComplaintOrder = Prisma.ComplaintOrderByWithRelationInput;
 const COMPLAINT_SORTABLE: Record<string, (d: SortDir) => ComplaintOrder> = {
@@ -23,7 +24,8 @@ const COMPLAINT_SORTABLE: Record<string, (d: SortDir) => ComplaintOrder> = {
 export interface ComplaintActor {
   userId: number;
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
 }
 
 const MAX_EVIDENCE = 2;
@@ -63,9 +65,7 @@ export class ComplaintsService {
   private scopeWhere(actor: ComplaintActor): Prisma.ComplaintWhereInput {
     // Admin sees all, optionally filtered by the active warehouse. Everyone
     // else sees only their own complaints.
-    if (actor.role === 'admin') {
-      return actor.warehouseId ? { warehouseId: actor.warehouseId } : {};
-    }
+    if (actor.role === 'admin') return scopeWhere(actor);
     return { userId: actor.userId };
   }
 
@@ -99,7 +99,8 @@ export class ComplaintsService {
         evidences,
         status: 'Open',
         userId: actor.userId,
-        warehouseId: actor.warehouseId,
+        // A user of several warehouses files the complaint without one.
+        warehouseId: soleWarehouse(actor),
       },
       include: listInclude,
     });

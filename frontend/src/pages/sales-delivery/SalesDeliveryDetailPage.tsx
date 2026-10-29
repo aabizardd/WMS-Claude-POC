@@ -147,8 +147,8 @@ export default function SalesDeliveryDetailPage() {
             label="Total Quantity"
             value={<span className="font-semibold text-brand-700">{fmt(d.total_qty)}</span>}
           />
-          {/* POC documents are not posted to NetSuite, so there is no id yet. */}
-          <Info label="Netsuite ID" value={null} />
+          {/* A generated dummy: the POC does not post to NetSuite. */}
+          <Info label="Netsuite ID" value={d.netsuite_id} />
           <Info label="Created By" value={d.created_by} />
           <Info label="Created At (WIB)" value={formatDateTime(d.created_at)} />
         </dl>

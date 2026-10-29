@@ -23,6 +23,7 @@ import { SortableQueryDto } from '../../common/dto/sortable-query.dto';
  */
 export const SALES_DELIVERY_FILTER_FIELDS = [
   'delivery_number',
+  'netsuite_id',
   'document_type',
   'from_warehouse',
   // Exact match on the Origin warehouse id (the tracking page's dropdown).

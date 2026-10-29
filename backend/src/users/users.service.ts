@@ -8,6 +8,7 @@ import * as bcrypt from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { inScope, type WarehouseScope } from '../common/warehouse-scope';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { QueryUserDto } from './dto/query-user.dto';
@@ -19,7 +20,6 @@ const SORTABLE: Record<string, (d: SortDir) => UserOrder> = {
   email: (d) => ({ email: d }),
   is_active: (d) => ({ isActive: d }),
   role: (d) => ({ role: { name: d } }),
-  warehouse: (d) => ({ warehouse: { name: d } }),
   employee_id: (d) => ({ employeeId: d }),
   created_at: (d) => ({ createdAt: d }),
 };
@@ -37,8 +37,10 @@ const userSelect = {
   isActive: true,
   roleId: true,
   role: { select: { id: true, name: true } },
-  warehouseId: true,
-  warehouse: { select: { id: true, name: true } },
+  warehouses: {
+    select: { warehouse: { select: { id: true, name: true } } },
+    orderBy: { warehouse: { name: 'asc' } },
+  },
   departmentId: true,
   department: { select: { id: true, name: true } },
   subsidiaryId: true,
@@ -47,10 +49,18 @@ const userSelect = {
   updatedAt: true,
 } satisfies Prisma.UserSelect;
 
-// Used to scope reads/writes to the current user's warehouse (admin bypasses).
-export interface WarehouseScope {
-  role: string;
-  warehouseId: string | null;
+type UserRow = Prisma.UserGetPayload<{ select: typeof userSelect }>;
+
+/** The client shape: the assigned warehouses flattened, plus their ids. */
+function toUser({ warehouses, ...u }: UserRow) {
+  const list = warehouses.map((w) => w.warehouse);
+  return { ...u, warehouseIds: list.map((w) => w.id), warehouses: list };
+}
+
+/** Users assigned to any of the scope's warehouses (`{}` = no limit). */
+function userScopeWhere(scope: WarehouseScope): Prisma.UserWhereInput {
+  if (!scope.warehouseIds) return {};
+  return { warehouses: { some: { warehouseId: { in: scope.warehouseIds } } } };
 }
 
 // Blank employee ids are stored as null, so several users may leave it empty.
@@ -96,14 +106,9 @@ export class UsersService {
       DEFAULT_ORDER,
     );
 
-    const where: Prisma.UserWhereInput = {};
-    // Non-admins only see users in their warehouse (unchanged). Admins follow
+    // Non-admins see the users sharing one of their warehouses. Admins follow
     // the active warehouse from the header selector; "All" (no selection) → all.
-    if (scope.role !== 'admin') {
-      where.warehouseId = scope.warehouseId ?? '__no_warehouse__';
-    } else if (scope.warehouseId) {
-      where.warehouseId = scope.warehouseId;
-    }
+    const where: Prisma.UserWhereInput = userScopeWhere(scope);
     if (query.search) {
       where.OR = [
         { name: { contains: query.search, mode: 'insensitive' } },
@@ -133,13 +138,13 @@ export class UsersService {
         sort_by: query.sort_by ?? null,
         sort_order: query.sort_order ?? null,
       },
-      rows,
+      rows: rows.map(toUser),
     };
   }
 
   findPickers(warehouseId?: string) {
-    const where: any = { isActive: true, role: { name: 'picker' } };
-    if (warehouseId) where.warehouseId = warehouseId;
+    const where: Prisma.UserWhereInput = { isActive: true, role: { name: 'picker' } };
+    if (warehouseId) where.warehouses = { some: { warehouseId } };
     return this.prisma.user.findMany({
       where,
       select: { id: true, name: true },
@@ -152,28 +157,52 @@ export class UsersService {
       where: { id },
       select: userSelect,
     });
-    if (
-      !user ||
-      (scope && scope.role !== 'admin' && user.warehouseId !== scope.warehouseId)
-    ) {
+    if (!user || (scope && !this.sharesWarehouse(user, scope))) {
       throw new NotFoundException(`User ${id} not found`);
     }
-    return user;
+    return toUser(user);
+  }
+
+  // A non-admin may manage a user who shares at least one of their warehouses.
+  private sharesWarehouse(
+    user: { warehouses: { warehouse: { id: string } }[] },
+    scope: WarehouseScope,
+  ) {
+    if (scope.role === 'admin') return true;
+    return user.warehouses.some((w) => inScope(scope, w.warehouse.id));
+  }
+
+  /**
+   * The warehouses to save. A non-admin may only hand out warehouses they hold
+   * themselves; an edit keeps the target's warehouses the editor cannot see.
+   */
+  private resolveWarehouses(
+    requested: string[],
+    scope: WarehouseScope | undefined,
+    current: string[] = [],
+  ): string[] {
+    const ids = [...new Set(requested)];
+    if (!scope || scope.role === 'admin') return ids;
+    const outside = ids.filter((id) => !inScope(scope, id));
+    if (outside.length) {
+      throw new ForbiddenException('You can only assign warehouses you are assigned to');
+    }
+    return [...new Set([...current.filter((id) => !inScope(scope, id)), ...ids])];
   }
 
   async create(dto: CreateUserDto, actor?: WarehouseScope) {
-    // Non-admins cannot assign the admin (super-admin) role, and the new user
-    // is always scoped to the creator's own warehouse (from their token / /me).
+    // Non-admins cannot assign the admin (super-admin) role, nor a warehouse
+    // they are not assigned to themselves.
     if (actor && actor.role !== 'admin') {
       await this.ensureNotAdminRole(dto.roleId);
-      if (actor.warehouseId) dto = { ...dto, warehouseId: actor.warehouseId };
     }
+    const warehouseIds = this.resolveWarehouses(dto.warehouseIds, actor);
     await this.ensureRoleExists(dto.roleId);
-    await this.ensureWarehouseExists(dto.warehouseId);
+    await this.ensureWarehousesExist(warehouseIds);
     const org = await this.resolveOrg(dto.departmentId, dto.subsidiaryId);
     const password = await bcrypt.hash(dto.password, 10);
     try {
-      return await this.prisma.user.create({
+      const created = await this.prisma.user.create({
         data: {
           name: buildName(dto.firstName, dto.lastName, dto.username),
           firstName: dto.firstName,
@@ -183,13 +212,14 @@ export class UsersService {
           employeeId: cleanEmployeeId(dto.employeeId),
           password,
           roleId: dto.roleId,
-          warehouseId: dto.warehouseId,
+          warehouses: { create: warehouseIds.map((warehouseId) => ({ warehouseId })) },
           departmentId: org.departmentId,
           subsidiaryId: org.subsidiaryId,
           isActive: dto.isActive ?? true,
         },
         select: userSelect,
       });
+      return toUser(created);
     } catch (e) {
       throw this.handlePrismaError(e);
     }
@@ -245,27 +275,28 @@ export class UsersService {
   }
 
   async update(id: number, dto: UpdateUserDto, scope?: WarehouseScope) {
-    const existing = await this.prisma.user.findUnique({ where: { id } });
-    if (
-      !existing ||
-      (scope &&
-        scope.role !== 'admin' &&
-        existing.warehouseId !== scope.warehouseId)
-    ) {
+    const existing = await this.prisma.user.findUnique({
+      where: { id },
+      include: { warehouses: { select: { warehouse: { select: { id: true } } } } },
+    });
+    if (!existing || (scope && !this.sharesWarehouse(existing, scope))) {
       throw new NotFoundException(`User ${id} not found`);
     }
-    // Non-admins cannot assign the admin role, nor move a user out of their own
-    // warehouse (the warehouse stays scoped to the editor's warehouse).
-    if (scope && scope.role !== 'admin') {
-      if (dto.roleId !== undefined) await this.ensureNotAdminRole(dto.roleId);
-      if (scope.warehouseId) dto = { ...dto, warehouseId: scope.warehouseId };
+    // Non-admins cannot assign the admin role, nor warehouses they do not hold.
+    if (scope && scope.role !== 'admin' && dto.roleId !== undefined) {
+      await this.ensureNotAdminRole(dto.roleId);
     }
     if (dto.roleId !== undefined) {
       await this.ensureRoleExists(dto.roleId, existing.roleId);
     }
-    if (dto.warehouseId) {
-      await this.ensureWarehouseExists(dto.warehouseId);
-    }
+    const warehouseIds = dto.warehouseIds
+      ? this.resolveWarehouses(
+          dto.warehouseIds,
+          scope,
+          existing.warehouses.map((w) => w.warehouse.id),
+        )
+      : undefined;
+    if (warehouseIds) await this.ensureWarehousesExist(warehouseIds);
 
     const data: Prisma.UserUpdateInput = {
       email: dto.email,
@@ -287,9 +318,12 @@ export class UsersService {
     if (dto.roleId !== undefined) {
       data.role = { connect: { id: dto.roleId } };
     }
-    // Warehouse is required; connect when provided on update.
-    if (dto.warehouseId) {
-      data.warehouse = { connect: { id: dto.warehouseId } };
+    // Replace the assignments when provided (at least one, checked by the DTO).
+    if (warehouseIds) {
+      data.warehouses = {
+        deleteMany: {},
+        create: warehouseIds.map((warehouseId) => ({ warehouseId })),
+      };
     }
 
     // Department / subsidiary — validated together as a combination. When a
@@ -317,11 +351,12 @@ export class UsersService {
     }
 
     try {
-      return await this.prisma.user.update({
+      const updated = await this.prisma.user.update({
         where: { id },
         data,
         select: userSelect,
       });
+      return toUser(updated);
     } catch (e) {
       throw this.handlePrismaError(e);
     }
@@ -356,12 +391,11 @@ export class UsersService {
     }
   }
 
-  private async ensureWarehouseExists(warehouseId?: string | null) {
-    if (!warehouseId) return;
-    const wh = await this.prisma.warehouse.findUnique({
-      where: { id: warehouseId },
+  private async ensureWarehousesExist(warehouseIds: string[]) {
+    const found = await this.prisma.warehouse.count({
+      where: { id: { in: warehouseIds } },
     });
-    if (!wh) {
+    if (found !== warehouseIds.length) {
       throw new BadRequestException('Selected warehouse does not exist');
     }
   }

@@ -83,6 +83,31 @@ export const icons = {
     </>
   ),
   chevronLeft: <path d="m15 18-6-6 6-6" />,
+  info: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4M12 8h.01" />
+    </>
+  ),
+  download: (
+    <>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <path d="m7 10 5 5 5-5M12 15V3" />
+    </>
+  ),
+  fileText: (
+    <>
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4M10 9H8M16 13H8M16 17H8" />
+    </>
+  ),
+  printer: (
+    <>
+      <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+      <path d="M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6" />
+      <rect x="6" y="14" width="12" height="8" rx="1" />
+    </>
+  ),
   chevronRight: <path d="m9 18 6-6-6-6" />,
 };
 
@@ -238,7 +263,15 @@ export function AddButton({ label, onClick }: { label: string; onClick: () => vo
   );
 }
 
-export function SearchBox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+export function SearchBox({
+  value,
+  onChange,
+  placeholder = 'Search...',
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
   return (
     <div className="relative shrink-0" style={{ width: 320, maxWidth: 400 }}>
       <div className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400">
@@ -257,7 +290,7 @@ export function SearchBox({ value, onChange }: { value: string; onChange: (v: st
         </svg>
       </div>
       <input
-        placeholder="Search..."
+        placeholder={placeholder}
         className="w-full rounded-lg border border-neutral-200 bg-white pl-9 pr-3 text-sm text-black outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
         style={{ height: 34 }}
         value={value}
@@ -273,12 +306,17 @@ export function MasterPager({
   total,
   onPage,
   onPageSize,
+  sizes = [5, 10, 20, 50, 100],
+  className = 'mt-8',
 }: {
   page: number;
   pageSize: number;
   total: number;
   onPage: (p: number) => void;
   onPageSize: (n: number) => void;
+  /** Page sizes offered (the material card grid pages by 9). */
+  sizes?: number[];
+  className?: string;
 }) {
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
@@ -291,7 +329,7 @@ export function MasterPager({
     }`;
 
   return (
-    <div className="no-print mt-8 flex items-center justify-between rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[11px] text-neutral-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
+    <div className={`no-print ${className} flex items-center justify-between rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[11px] text-neutral-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400`}>
       <div className="flex items-center gap-2">
         <span>Showing</span>
         <select
@@ -299,7 +337,7 @@ export function MasterPager({
           value={pageSize}
           onChange={(e) => onPageSize(Number(e.target.value))}
         >
-          {[5, 10, 20, 50, 100].map((n) => (
+          {sizes.map((n) => (
             <option key={n} value={n}>
               {n}
             </option>

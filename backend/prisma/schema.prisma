@@ -51,20 +51,21 @@ model RolePermission {
 }
 
 model User {
-  id          Int        @id @default(autoincrement())
-  name        String // display name, derived from firstName + lastName
-  firstName   String?    @map("first_name")
-  lastName    String?    @map("last_name")
-  email       String     @unique
-  username    String     @unique
+  id         Int             @id @default(autoincrement())
+  name       String // display name, derived from firstName + lastName
+  firstName  String?         @map("first_name")
+  lastName   String?         @map("last_name")
+  email      String          @unique
+  username   String          @unique
   // Company employee number; optional, unique when set.
-  employeeId  String?    @unique @map("employee_id")
-  password    String
-  isActive    Boolean    @default(true)
-  roleId      Int
-  role        Role       @relation(fields: [roleId], references: [id])
-  warehouseId String?    @map("warehouse_id")
-  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
+  employeeId String?         @unique @map("employee_id")
+  password   String
+  isActive   Boolean         @default(true)
+  roleId     Int
+  role       Role            @relation(fields: [roleId], references: [id])
+  // Warehouses the user works in (WMS dev: one user, many warehouses). A
+  // non-admin sees the data of all of them together.
+  warehouses UserWarehouse[]
 
   // Optional org assignment. Subsidiary must belong to the chosen department
   // (department.subsidiaryId is a comma-joined list of subsidiary oracle ids).
@@ -85,14 +86,26 @@ model User {
   inventoryAdjustments InventoryAdjustment[]      @relation("AdjustmentCreator")
   approvedAdjustments  InventoryAdjustment[]      @relation("AdjustmentApprover")
   salesDeliveries      SalesDelivery[]            @relation("SalesDeliveryCreator")
+  goodsReceivesCreated GoodsReceive[]             @relation("GoodsReceiveCreator")
   deliveriesCreated    Delivery[]                 @relation("DeliveryCreator")
   deliveriesUpdated    Delivery[]                 @relation("DeliveryUpdater")
   adjustmentEvents     InventoryAdjustmentEvent[]
   stockMovements       StockMovement[]
 
-  @@index([warehouseId])
   @@index([roleId])
   @@map("users")
+}
+
+model UserWarehouse {
+  userId      Int       @map("user_id")
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  warehouseId String    @map("warehouse_id")
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@id([userId, warehouseId])
+  @@index([warehouseId])
+  @@map("user_warehouses")
 }
 
 // ===================== Material Management =====================
@@ -224,23 +237,24 @@ model Warehouse {
   createdAt              DateTime  @default(now()) @map("created_at")
   updatedAt              DateTime  @updatedAt @map("updated_at")
 
-  bins                 Bin[]
-  users                User[]
-  mrns                 Mrn[]
-  goodsReceives        GoodsReceive[]
-  putaways             Putaway[]
-  inventories          InventoryManagement[]
-  discrepancies        Discrepancy[]
-  salesOrders          SalesOrder[]
-  pickings             Picking[]
-  packings             Packing[]
-  deliveries           Delivery[]
-  complaints           Complaint[]
-  inventoryAdjustments InventoryAdjustment[]
-  purchaseOrders       PurchaseOrder[]
-  transferOrders       TransferOrder[]       @relation("TransferOrderFrom")
-  salesDeliveriesFrom  SalesDelivery[]       @relation("SalesDeliveryFrom")
-  salesDeliveriesTo    SalesDelivery[]       @relation("SalesDeliveryTo")
+  bins                     Bin[]
+  userAssignments          UserWarehouse[]
+  mrns                     Mrn[]
+  goodsReceives            GoodsReceive[]
+  putaways                 Putaway[]
+  inventories              InventoryManagement[]
+  discrepancies            Discrepancy[]
+  salesOrders              SalesOrder[]
+  pickings                 Picking[]
+  packings                 Packing[]
+  deliveries               Delivery[]
+  complaints               Complaint[]
+  inventoryAdjustments     InventoryAdjustment[]
+  inventoryAdjustmentItems InventoryAdjustmentItem[] @relation("AdjustmentItemWarehouse")
+  purchaseOrders           PurchaseOrder[]
+  transferOrders           TransferOrder[]           @relation("TransferOrderFrom")
+  salesDeliveriesFrom      SalesDelivery[]           @relation("SalesDeliveryFrom")
+  salesDeliveriesTo        SalesDelivery[]           @relation("SalesDeliveryTo")
 
   @@index([subsidiaryId])
   @@index([parentId])
@@ -397,8 +411,9 @@ model Department {
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
-  users           User[]
-  salesDeliveries SalesDelivery[]
+  users                User[]
+  salesDeliveries      SalesDelivery[]
+  inventoryAdjustments InventoryAdjustment[]
 
   @@index([subsidiaryId])
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
@@ -464,6 +479,8 @@ model Mrn {
   memo                 String?
   vesselNumber         String?   @map("vessel_number")
   billOfLading         String?   @map("bill_of_lading")
+  // Customs registration (Nomor Aju) of the PIB: Oracle custrecord_msi_aju_no.
+  ajuNumber            String?   @map("aju_number")
   port                 String?
   dateCreated          String?   @map("date_created")
   lastModified         DateTime? @map("last_modified")
@@ -481,6 +498,7 @@ model Mrn {
 
   @@index([warehouseId])
   @@index([status])
+  @@index([ajuNumber])
   @@map("mrns")
 }
 
@@ -554,6 +572,10 @@ model GoodsReceive {
 
   grNumber    String             @unique @map("gr_number")
   status      GoodsReceiveStatus @default(Open)
+  // Who generated it (GR List from a TO, GR from a PO); null for GRs the MRN
+  // sync creates and for older ones.
+  createdById Int?               @map("created_by_id")
+  createdBy   User?              @relation("GoodsReceiveCreator", fields: [createdById], references: [id])
   warehouseId String?            @map("warehouse_id")
   warehouse   Warehouse?         @relation(fields: [warehouseId], references: [id])
 
@@ -875,6 +897,11 @@ model InventoryAdjustment {
   classId String? @map("class_id")
   class   Class?  @relation(fields: [classId], references: [id])
 
+  // Header department chosen at create (defaults to the creator's); its
+  // Department.oracleId is sent to Oracle.
+  departmentId String?     @map("department_id")
+  department   Department? @relation(fields: [departmentId], references: [id])
+
   // Oracle inventory_adjustment_id returned after a successful post. "-" until then.
   oracleId String @default("-") @map("oracle_id")
 
@@ -906,6 +933,7 @@ model InventoryAdjustment {
   @@index([warehouseId])
   @@index([status])
   @@index([classId])
+  @@index([departmentId])
   @@map("inventory_adjustments")
 }
 
@@ -922,6 +950,11 @@ model InventoryAdjustmentItem {
   binId    String? @map("bin_id")
   bin      Bin?    @relation(fields: [binId], references: [id])
   binLabel String? @map("bin_label")
+
+  // A document may span warehouses, so each line keeps the warehouse its bin
+  // belongs to (the header warehouse is the first line's).
+  warehouseId String?    @map("warehouse_id")
+  warehouse   Warehouse? @relation("AdjustmentItemWarehouse", fields: [warehouseId], references: [id])
 
   // Signed delta. Auto-filled negative for the two Discrepancy types (read-only),
   // free +/- for Assembly / Disassembly / CycleCount / StockOpname.
@@ -941,6 +974,7 @@ model InventoryAdjustmentItem {
   @@index([adjustmentId])
   @@index([materialId])
   @@index([binId])
+  @@index([warehouseId])
   @@map("inventory_adjustment_items")
 }
 
@@ -1084,6 +1118,9 @@ model SalesDelivery {
   // Kept in the database but deliberately not exposed by the API or the UI.
   documentNumber String                    @unique @map("document_number") // TI-YYYYMMDD-NNN
   status         SalesDeliveryStatus       @default(Success)
+  // The NetSuite internal id of the posted transfer. The POC does not post to
+  // NetSuite, so a realistic dummy is generated on create (numeric, rising).
+  netsuiteId     String?                   @unique @map("netsuite_id")
 
   // From and To are both picked from the active warehouses and must differ.
   // From defaults to the creator's warehouse on the form.

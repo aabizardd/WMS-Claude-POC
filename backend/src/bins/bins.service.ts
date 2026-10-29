@@ -9,6 +9,7 @@ import { CreateBinDto } from './dto/create-bin.dto';
 import { UpdateBinDto } from './dto/update-bin.dto';
 import { QueryBinDto } from './dto/query-bin.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { inScope, scopeWhere } from '../common/warehouse-scope';
 
 const binInclude = {
   warehouse: true,
@@ -23,7 +24,8 @@ type BinWithRelations = Prisma.BinGetPayload<{ include: typeof binInclude }>;
 // Used to scope reads to the current user's warehouse (admin bypasses).
 export interface WarehouseScope {
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
 }
 
 type BinOrder = Prisma.BinOrderByWithRelationInput;
@@ -61,14 +63,9 @@ export class BinsService {
           ],
         }
       : {};
-    // Non-admins only see bins in their warehouse (unchanged).
-    // Admins follow the active warehouse from the header selector when one is
-    // selected; otherwise they see all.
-    if (scope.role !== 'admin') {
-      where.warehouseId = scope.warehouseId ?? '__no_warehouse__';
-    } else if (scope.warehouseId) {
-      where.warehouseId = scope.warehouseId;
-    }
+    // Non-admins see the bins of every warehouse they are assigned; admins
+    // follow the header selector ("All sites" = no limit).
+    Object.assign(where, scopeWhere(scope));
 
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.bin.count({ where }),
@@ -110,7 +107,7 @@ export class BinsService {
     });
     if (
       !bin ||
-      (scope.role !== 'admin' && bin.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, bin.warehouseId))
     ) {
       throw new NotFoundException(`Bin ${id} not found`);
     }

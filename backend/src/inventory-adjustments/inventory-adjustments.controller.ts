@@ -22,13 +22,27 @@ export class InventoryAdjustmentsController {
     return this.service.types();
   }
 
+  /** Create-form defaults (the user's department). */
+  @Get('defaults')
+  @RequirePermissions('inventory-adjustments:create')
+  defaults(@CurrentUser() user: AuthUser) {
+    return this.service.defaults(user);
+  }
+
   @Get('materials')
   @RequirePermissions('inventory-adjustments:create')
   materialOptions(
     @Query('adjustment_type') type: string,
+    @Query('search') search: string,
+    @Query('page') page: string,
+    @Query('limit') limit: string,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.service.materialOptions(type, user);
+    return this.service.materialOptions(type, user, {
+      search,
+      page: Number(page) || undefined,
+      limit: Number(limit) || undefined,
+    });
   }
 
   @Get('bins')

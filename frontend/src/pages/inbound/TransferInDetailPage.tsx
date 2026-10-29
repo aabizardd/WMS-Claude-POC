@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { Link, useParams } from 'react-router-dom';
 import axios from 'axios';
 import api from '../../lib/api';
-import Modal from '../../components/Modal';
+import { DocModal, DocTable, ReadOnlyField, Stepper } from '../../components/wms/DocKit';
 import TablePager from '../../components/TablePager';
 import ToolbarMenu, { ExportIcon, PrintIcon } from '../../components/ToolbarMenu';
 import { RefreshButton } from '../../components/ListView';
@@ -300,77 +300,63 @@ export default function TransferInDetailPage() {
         />
       </div>
 
-      {/* Generate GR List */}
-      <Modal
+      {/* Generate GR List — as on WMS dev. */}
+      <DocModal
         open={grOpen}
         title="Generate GR List"
-        maxWidthClass="max-w-3xl"
-        onClose={() => (submitting ? null : setGrOpen(false))}
+        subtitle="Set the planned quantity of each material to receive."
+        error={grError}
+        note={`${chosen.length} material(s) · planned ${fmt(chosen.reduce((s, l) => s + (Number(planned[l.id]) || 0), 0))}`}
+        primaryLabel="Generate GR List"
+        primaryBusyLabel="Generating…"
+        busy={submitting}
+        onPrimary={handleGenerate}
+        onClose={() => setGrOpen(false)}
       >
-        <div className="space-y-4">
-          {grError && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{grError}</div>
-          )}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <ReadOnly label="Transaction ID" value={to.tran_id} />
-            <ReadOnly label="ERP Doc ID" value={to.oracle_id} />
-            <ReadOnly label="Document Type" value="Transfer Order" />
-            <ReadOnly label="Warehouse" value={to.destination_warehouse} />
-            <ReadOnly label="Origin Warehouse" value={to.origin_warehouse} />
-            <ReadOnly label="Ownership" value={to.ownership} />
-          </div>
-
-          <h4 className="text-sm font-semibold text-slate-800">Material List</h4>
-          <div className="max-h-80 overflow-auto rounded-lg border border-slate-200">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead className="bg-slate-50 text-left text-slate-600">
-                <tr className="[&>th]:whitespace-nowrap [&>th]:px-3 [&>th]:py-2.5 [&>th]:font-medium">
-                  <th>No</th>
-                  <th>Material Code</th>
-                  <th>Material Name</th>
-                  <th className="text-right">Request Qty</th>
-                  <th className="text-right">Remain Qty</th>
-                  <th className="text-right">
-                    Planned Qty <span className="text-rose-500">*</span>
-                  </th>
-                  <th>UoM</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {chosen.map((l, i) => (
-                  <tr key={l.id}>
-                    <td className="px-3 py-2 text-slate-500">{i + 1}</td>
-                    <td className="whitespace-nowrap px-3 py-2 text-slate-800">{l.material_code ?? l.item_name ?? '-'}</td>
-                    <td className="px-3 py-2 text-slate-700">{l.material_name ?? '-'}</td>
-                    <td className="px-3 py-2 text-right text-slate-700">{fmt(l.quantity)}</td>
-                    <td className="px-3 py-2 text-right text-slate-700">{fmt(l.remain_qty)}</td>
-                    <td className="px-3 py-2 text-right">
-                      <input
-                        type="number"
-                        step="any"
-                        min={0}
-                        max={l.remain_qty}
-                        className="input w-28 text-right"
-                        value={planned[l.id] ?? 0}
-                        onChange={(e) => setPlanned((p) => ({ ...p, [l.id]: Number(e.target.value) }))}
-                      />
-                    </td>
-                    <td className="px-3 py-2 text-slate-700">{l.uom ?? '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="flex justify-end gap-2 pt-1">
-            <button type="button" className="btn-secondary" onClick={() => setGrOpen(false)} disabled={submitting}>
-              Cancel
-            </button>
-            <button type="button" className="btn-primary" onClick={handleGenerate} disabled={submitting}>
-              {submitting ? 'Generating…' : 'Generate GR List'}
-            </button>
-          </div>
+        <div className="grid grid-cols-1 gap-3 rounded-xl border border-neutral-200 bg-neutral-50/60 p-4 sm:grid-cols-2 lg:grid-cols-3 dark:border-slate-700 dark:bg-slate-900/30">
+          <ReadOnlyField label="Transaction ID" value={to.tran_id} />
+          <ReadOnlyField label="ERP Doc ID" value={to.oracle_id} />
+          <ReadOnlyField label="Document Type" value="Transfer Order" />
+          <ReadOnlyField label="Warehouse" value={to.destination_warehouse} />
+          <ReadOnlyField label="Origin Warehouse" value={to.origin_warehouse} />
+          <ReadOnlyField label="Ownership" value={to.ownership} />
         </div>
-      </Modal>
+        <div className="space-y-3">
+          <div className="text-base font-semibold text-neutral-900 dark:text-white">Material List</div>
+          <DocTable
+            rows={chosen}
+            columns={[
+              { label: 'No', render: (_l, i) => i + 1 },
+              {
+                label: 'Material',
+                render: (l) => (
+                  <div className="max-w-[18rem]">
+                    <div className="truncate font-medium">{l.material_name ?? '-'}</div>
+                    <span className="mt-1 inline-flex rounded-md bg-[#E1E4F8] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#5166AE]">
+                      PN · {l.material_code ?? l.item_name ?? '-'}
+                    </span>
+                  </div>
+                ),
+              },
+              { label: 'Request Qty', align: 'right', render: (l) => fmt(l.quantity) },
+              { label: 'Remain Qty', align: 'right', render: (l) => fmt(l.remain_qty) },
+              {
+                label: 'Planned Qty *',
+                align: 'center',
+                render: (l) => (
+                  <Stepper
+                    value={Number(planned[l.id]) || 0}
+                    max={l.remain_qty ?? 0}
+                    invalid={(Number(planned[l.id]) || 0) > (l.remain_qty ?? 0)}
+                    onChange={(v) => setPlanned((p) => ({ ...p, [l.id]: v }))}
+                  />
+                ),
+              },
+              { label: 'UoM', render: (l) => l.uom ?? '-' },
+            ]}
+          />
+        </div>
+      </DocModal>
     </div>
   );
 }
@@ -383,14 +369,5 @@ function Info({ label, value }: { label: string; value: ReactNode }) {
         {value === null || value === undefined || value === '' ? '-' : value}
       </dd>
     </div>
-  );
-}
-
-function ReadOnly({ label, value }: { label: string; value: string | null }) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-semibold text-slate-700">{label}</span>
-      <input className="input bg-slate-50 text-slate-600" value={value ?? '-'} disabled />
-    </label>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../../lib/api";
+import { downloadFile } from "../../lib/download";
 import type {
   InventoryBinGroup,
   InventoryFilter,
@@ -162,6 +163,7 @@ export default function InventoryPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [reloadKey, setReloadKey] = useState(0);
+  const [exporting, setExporting] = useState(false);
 
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initial.filters));
   const [applied, setApplied] = useState<InventoryFilter[]>(initial.filters);
@@ -282,6 +284,24 @@ export default function InventoryPage() {
     });
   }
 
+  /** Every row the filters match (not only this page), in the list's order. */
+  async function exportExcel() {
+    if (exporting) return;
+    setExporting(true);
+    toast.info("Preparing the export…");
+    try {
+      await downloadFile(
+        "/inventory/export",
+        { filters: applied.length ? JSON.stringify(applied) : undefined, ...params() },
+        "inventory_details.xlsx",
+      );
+    } catch {
+      toast.error("Export failed. Please try again.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const rowNo = (i: number) => (page - 1) * pageSize + i + 1;
   const totals = data?.totals;
 
@@ -293,9 +313,9 @@ export default function InventoryPage() {
           subtitle="View stock information across locations"
           menu={[
             {
-              label: "Export",
+              label: exporting ? "Exporting…" : "Export",
               icon: <ExportIcon />,
-              onClick: () => toast.info("Export is not available yet."),
+              onClick: exportExcel,
             },
           ]}
         />

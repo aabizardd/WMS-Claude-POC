@@ -15,11 +15,32 @@ import {
 } from './dto/query-sales-delivery.dto';
 import type { CreateSalesDeliveryDto } from './dto/create-sales-delivery.dto';
 import type { QuerySalesDeliveryDto } from './dto/query-sales-delivery.dto';
+import { inScope, scopeWhere, soleWarehouse } from '../common/warehouse-scope';
 
 export interface WarehouseScope {
   userId: number;
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
+}
+
+/** One line of the Inventory Sales export (a delivery or a return line). */
+export interface SalesDeliveryExportLine {
+  number: string;
+  netsuite_id: string | null;
+  origin: string | null;
+  destination: string | null;
+  customer: string | null;
+  department: string | null;
+  class: string | null;
+  memo: string | null;
+  material_code: string | null;
+  material_name: string | null;
+  bin: string | null;
+  qty: number;
+  created_at: Date;
+  created_by: string | null;
+  remarks: string | null;
 }
 
 const EPS = 1e-9;
@@ -48,6 +69,7 @@ const HEADER_FILTERS: Record<
   delivery_number: (v) => ({
     deliveryNumber: { contains: v, mode: 'insensitive' },
   }),
+  netsuite_id: (v) => ({ netsuiteId: { contains: v, mode: 'insensitive' } }),
   document_type: (v) => ({
     documentType: Object.values(SalesDeliveryDocumentType).includes(
       v as SalesDeliveryDocumentType,
@@ -129,6 +151,7 @@ type SdDetail = Prisma.SalesDeliveryGetPayload<{ include: typeof detailInclude }
 type SdOrder = Prisma.SalesDeliveryOrderByWithRelationInput;
 const SORTABLE: Record<string, (d: SortDir) => SdOrder> = {
   delivery_number: (d) => ({ deliveryNumber: d }),
+  netsuite_id: (d) => ({ netsuiteId: d }),
   status: (d) => ({ status: d }),
   from_warehouse: (d) => ({ fromWarehouse: { name: d } }),
   to_warehouse: (d) => ({ toWarehouse: { name: d } }),
@@ -165,19 +188,13 @@ export class SalesDeliveryService {
    * the moment it is saved.
    */
   private scopeWhere(scope: WarehouseScope): Prisma.SalesDeliveryWhereInput {
-    const touches = (warehouseId: string): Prisma.SalesDeliveryWhereInput[] => [
-      { fromWarehouseId: warehouseId },
-      { toWarehouseId: warehouseId },
+    if (!scope.warehouseIds) return {};
+    const touches: Prisma.SalesDeliveryWhereInput[] = [
+      scopeWhere(scope, 'fromWarehouseId'),
+      scopeWhere(scope, 'toWarehouseId'),
     ];
-    if (scope.role === 'admin') {
-      return scope.warehouseId ? { OR: touches(scope.warehouseId) } : {};
-    }
-    return {
-      OR: [
-        ...(scope.warehouseId ? touches(scope.warehouseId) : []),
-        { createdById: scope.userId },
-      ],
-    };
+    if (scope.role === 'admin') return { OR: touches };
+    return { OR: [...touches, { createdById: scope.userId }] };
   }
 
   private canSee(
@@ -187,8 +204,8 @@ export class SalesDeliveryService {
     if (scope.role === 'admin') return true;
     return (
       sd.createdById === scope.userId ||
-      (!!scope.warehouseId &&
-        (sd.fromWarehouseId === scope.warehouseId || sd.toWarehouseId === scope.warehouseId))
+      inScope(scope, sd.fromWarehouseId) ||
+      inScope(scope, sd.toWarehouseId)
     );
   }
 
@@ -246,10 +263,8 @@ export class SalesDeliveryService {
     ]);
 
     // Only default to values the dropdowns actually offer.
-    const defaultFromWarehouseId =
-      scope.warehouseId && warehouses.some((w) => w.id === scope.warehouseId)
-        ? scope.warehouseId
-        : null;
+    const sole = soleWarehouse(scope);
+    const defaultFromWarehouseId = sole && warehouses.some((w) => w.id === sole) ? sole : null;
     const defaultDepartmentId =
       user?.departmentId && departments.some((d) => d.id === user.departmentId)
         ? user.departmentId
@@ -598,6 +613,7 @@ export class SalesDeliveryService {
           deliveryNumber: numbers.deliveryNumber,
           documentNumber: numbers.documentNumber,
           documentType: isReturn ? 'SalesReturn' : 'SalesDelivery',
+          netsuiteId: await this.nextNetsuiteId(tx),
           sourceDeliveryId,
           status: 'Success',
           fromWarehouseId,
@@ -933,7 +949,9 @@ export class SalesDeliveryService {
         const isDuplicateNumber =
           e instanceof Prisma.PrismaClientKnownRequestError &&
           e.code === 'P2002' &&
-          (target.includes('delivery_number') || target.includes('document_number'));
+          (target.includes('delivery_number') ||
+            target.includes('document_number') ||
+            target.includes('netsuite_id'));
         if (!isDuplicateNumber) throw e;
         if (manualDeliveryNumber && target.includes('delivery_number')) {
           throw new BadRequestException(
@@ -949,6 +967,18 @@ export class SalesDeliveryService {
     throw new BadRequestException(
       'Could not allocate a delivery number — please try again',
     );
+  }
+
+  /**
+   * A dummy NetSuite id for a new document: the highest one so far plus an
+   * uneven step (1-120), so ids rise the way real internal ids do. A clash
+   * with a concurrent create is retried by createWithNumber.
+   */
+  private async nextNetsuiteId(tx: Prisma.TransactionClient): Promise<string> {
+    const [row] = await tx.$queryRaw<{ max: bigint | null }[]>`
+      SELECT MAX(netsuite_id::bigint) AS max FROM sales_deliveries WHERE netsuite_id ~ '^[0-9]+$'`;
+    const last = row?.max != null ? Number(row.max) : 110000;
+    return String(last + 1 + Math.floor(Math.random() * 120));
   }
 
   /**
@@ -990,9 +1020,8 @@ export class SalesDeliveryService {
 
   // ---------- read ----------
 
-  async findAll(query: QuerySalesDeliveryDto, scope: WarehouseScope) {
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 10;
+  /** The list's where and order, shared by the list and its export. */
+  private listQuery(query: QuerySalesDeliveryDto, scope: WarehouseScope) {
     const orderBy = buildOrderBy(query.sort_by, query.sort_order, SORTABLE, {
       createdAt: 'desc',
     });
@@ -1037,6 +1066,100 @@ export class SalesDeliveryService {
       and.push({ items: { some: { AND: itemClauses } } });
     }
     if (and.length) where.AND = and;
+    return { where, orderBy, filters, itemClauses };
+  }
+
+  /**
+   * The Inventory Sales export (WMS dev's "SDKawasan" workbook): one row per
+   * line, for every document of `documentType` the list's filters match —
+   * not only one page — in the list's order. Line filters (material, bin,
+   * remarks) keep only the matching lines, as the list's accordion does.
+   * Yielded in batches so a large export streams.
+   */
+  async *exportLines(
+    query: QuerySalesDeliveryDto,
+    scope: WarehouseScope,
+    documentType: SalesDeliveryDocumentType,
+  ): AsyncGenerator<SalesDeliveryExportLine[]> {
+    // The Delivery / Return toggle does not narrow an export: each type is
+    // its own sheet.
+    const { where, orderBy, itemClauses } = this.listQuery({ ...query, document_type: undefined }, scope);
+    const BATCH = 1000;
+    for (let skip = 0; ; skip += BATCH) {
+      const lines = await this.prisma.salesDeliveryItem.findMany({
+        where: {
+          salesDelivery: { AND: [where, { documentType }] },
+          ...(itemClauses.length ? { AND: itemClauses } : {}),
+        },
+        include: {
+          bin: { select: { binLabel: true } },
+          salesDelivery: {
+            include: {
+              fromWarehouse: { select: { name: true } },
+              toWarehouse: { select: { name: true } },
+              customer: { select: { companyName: true } },
+              department: { select: { name: true } },
+              class: { select: { name: true } },
+              createdBy: { select: { name: true } },
+            },
+          },
+        },
+        // Documents in the list's order, each one's lines as entered; the ids
+        // keep paging stable on ties.
+        orderBy: [{ salesDelivery: orderBy }, { salesDeliveryId: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        skip,
+        take: BATCH,
+      });
+      if (lines.length) {
+        yield lines.map((it) => {
+          const sd = it.salesDelivery;
+          return {
+            number: sd.deliveryNumber,
+            netsuite_id: sd.netsuiteId,
+            origin: sd.fromWarehouse?.name ?? null,
+            destination: sd.toWarehouse?.name ?? null,
+            customer: sd.customer?.companyName ?? null,
+            department: sd.department?.name ?? null,
+            class: sd.class?.name ?? null,
+            memo: sd.memo,
+            material_code: it.materialCode,
+            material_name: it.materialName,
+            bin: it.binLabel ?? it.bin?.binLabel ?? null,
+            qty: it.qtyTransfer,
+            created_at: sd.createdAt,
+            created_by: sd.createdBy?.name ?? null,
+            remarks: it.remarks,
+          };
+        });
+      }
+      if (lines.length < BATCH) return;
+    }
+  }
+
+  /**
+   * The period an export covers, for its file name: the Created At filter's
+   * range when there is one, else the first and last matching document.
+   */
+  async exportPeriod(query: QuerySalesDeliveryDto, scope: WarehouseScope): Promise<{ from: Date; to: Date }> {
+    const { where, filters } = this.listQuery({ ...query, document_type: undefined }, scope);
+    const range = filters.find((f) => SALES_DELIVERY_DATE_FIELDS.includes(f.field))?.values[0];
+    const bounds = range ? (this.createdAtRange(range).createdAt as Prisma.DateTimeFilter) : undefined;
+    const from = bounds?.gte instanceof Date ? bounds.gte : null;
+    const to = bounds?.lte instanceof Date ? bounds.lte : null;
+    if (from && to) return { from, to };
+    const agg = await this.prisma.salesDelivery.aggregate({
+      where,
+      _min: { createdAt: true },
+      _max: { createdAt: true },
+    });
+    const now = new Date();
+    return { from: from ?? agg._min.createdAt ?? now, to: to ?? agg._max.createdAt ?? now };
+  }
+
+  async findAll(query: QuerySalesDeliveryDto, scope: WarehouseScope) {
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 10;
+    const { where, orderBy, filters } = this.listQuery(query, scope);
 
     const [total, rows, qtySum] = await this.prisma.$transaction([
       this.prisma.salesDelivery.count({ where }),
@@ -1159,6 +1282,7 @@ export class SalesDeliveryService {
       document_type: sd.documentType,
       source_delivery_number: sd.sourceDelivery?.deliveryNumber ?? null,
       status: sd.status,
+      netsuite_id: sd.netsuiteId,
       from_warehouse: sd.fromWarehouse?.name ?? null,
       to_warehouse: sd.toWarehouse?.name ?? null,
       customer: sd.customer?.companyName ?? null,
@@ -1180,6 +1304,7 @@ export class SalesDeliveryService {
       source_delivery_id: sd.sourceDeliveryId,
       source_delivery_number: sd.sourceDelivery?.deliveryNumber ?? null,
       status: sd.status,
+      netsuite_id: sd.netsuiteId,
       from_warehouse_id: sd.fromWarehouseId,
       from_warehouse: sd.fromWarehouse?.name ?? null,
       to_warehouse_id: sd.toWarehouseId,

@@ -14,6 +14,8 @@ interface WarehouseContextValue {
   warehouses: WarehouseOption[];
   activeWarehouseId: string | null;
   activeWarehouseName: string | null;
+  /** A non-admin's assigned warehouses, all seen together (empty for an admin). */
+  assignedWarehouses: WarehouseOption[];
   canSwitch: boolean; // admin only
   setActiveWarehouse: (id: string) => void;
   ready: boolean;
@@ -61,9 +63,10 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
           setActiveId(chosen);
           if (!chosen) localStorage.setItem(ACTIVE_WAREHOUSE_KEY, ALL_SENTINEL);
         } else {
-          // Non-admin: fixed to their own warehouse; never send the override.
+          // Non-admin: always every assigned warehouse together; never send
+          // the override. "Active" only when there is exactly one.
           localStorage.removeItem(ACTIVE_WAREHOUSE_KEY);
-          setActiveId(user.warehouseId ?? null);
+          setActiveId(user.warehouseIds.length === 1 ? user.warehouseIds[0] : null);
         }
       })
       .catch(() => active && setWarehouses([]))
@@ -86,10 +89,16 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const activeWarehouseName = useMemo(
-    () => (Array.isArray(warehouses) ? warehouses : []).find((w) => w.id === activeWarehouseId)?.name ?? null,
-    [warehouses, activeWarehouseId],
+  const assignedWarehouses = useMemo(
+    () => (isAdmin || !user ? [] : warehouses.filter((w) => user.warehouseIds.includes(w.id))),
+    [warehouses, user, isAdmin],
   );
+
+  const activeWarehouseName = useMemo(() => {
+    const one = (Array.isArray(warehouses) ? warehouses : []).find((w) => w.id === activeWarehouseId)?.name;
+    if (one) return one;
+    return assignedWarehouses.length > 1 ? `${assignedWarehouses.length} warehouses` : null;
+  }, [warehouses, activeWarehouseId, assignedWarehouses]);
 
   return (
     <WarehouseContext.Provider
@@ -97,6 +106,7 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
         warehouses,
         activeWarehouseId,
         activeWarehouseName,
+        assignedWarehouses,
         canSwitch: isAdmin,
         setActiveWarehouse,
         ready,

@@ -7,9 +7,11 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpHttpService } from '../erp/erp-http.service';
-import { InventoryService } from '../inventory/inventory.service';
+import { TransferOrderSyncService } from '../transfer-orders/transfer-order-sync.service';
+import { highestSeq } from '../common/doc-sequence';
 import type { GenerateGrListFromToDto } from './dto/generate-gr-from-to.dto';
 import type { WarehouseScope } from './goods-receive.service';
+import { inScope } from '../common/warehouse-scope';
 
 // TOs not fulfilled yet have nothing to receive.
 const NOT_RECEIVABLE_TO_STATUSES = ['Pending Approval', 'Pending Fulfillment'];
@@ -43,16 +45,16 @@ export class GoodsReceiveFromToService {
   constructor(
     private prisma: PrismaService,
     private erp: ErpHttpService,
-    private inventory: InventoryService,
+    private toSync: TransferOrderSyncService,
   ) {}
 
   /** Step 1: an Open GR with planned quantities. */
-  async generateList(dto: GenerateGrListFromToDto, scope: WarehouseScope) {
+  async generateList(dto: GenerateGrListFromToDto, scope: WarehouseScope & { userId?: number }) {
     const to = await this.prisma.transferOrder.findUnique({
       where: { id: dto.transferOrderId },
       include: { items: true },
     });
-    if (!to || (scope.role !== 'admin' && to.toWarehouseId !== scope.warehouseId)) {
+    if (!to || (scope.role !== 'admin' && !inScope(scope, to.toWarehouseId))) {
       throw new NotFoundException(`Transfer Order ${dto.transferOrderId} not found`);
     }
     if (NOT_RECEIVABLE_TO_STATUSES.includes(to.statusName ?? '')) {
@@ -93,9 +95,15 @@ export class GoodsReceiveFromToService {
 
     // Temporary number until Oracle gives the receipt its own on Receive.
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const count = await this.prisma.goodsReceive.count({
-      where: { grNumber: { startsWith: `GR-${today}-` } },
-    });
+    // Highest number in use, not a count: GR Lists can be deleted.
+    const count = highestSeq(
+      (
+        await this.prisma.goodsReceive.findMany({
+          where: { grNumber: { startsWith: `GR-${today}-` } },
+          select: { grNumber: true },
+        })
+      ).map((g) => g.grNumber),
+    );
     const grNumber = `GR-${today}-${String(count + 1).padStart(5, '0')}`;
 
     const gr = await this.prisma.goodsReceive.create({
@@ -106,6 +114,7 @@ export class GoodsReceiveFromToService {
         grNumber,
         status: 'Open',
         warehouseId,
+        createdById: scope.userId ?? null,
         items: {
           create: dto.items.map((row) => {
             const line = lineById.get(row.lineId)!;
@@ -147,13 +156,17 @@ export class GoodsReceiveFromToService {
     return byLine;
   }
 
-  /** Step 2: submit the GR's actual quantities to Oracle and take them into stock. */
+  /**
+   * Step 2: submit the GR's actual quantities to Oracle. As on WMS dev the
+   * receive only records the Item Receipt — the stock lands in a bin when the
+   * putaway is generated (its Destination Bin), not here.
+   */
   async receive(grId: string, scope: WarehouseScope & { userId?: number }) {
     const gr = await this.prisma.goodsReceive.findUnique({
       where: { id: grId },
       include: { items: { include: { transferOrderItem: true } } },
     });
-    if (!gr || gr.sourceType !== 'TO' || (scope.role !== 'admin' && gr.warehouseId !== scope.warehouseId)) {
+    if (!gr || gr.sourceType !== 'TO' || (scope.role !== 'admin' && !inScope(scope, gr.warehouseId))) {
       throw new NotFoundException(`Goods Receive ${grId} not found`);
     }
     if (gr.status !== 'Open' && gr.status !== 'SyncFailed') {
@@ -163,14 +176,12 @@ export class GoodsReceiveFromToService {
     if (!to?.oracleId) {
       throw new BadRequestException('Transfer Order has no ERP Doc ID — re-sync it from ERP first');
     }
-    const warehouseId = gr.warehouseId;
-    if (!warehouseId) throw new BadRequestException('Goods Receive has no warehouse');
+    if (!gr.warehouseId) throw new BadRequestException('Goods Receive has no warehouse');
 
     const lines = gr.items.filter((it) => it.qtyActual > 0);
     if (!lines.length) throw new BadRequestException('Enter the actual qty of at least one item');
     for (const it of lines) {
       const label = it.materialCode ?? it.itemDisplay ?? it.id;
-      if (!it.binId) throw new BadRequestException(`Select the receive bin for "${label}"`);
       if (it.lineNumber == null) throw new BadRequestException(`"${label}" has no ERP line number`);
     }
 
@@ -198,40 +209,15 @@ export class GoodsReceiveFromToService {
       await this.prisma.$transaction(async (tx) => {
         await tx.goodsReceive.update({
           where: { id: gr.id },
-          // Received in Oracle and in stock: ready for putaway.
+          // Received in Oracle: ready for putaway.
           data: { grNumber, status: 'OnProgress' },
         });
         for (const it of lines) {
-          // What is received is what can be put away.
+          // What is received is what can be put away (stock moves in then).
           await tx.goodsReceiveItem.update({
             where: { id: it.id },
             data: { qtyRemaining: it.qtyActual },
           });
-          const materialCode = it.materialCode ?? it.itemDisplay ?? `ITEM-${it.id}`;
-          // Find-or-create the destination inventory row, as a PIB receive does.
-          let inv = await tx.inventoryManagement.findFirst({
-            where: it.materialId ? { materialId: it.materialId, warehouseId } : { materialCode, warehouseId },
-            select: { id: true },
-          });
-          if (!inv) {
-            inv = await tx.inventoryManagement.create({
-              data: { materialCode, materialId: it.materialId, warehouseId },
-              select: { id: true },
-            });
-          }
-          await this.inventory.adjustBinStock(
-            inv.id,
-            it.binId,
-            { avail: it.qtyActual },
-            {
-              module: 'goods-receive',
-              id: gr.id,
-              number: grNumber,
-              actorId: scope.userId,
-              note: `Received from Transfer Order ${to.tranId ?? to.oracleId}`,
-            },
-            tx,
-          );
           // Received at the destination: no longer in transit at the origin.
           if (it.transferOrderItemId) {
             await tx.transferOrderItem.update({
@@ -251,6 +237,18 @@ export class GoodsReceiveFromToService {
       );
     }
     this.logger.log(`GR ${gr.grNumber} received as ${grNumber} (Oracle receipt id ${receipt?.id ?? '—'})`);
+
+    // Pull the Transfer Order back from Oracle so its status and received
+    // quantities match what the receipt just recorded. Non-fatal — the GR is
+    // saved; a failed refresh only leaves the TO's numbers stale until the
+    // next sync.
+    if (to.tranId) {
+      try {
+        await this.toSync.syncOne(to.tranId);
+      } catch (e) {
+        this.logger.warn(`Transfer Order ${to.tranId} refresh after receipt failed: ${(e as Error).message}`);
+      }
+    }
     return { accepted: true, gr_number: grNumber };
   }
 }

@@ -1,703 +1,884 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import axios from 'axios';
-import api from '../../lib/api';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
+import axios from "axios";
+import api from "../../lib/api";
 import type {
   AdjBinOption,
   AdjDiscrepancyOption,
   AdjMaterialOption,
+  AdjPendingDoc,
   IaType,
   IaTypeInfo,
-} from '../../types';
-import { useToast } from '../../context/ToastContext';
-import { useWarehouse } from '../../context/WarehouseContext';
-import SearchableSelect from '../../components/SearchableSelect';
-import Modal from '../../components/Modal';
+} from "../../types";
+import { useToast } from "../../context/ToastContext";
+import { useConfirm } from "../../context/ConfirmContext";
+import { useWarehouse } from "../../context/WarehouseContext";
+import SearchableSelect from "../../components/SearchableSelect";
+import { Lucide, MasterPager, icons } from "../../components/master/MasterKit";
+import { adjStatusLabel } from "./iaShared";
 
-interface BinLine {
-  key: string;
-  bin_id: string;
-  bin_label: string | null;
-  avail: number;
-  qty_issue: number;
-  quality_issue: number;
-  /** Auto-filled and read-only for the Discrepancy types. */
+const BASE = "/admin/inventory-adjustments";
+const EPS = 1e-9;
+const MEMO_MAX = 300;
+const CARD = "rounded-xl bg-white shadow-md dark:bg-slate-800";
+
+interface Line {
   qty_adjustment: number;
   qty_passed: number;
   qty_non_passed: number;
 }
 
+/** One picked material: its candidate bins and the bins ticked so far. */
 interface Group {
-  material_id: string;
-  material_code: string | null;
-  material_name: string | null;
-  allows_decimal: boolean;
-  binOptions: AdjBinOption[];
-  binsLoaded: boolean;
-  lines: BinLine[];
+  material: AdjMaterialOption & { material_id: string };
+  bins: AdjBinOption[];
+  loaded: boolean;
+  open: boolean;
+  lines: Record<string, Line>;
 }
 
-let seq = 0;
-const nextKey = () => `l-${seq++}`;
-const EPS = 1e-9;
+const fmt = (n: number) =>
+  n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+
+function errMessage(err: unknown, fallback: string): string {
+  if (axios.isAxiosError(err)) {
+    const m = err.response?.data?.message;
+    if (Array.isArray(m)) return m.join(", ");
+    if (typeof m === "string") return m;
+  }
+  return fallback;
+}
+
+/** What the type lets the user do, shown above the header fields (WMS dev's blue note). */
+function ruleNote(rule: IaTypeInfo): ReactNode {
+  if (rule.qty_mode === "auto_negative")
+    return `Only bins with ${rule.filter_bucket === "qty_issue" ? "Quantity Issue" : "Quality Issue"} are available. The adjustment takes the whole issue qty and cannot be edited.`;
+  if (rule.qty_mode === "passed_non_passed")
+    return "Only bins with Quality Issue are available. Enter Qty Passed (back to available, sent to Oracle) and/or Qty Non-Passed.";
+  return "All bins are available. Enter a positive qty to add stock or a negative qty to reduce it.";
+}
 
 export default function InventoryAdjustmentCreatePage() {
   const navigate = useNavigate();
   const toast = useToast();
-  const { activeWarehouseId, activeWarehouseName, canSwitch } = useWarehouse();
+  const confirm = useConfirm();
+  const { activeWarehouseId } = useWarehouse();
 
   const [types, setTypes] = useState<IaTypeInfo[]>([]);
-  const [type, setType] = useState<IaType | ''>('');
-  const [memo, setMemo] = useState('');
-  const [classes, setClasses] = useState<{ id: string; name: string | null; oracleId: string }[]>([]);
-  const [classId, setClassId] = useState('');
-  const [materials, setMaterials] = useState<AdjMaterialOption[]>([]);
+  const [type, setType] = useState<IaType | "">("");
+  const [classes, setClasses] = useState<
+    { id: string; name: string | null; oracleId: string }[]
+  >([]);
+  const [classId, setClassId] = useState("");
+  const [departments, setDepartments] = useState<
+    { id: string; name: string | null; oracleId: string }[]
+  >([]);
+  const [departmentId, setDepartmentId] = useState("");
+  const [memo, setMemo] = useState("");
+
+  // Material card grid
+  const [search, setSearch] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const [mPage, setMPage] = useState(1);
+  const [mSize, setMSize] = useState(9);
+  const [materials, setMaterials] = useState<{
+    rows: AdjMaterialOption[];
+    total: number;
+  }>({ rows: [], total: 0 });
+  const [mLoading, setMLoading] = useState(false);
+
   const [groups, setGroups] = useState<Group[]>([]);
-  const [discrepancies, setDiscrepancies] = useState<AdjDiscrepancyOption[]>([]);
+  const [discrepancies, setDiscrepancies] = useState<AdjDiscrepancyOption[]>(
+    [],
+  );
   const [selectedDiscs, setSelectedDiscs] = useState<Set<string>>(new Set());
+  const [reviewing, setReviewing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [confirming, setConfirming] = useState(false);
 
-  // Admin with "All sites" selected cannot create — needs a concrete warehouse.
-  const noWarehouse = canSwitch && !activeWarehouseId;
-  const rule = useMemo(() => types.find((t) => t.value === type) ?? null, [types, type]);
+  const rule = useMemo(
+    () => types.find((t) => t.value === type) ?? null,
+    [types, type],
+  );
+  const qtyMode = rule?.qty_mode;
 
-  // The behaviour matrix comes from the server so the UI cannot drift from it.
+  // Lookups and the user's own department as the default.
   useEffect(() => {
     api
-      .get<IaTypeInfo[]>('/inventory-adjustments/types')
+      .get<IaTypeInfo[]>("/inventory-adjustments/types")
       .then((r) => setTypes(r.data))
       .catch(() => setTypes([]));
     api
-      .get<{ id: string; name: string | null; oracleId: string }[]>('/classes/options')
-      .then((r) => setClasses(r.data))
+      .get<{ id: string; name: string | null; oracleId: string }[]>(
+        "/classes/options",
+      )
+      .then((r) => {
+        setClasses(r.data);
+        const preferred = r.data.find((c) =>
+          /inventory international/i.test(c.name ?? ""),
+        );
+        if (preferred) setClassId((cur) => cur || preferred.id);
+      })
       .catch(() => setClasses([]));
+    api
+      .get<{ id: string; name: string | null; oracleId: string }[]>(
+        "/departments/options",
+      )
+      .then((r) => setDepartments(r.data))
+      .catch(() => setDepartments([]));
+    api
+      .get<{ department_id: string | null }>("/inventory-adjustments/defaults")
+      .then(
+        (r) =>
+          r.data.department_id &&
+          setDepartmentId((cur) => cur || r.data.department_id!),
+      )
+      .catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebounced(search.trim());
+      setMPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
   // FR-IA-05: the material list depends on the chosen type's stock bucket.
   useEffect(() => {
-    if (noWarehouse || !type) {
-      setMaterials([]);
+    if (!type) {
+      setMaterials({ rows: [], total: 0 });
       return;
     }
+    let cancelled = false;
+    setMLoading(true);
     api
-      .get<AdjMaterialOption[]>('/inventory-adjustments/materials', {
-        params: { adjustment_type: type },
-      })
-      .then((r) => setMaterials(r.data))
-      .catch(() => setMaterials([]));
-  }, [activeWarehouseId, noWarehouse, type]);
+      .get<{ rows: AdjMaterialOption[]; total_data: number }>(
+        "/inventory-adjustments/materials",
+        {
+          params: {
+            adjustment_type: type,
+            search: debounced || undefined,
+            page: mPage,
+            limit: mSize,
+          },
+        },
+      )
+      .then(
+        (r) =>
+          !cancelled &&
+          setMaterials({ rows: r.data.rows, total: r.data.total_data }),
+      )
+      .catch(() => !cancelled && setMaterials({ rows: [], total: 0 }))
+      .finally(() => !cancelled && setMLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [type, debounced, mPage, mSize, activeWarehouseId]);
 
-  // Reset every line when the warehouse changes.
+  // Another warehouse scope means other bins: start over.
   useEffect(() => {
     setGroups([]);
     setSelectedDiscs(new Set());
   }, [activeWarehouseId]);
 
-  const materialIds = useMemo(() => groups.map((g) => g.material_id), [groups]);
-  const materialIdsKey = materialIds.join(',');
-  const binIds = useMemo(
-    () => [...new Set(groups.flatMap((g) => g.lines.map((l) => l.bin_id)))],
-    [groups],
-  );
-  const binIdsKey = binIds.join(',');
+  // ----- selection -----
+  const selectedIds = new Set(groups.map((g) => g.material.material_id));
 
-  // FR-IA-10: the discrepancy list follows the picked materials, and only exists
-  // for the two Discrepancy types.
-  const loadDiscrepancies = useCallback(() => {
-    if (!type || !rule?.discrepancy_list || materialIds.length === 0) {
-      setDiscrepancies([]);
+  async function toggleMaterial(m: AdjMaterialOption) {
+    if (!m.material_id || !type) return;
+    const id = m.material_id;
+    if (selectedIds.has(id)) {
+      removeMaterial(id);
       return;
     }
-    api
-      .get<AdjDiscrepancyOption[]>('/inventory-adjustments/discrepancies', {
-        params: {
-          adjustment_type: type,
-          material_ids: materialIds.join(','),
-          bin_ids: binIds.join(','),
-        },
-      })
-      .then((r) => setDiscrepancies(r.data))
-      .catch(() => setDiscrepancies([]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [type, rule?.discrepancy_list, materialIdsKey, binIdsKey]);
+    setGroups((gs) => [
+      ...gs,
+      {
+        material: { ...m, material_id: id },
+        bins: [],
+        loaded: false,
+        open: true,
+        lines: {},
+      },
+    ]);
+    try {
+      const r = await api.get<AdjBinOption[]>("/inventory-adjustments/bins", {
+        params: { material_id: id, adjustment_type: type },
+      });
+      setGroups((gs) =>
+        gs.map((g) =>
+          g.material.material_id === id
+            ? { ...g, bins: r.data, loaded: true }
+            : g,
+        ),
+      );
+    } catch {
+      setGroups((gs) =>
+        gs.map((g) =>
+          g.material.material_id === id ? { ...g, loaded: true } : g,
+        ),
+      );
+    }
+  }
 
-  useEffect(loadDiscrepancies, [loadDiscrepancies]);
+  function removeMaterial(id: string) {
+    setGroups((gs) => gs.filter((g) => g.material.material_id !== id));
+  }
 
-  /** FR-IA-01 rule 4: changing the type resets every line, after a confirmation. */
-  function changeType(t: string) {
+  function patchGroup(id: string, fn: (g: Group) => Group) {
+    setGroups((gs) =>
+      gs.map((g) => (g.material.material_id === id ? fn(g) : g)),
+    );
+  }
+
+  /** A newly ticked bin: Discrepancy types take the whole bucket, the rest start at 0. */
+  function freshLine(b: AdjBinOption): Line {
+    return {
+      qty_adjustment: b.suggested_qty_adjustment ?? 0,
+      qty_passed: 0,
+      qty_non_passed: 0,
+    };
+  }
+
+  function toggleBin(id: string, b: AdjBinOption) {
+    if (!b.bin_id) return;
+    const binId = b.bin_id;
+    patchGroup(id, (g) => {
+      const lines = { ...g.lines };
+      if (lines[binId]) delete lines[binId];
+      else lines[binId] = freshLine(b);
+      return { ...g, lines };
+    });
+  }
+
+  function toggleAllBins(id: string) {
+    patchGroup(id, (g) => {
+      const all = g.bins.filter((b) => b.bin_id);
+      const everyOn = all.length > 0 && all.every((b) => g.lines[b.bin_id!]);
+      if (everyOn) return { ...g, lines: {} };
+      const lines = { ...g.lines };
+      for (const b of all)
+        if (!lines[b.bin_id!]) lines[b.bin_id!] = freshLine(b);
+      return { ...g, lines };
+    });
+  }
+
+  function patchLine(id: string, binId: string, patch: Partial<Line>) {
+    patchGroup(id, (g) => ({
+      ...g,
+      lines: { ...g.lines, [binId]: { ...g.lines[binId], ...patch } },
+    }));
+  }
+
+  /** FR-IA-01 rule 4: changing the type clears every selection, after a confirmation. */
+  async function changeType(t: string) {
     const next = t as IaType;
     if (next === type) return;
     if (groups.length > 0) {
-      const ok = window.confirm(
-        'Changing the IA Type clears every material, bin, qty and discrepancy already selected. Continue?',
-      );
+      const ok = await confirm({
+        title: "Change the type?",
+        description:
+          "Changing the Type clears every material, bin, qty and discrepancy already selected.",
+        confirmText: "Change type",
+        type: "warning",
+      });
       if (!ok) return;
     }
     setType(next);
     setGroups([]);
     setSelectedDiscs(new Set());
     setDiscrepancies([]);
+    setMPage(1);
   }
 
-  const usedMaterialIds = new Set(groups.map((g) => g.material_id));
-  const materialOptions = materials
-    .filter((m) => m.material_id && !usedMaterialIds.has(m.material_id))
-    .map((m) => ({
-      value: m.material_id as string,
-      label: m.material_name
-        ? `${m.material_code} — ${m.material_name}`
-        : m.material_code ?? (m.material_id as string),
-    }));
+  // ----- validation & totals -----
+  const usable = (b: AdjBinOption) =>
+    Math.max(0, b.qty_available - (b.pending_qty ?? 0));
 
-  async function addMaterial(materialId: string) {
-    const m = materials.find((x) => x.material_id === materialId);
-    if (!m || !m.material_id || !type) return;
-    setGroups((gs) => [
-      ...gs,
-      {
-        material_id: m.material_id as string,
-        material_code: m.material_code,
-        material_name: m.material_name,
-        allows_decimal: m.allows_decimal ?? true,
-        binOptions: [],
-        binsLoaded: false,
-        lines: [],
-      },
-    ]);
-    try {
-      const r = await api.get<AdjBinOption[]>('/inventory-adjustments/bins', {
-        params: { material_id: m.material_id, adjustment_type: type },
-      });
-      setGroups((gs) =>
-        gs.map((g) =>
-          g.material_id === materialId ? { ...g, binOptions: r.data, binsLoaded: true } : g,
-        ),
-      );
-    } catch {
-      setGroups((gs) =>
-        gs.map((g) => (g.material_id === materialId ? { ...g, binsLoaded: true } : g)),
-      );
+  function lineError(g: Group, b: AdjBinOption, l: Line): string | null {
+    const decimals = (...vals: number[]) =>
+      g.material.allows_decimal === false &&
+      vals.some((v) => Math.abs(v - Math.round(v)) > EPS);
+    if (qtyMode === "passed_non_passed") {
+      const total = l.qty_passed + l.qty_non_passed;
+      if (l.qty_passed < 0 || l.qty_non_passed < 0)
+        return "Qty Passed and Non-Passed must be positive";
+      if (!(total > 0)) return "Enter Qty Passed and/or Qty Non-Passed";
+      if (total > b.quality_issue + EPS)
+        return `Exceeds Quality Issue (${fmt(b.quality_issue)})`;
+      if (decimals(l.qty_passed, l.qty_non_passed))
+        return "This unit of measure does not allow decimals";
+      return null;
     }
-  }
-
-  function removeMaterial(materialId: string) {
-    setGroups((gs) => gs.filter((g) => g.material_id !== materialId));
-  }
-
-  function addBin(materialId: string, binId: string) {
-    setGroups((gs) =>
-      gs.map((g) => {
-        if (g.material_id !== materialId) return g;
-        const opt = g.binOptions.find((b) => b.bin_id === binId);
-        if (!opt || !opt.bin_id) return g;
-        // FR-IA-04 rule 4.
-        if (g.lines.some((l) => l.bin_id === binId)) return g;
-        return {
-          ...g,
-          lines: [
-            ...g.lines,
-            {
-              key: nextKey(),
-              bin_id: opt.bin_id,
-              bin_label: opt.bin_label,
-              avail: opt.qty_available,
-              qty_issue: opt.qty_issue,
-              quality_issue: opt.quality_issue,
-              // FR-IA-06/07: read-only, taken from the bucket.
-              qty_adjustment: opt.suggested_qty_adjustment ?? 0,
-              qty_passed: 0,
-              qty_non_passed: 0,
-            },
-          ],
-        };
-      }),
-    );
-  }
-
-  /**
-   * UAC-IA-07: removing the last bin of a material removes the material from the
-   * document too, so an empty material row can never be left behind.
-   */
-  function removeBin(materialId: string, key: string) {
-    setGroups((gs) =>
-      gs
-        .map((g) =>
-          g.material_id === materialId
-            ? { ...g, lines: g.lines.filter((l) => l.key !== key) }
-            : g,
-        )
-        .filter((g) => g.material_id !== materialId || g.lines.length > 0),
-    );
-  }
-
-  function patchLine(materialId: string, key: string, patch: Partial<BinLine>) {
-    setGroups((gs) =>
-      gs.map((g) =>
-        g.material_id === materialId
-          ? { ...g, lines: g.lines.map((l) => (l.key === key ? { ...l, ...patch } : l)) }
-          : g,
-      ),
-    );
-  }
-
-  /** What the bin's Available becomes once the document completes (FR-IA-14). */
-  function newAvail(l: BinLine): number {
-    switch (rule?.qty_mode) {
-      // Discrepancy Quantity clears Quantity Issue; Discrepancy Quality is
-      // Oracle-only. Neither touches Available in WMS.
-      case 'auto_negative':
-        return l.avail;
-      case 'passed_non_passed':
-        return l.avail + (Number(l.qty_passed) || 0);
-      default:
-        return l.avail + (Number(l.qty_adjustment) || 0);
+    if (qtyMode === "free_signed") {
+      if (Math.abs(l.qty_adjustment) < EPS) return "Enter a non-zero quantity";
+      if (l.qty_adjustment < 0 && usable(b) + l.qty_adjustment < -EPS)
+        return `Exceeds available qty (${fmt(usable(b))})`;
+      if (decimals(l.qty_adjustment))
+        return "This unit of measure does not allow decimals";
     }
+    return null;
   }
 
-  /** What the bin's Quality Issue becomes. */
-  function newQualityIssue(l: BinLine): number {
-    if (rule?.qty_mode !== 'passed_non_passed') return l.quality_issue;
-    return l.quality_issue - (Number(l.qty_passed) || 0) - (Number(l.qty_non_passed) || 0);
-  }
-
-  // FR-IA-11 rule 2: an error message per line, not one banner for the document.
-  const lineErrors = useMemo(() => {
-    const errs = new Map<string, string>();
-    if (!rule) return errs;
-    for (const g of groups) {
-      for (const l of g.lines) {
-        const decimals = (...vals: number[]) =>
-          !g.allows_decimal && vals.some((v) => Math.abs(v - Math.round(v)) > EPS);
-
-        if (rule.qty_mode === 'passed_non_passed') {
-          const passed = Number(l.qty_passed) || 0;
-          const nonPassed = Number(l.qty_non_passed) || 0;
-          const total = passed + nonPassed;
-          if (passed < 0 || nonPassed < 0) {
-            errs.set(l.key, 'Qty Passed and Qty Non-Passed must be positive');
-          } else if (!(total > 0)) {
-            errs.set(l.key, 'Enter Qty Passed and/or Qty Non-Passed');
-          } else if (total > l.quality_issue + EPS) {
-            errs.set(l.key, `Passed + Non-Passed (${total}) exceeds Quality Issue (${l.quality_issue})`);
-          } else if (decimals(passed, nonPassed)) {
-            errs.set(l.key, 'This unit of measure does not allow decimals');
-          }
-        } else if (rule.qty_mode === 'free_signed') {
-          const qty = Number(l.qty_adjustment) || 0;
-          if (Math.abs(qty) < EPS) {
-            errs.set(l.key, 'Qty Adjustment cannot be 0');
-          } else if (l.avail + qty < -EPS) {
-            errs.set(l.key, `Exceeds available qty (${l.avail})`);
-          } else if (decimals(qty)) {
-            errs.set(l.key, 'This unit of measure does not allow decimals');
-          }
-        }
-      }
-    }
-    return errs;
-  }, [groups, rule]);
-
-  const allLines = groups.flatMap((g) => g.lines);
-  const emptyGroups = groups.filter((g) => g.lines.length === 0);
-  const totalQty = allLines.reduce(
-    (sum, l) =>
-      sum +
-      (rule?.qty_mode === 'passed_non_passed'
-        ? (Number(l.qty_passed) || 0) + (Number(l.qty_non_passed) || 0)
-        : Number(l.qty_adjustment) || 0),
-    0,
+  const picked = groups.flatMap((g) =>
+    g.bins
+      .filter((b) => b.bin_id && g.lines[b.bin_id])
+      .map((b) => ({ g, b, l: g.lines[b.bin_id!] })),
   );
+  const errors = picked.map((p) => lineError(p.g, p.b, p.l)).filter(Boolean);
+  const lineQty = (l: Line) =>
+    qtyMode === "passed_non_passed"
+      ? l.qty_passed + l.qty_non_passed
+      : l.qty_adjustment;
+  const filledBins = picked.filter((p) => Math.abs(lineQty(p.l)) > EPS).length;
+  const totalAdjustment = picked.reduce((s, p) => s + lineQty(p.l), 0);
+  const warehouses = [
+    ...new Set(picked.map((p) => p.b.warehouse_name).filter(Boolean)),
+  ];
+  const warehouseSummary =
+    warehouses.length === 0
+      ? "-"
+      : warehouses.length === 1
+        ? warehouses[0]
+        : "Multiple warehouses";
+  const emptyMaterials = groups.filter((g) => !Object.keys(g.lines).length);
 
-  const blockingMessage = (() => {
-    if (!type) return 'Choose an IA Type first.';
-    if (!classId) return 'Select a class.';
-    if (allLines.length === 0) return 'Add at least one material and bin.';
-    if (emptyGroups.length > 0) return 'Every material needs at least one bin.';
-    if (lineErrors.size > 0) return 'Fix the highlighted lines before submitting.';
-    return '';
-  })();
-  const canSave = !blockingMessage && !noWarehouse;
+  // FR-IA-10: discrepancy references follow the picked materials and bins.
+  const discKey = `${type}|${groups.map((g) => g.material.material_id).join(",")}|${picked.map((p) => p.b.bin_id).join(",")}`;
+  useEffect(() => {
+    if (!type || !rule?.discrepancy_list || groups.length === 0) {
+      setDiscrepancies([]);
+      return;
+    }
+    api
+      .get<AdjDiscrepancyOption[]>("/inventory-adjustments/discrepancies", {
+        params: {
+          adjustment_type: type,
+          material_ids: groups.map((g) => g.material.material_id).join(","),
+          bin_ids: picked.map((p) => p.b.bin_id).join(","),
+        },
+      })
+      .then((r) => setDiscrepancies(r.data))
+      .catch(() => setDiscrepancies([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [discKey, rule?.discrepancy_list]);
 
-  function toggleDisc(id: string) {
-    setSelectedDiscs((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
+  const blocking = !type
+    ? "Select a Type."
+    : !classId
+      ? "Select a Class."
+      : !departmentId
+        ? "Select a Department."
+        : picked.length === 0
+          ? "Select at least one bin."
+          : emptyMaterials.length > 0
+            ? `Select a bin for ${emptyMaterials[0].material.material_code}, or remove it.`
+            : errors.length > 0
+              ? "Fix the highlighted bins."
+              : "";
 
-  function buildItems() {
-    return groups.flatMap((g) =>
-      g.lines.map((l) => ({
-        material_id: g.material_id,
-        bin_id: l.bin_id,
-        ...(rule?.qty_mode === 'passed_non_passed'
-          ? { qty_passed: Number(l.qty_passed) || 0, qty_non_passed: Number(l.qty_non_passed) || 0 }
-          : { qty_adjustment: Number(l.qty_adjustment) || 0 }),
-      })),
-    );
-  }
-
-  /** FR-IA-12 rule 1: the confirmation dialog IS the submission. */
-  async function handleSubmit() {
-    if (!canSave || saving) return;
+  async function submit() {
+    if (blocking || saving) return;
     setSaving(true);
     try {
       const r = await api.post<{ id: string; adjustment_number: string }>(
-        '/inventory-adjustments',
+        "/inventory-adjustments",
         {
           adjustment_type: type,
           class_id: classId,
-          memo: memo || undefined,
-          items: buildItems(),
+          department_id: departmentId,
+          memo: memo.trim() || undefined,
+          items: picked.map(({ g, b, l }) => ({
+            material_id: g.material.material_id,
+            bin_id: b.bin_id,
+            ...(qtyMode === "passed_non_passed"
+              ? { qty_passed: l.qty_passed, qty_non_passed: l.qty_non_passed }
+              : { qty_adjustment: l.qty_adjustment }),
+          })),
           discrepancy_ids: [...selectedDiscs],
         },
       );
       toast.success(`${r.data.adjustment_number} submitted for approval`);
-      navigate(`/admin/inventory-adjustments/${r.data.id}`);
+      navigate(`${BASE}/${r.data.id}`);
     } catch (err) {
-      // Keep the dialog open so the user can see the error and retry.
-      if (axios.isAxiosError(err)) {
-        const msg = err.response?.data?.message;
-        toast.error(Array.isArray(msg) ? msg.join(', ') : msg ?? 'Submit failed');
-      } else toast.error('Submit failed');
+      // Keep the review open so the user can read the error and retry.
+      toast.error(errMessage(err, "Submit failed"));
     } finally {
       setSaving(false);
     }
   }
 
-  /** One line of the confirmation summary: what this line does to the bin. */
-  function lineEffect(l: BinLine): string {
-    switch (rule?.qty_mode) {
-      case 'auto_negative':
-        return rule.filter_bucket === 'qty_issue'
-          ? 'Quantity Issue → 0'
-          : 'Oracle only — no WMS bucket changes';
-      case 'passed_non_passed': {
-        const passed = Number(l.qty_passed) || 0;
-        const total = passed + (Number(l.qty_non_passed) || 0);
-        return `Available +${passed}, Quality Issue −${total}`;
-      }
-      default: {
-        const qty = Number(l.qty_adjustment) || 0;
-        return `Available ${qty >= 0 ? '+' : ''}${qty}`;
-      }
-    }
-  }
-
-  const qtyMode = rule?.qty_mode;
+  const binColumns = qtyMode === "passed_non_passed" ? 6 : 5;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start gap-3">
-        <Link
-          to="/admin/inventory-adjustments"
-          className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-          aria-label="Back"
-        >
-          <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-          </svg>
-        </Link>
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-800">Create Inventory Adjustment</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Submitting sends the document straight to internal approval. Stock changes only after approval — and, where required, after Oracle approves.
-          </p>
-        </div>
-      </div>
-
-      {noWarehouse && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-          Select a specific warehouse from the top bar (not "All sites") to create an adjustment.
-        </div>
-      )}
-
+    <div className="space-y-5">
       {/* Header */}
-      <div className="card p-5">
-        <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">Header</h3>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div>
-            <div className="mb-1 text-xs text-slate-400">Warehouse</div>
-            <div className="input bg-slate-50">{activeWarehouseName ?? (canSwitch ? 'All sites' : '—')}</div>
-          </div>
-          <div>
-            <div className="mb-1 text-xs text-slate-400">IA Type *</div>
-            <SearchableSelect
-              value={type}
-              onChange={changeType}
-              placeholder="Select IA Type…"
-              searchPlaceholder="Search type…"
-              options={types.map((t) => ({ value: t.value, label: t.label }))}
-            />
-          </div>
-          <div>
-            <div className="mb-1 text-xs text-slate-400">Class *</div>
-            <SearchableSelect
-              value={classId}
-              onChange={setClassId}
-              placeholder="Select class…"
-              searchPlaceholder="Search class…"
-              options={classes.map((c) => ({
-                value: c.id,
-                label: c.name ? `${c.name} (${c.oracleId})` : c.oracleId,
-              }))}
-            />
-          </div>
-          <div className="sm:col-span-3">
-            <div className="mb-1 text-xs text-slate-400">Memo (optional)</div>
-            <input
-              className="input"
-              value={memo}
-              onChange={(e) => setMemo(e.target.value)}
-              placeholder="Reason or context for this adjustment…"
-            />
-            {rule && (
-              <p className="mt-1 text-xs text-slate-400">
-                Oracle receives:{' '}
-                <span className="font-mono text-slate-500">
-                  {memo.trim() ? `${rule.label} | ${memo.trim()}` : rule.label}
-                </span>
-              </p>
-            )}
-          </div>
+      <div className={`${CARD} space-y-5 p-5`}>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => navigate(BASE)}
+            aria-label="Back"
+            className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-700 shadow-sm hover:bg-neutral-50"
+          >
+            <Lucide>{icons.chevronLeft}</Lucide>
+          </button>
+          <h1 className="text-xl font-semibold text-neutral-900 dark:text-white">
+            Create Adjustment
+          </h1>
         </div>
 
         {rule && (
-          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
-            {rule.qty_mode === 'auto_negative' && (
-              <>
-                Only bins with{' '}
-                <b>{rule.filter_bucket === 'qty_issue' ? 'Quantity Issue' : 'Quality Issue'} &gt; 0</b> can be
-                picked. Qty Adjustment is filled automatically with the whole bucket and cannot be edited.
-              </>
-            )}
-            {rule.qty_mode === 'passed_non_passed' && (
-              <>
-                Only bins with <b>Quality Issue &gt; 0</b> can be picked. Both quantities reduce Quality Issue;
-                only <b>Qty Passed</b> returns stock to Available and is sent to Oracle. A document with no Qty
-                Passed at all is completed without ever reaching Oracle.
-              </>
-            )}
-            {rule.qty_mode === 'free_signed' && (
-              <>All bins are available. Enter a positive qty to add stock or a negative qty to reduce it.</>
-            )}
+          <div className="rounded-r-lg border-l-4 border-[#5166AE] bg-[#F2F4FD] px-4 py-3 text-sm text-[#41528c]">
+            {ruleNote(rule)}
           </div>
         )}
-      </div>
 
-      {/* Materials + bins */}
-      <div className="card p-5">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Materials &amp; Bins</h3>
-          <div className="w-72">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <Field label="Type" required>
             <SearchableSelect
-              value=""
-              onChange={addMaterial}
-              options={materialOptions}
-              placeholder={type ? '+ Add material…' : 'Choose an IA Type first'}
-              searchPlaceholder="Search material…"
-              disabled={noWarehouse || !type}
+              value={type}
+              onChange={changeType}
+              placeholder="Select Type..."
+              searchPlaceholder="Search type…"
+              options={types.map((t) => ({ value: t.value, label: t.label }))}
             />
-          </div>
+          </Field>
+          <Field label="Class" required>
+            <SearchableSelect
+              value={classId}
+              onChange={setClassId}
+              placeholder="Select Class..."
+              searchPlaceholder="Search class…"
+              options={classes.map((c) => ({
+                value: c.id,
+                label: c.name ?? c.oracleId,
+              }))}
+            />
+          </Field>
+          <Field label="Department" required>
+            <SearchableSelect
+              value={departmentId}
+              onChange={setDepartmentId}
+              placeholder="Select Department..."
+              searchPlaceholder="Search department…"
+              options={departments.map((d) => ({
+                value: d.id,
+                label: d.name ?? d.oracleId,
+              }))}
+            />
+          </Field>
         </div>
 
-        {!type ? (
-          <p className="text-sm text-slate-400">Select an IA Type to enable material selection.</p>
-        ) : groups.length === 0 ? (
-          <p className="text-sm text-slate-400">
-            {materials.length === 0
-              ? 'No inventory matches this IA Type in the active warehouse.'
-              : 'No material added yet. Choose a material to begin.'}
-          </p>
-        ) : (
-          <div className="space-y-4">
-            {groups.map((g) => {
-              const binOpts = g.binOptions
-                .filter((b) => b.bin_id && !g.lines.some((l) => l.bin_id === b.bin_id))
-                .map((b) => ({ value: b.bin_id as string, label: b.bin_label ?? (b.bin_id as string) }));
-              return (
-                <div key={g.material_id} className="rounded-lg border border-slate-200">
-                  <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5">
-                    <div>
-                      <div className="font-medium text-slate-800">
-                        {g.material_code}
-                        {g.material_name ? (
-                          <span className="ml-2 text-xs text-slate-400">{g.material_name}</span>
-                        ) : null}
-                      </div>
-                      {!g.allows_decimal && (
-                        <div className="mt-0.5 text-xs text-slate-400">Whole numbers only (UoM)</div>
+        <div>
+          <div className="mb-1.5 flex items-center justify-between text-sm">
+            <span className="font-medium text-neutral-800 dark:text-slate-200">
+              Memo
+            </span>
+            <span className="text-xs text-neutral-500">
+              {memo.length}/{MEMO_MAX}
+            </span>
+          </div>
+          <textarea
+            className="min-h-[72px] w-full rounded-lg border border-neutral-200 px-3 py-2.5 text-sm text-neutral-800 outline-none placeholder:text-neutral-400 focus:border-[#5166AE] focus:ring-2 focus:ring-[#5166AE]/20 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+            value={memo}
+            maxLength={MEMO_MAX}
+            onChange={(e) => setMemo(e.target.value)}
+            placeholder="Reason or context for this adjustment..."
+          />
+        </div>
+      </div>
+
+      {/* Select Materials */}
+      <div className={CARD}>
+        <SectionHead
+          title="Select Materials"
+          subtitle="Select materials from your warehouse to include in this adjustment."
+        />
+        <div className="space-y-4 p-5">
+          {!type ? (
+            <p className="py-6 text-center text-sm text-neutral-500">
+              Select a Type first to choose materials.
+            </p>
+          ) : (
+            <>
+              <div className="relative">
+                <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400">
+                  <Lucide>{icons.search}</Lucide>
+                </span>
+                <input
+                  className="h-10 w-full rounded-lg border border-neutral-200 pl-10 pr-3 text-sm outline-none placeholder:text-neutral-400 focus:border-[#5166AE] focus:ring-2 focus:ring-[#5166AE]/20 dark:border-slate-600 dark:bg-slate-900"
+                  placeholder="Search material by code or name..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+
+              {groups.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {groups.map((g) => (
+                    <span
+                      key={g.material.material_id}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-[#5166AE]/20 bg-[#5166AE]/10 px-3 py-0.5 text-xs font-semibold text-[#5166AE]"
+                    >
+                      {g.material.material_code}
+                      {g.material.material_name && (
+                        <span className="font-normal">
+                          ({g.material.material_name})
+                        </span>
                       )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="w-52">
-                        <SearchableSelect
-                          value=""
-                          onChange={(v) => addBin(g.material_id, v)}
-                          options={binOpts}
-                          placeholder={
-                            !g.binsLoaded
-                              ? 'Loading bins…'
-                              : binOpts.length === 0
-                                ? 'No bin left'
-                                : '+ Add bin…'
-                          }
-                          searchPlaceholder="Search bin…"
-                          disabled={!g.binsLoaded || binOpts.length === 0}
-                        />
-                      </div>
                       <button
-                        className="rounded-md px-2 py-1 text-xs font-medium text-rose-600 hover:bg-rose-50"
-                        onClick={() => removeMaterial(g.material_id)}
+                        type="button"
+                        aria-label={`Remove ${g.material.material_code}`}
+                        onClick={() => removeMaterial(g.material.material_id)}
+                        className="ml-0.5 hover:text-[#2f3d73]"
                       >
-                        Remove
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <div className="grid max-h-72 grid-cols-1 gap-3 overflow-y-auto p-0.5 sm:grid-cols-2 lg:grid-cols-3">
+                {materials.rows.map((m) => {
+                  const on = !!m.material_id && selectedIds.has(m.material_id);
+                  return (
+                    <button
+                      type="button"
+                      key={m.material_id}
+                      onClick={() => toggleMaterial(m)}
+                      className={`relative flex items-center justify-between rounded-lg border p-3.5 text-left text-sm transition-all duration-200 ${
+                        on
+                          ? "border-[#5166AE] bg-[#F2F4FD] ring-1 ring-[#5166AE]"
+                          : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50"
+                      }`}
+                    >
+                      <span className="flex min-w-0 items-center gap-3 pr-2">
+                        <input
+                          type="checkbox"
+                          readOnly
+                          checked={on}
+                          tabIndex={-1}
+                          className="pointer-events-none h-4 w-4 shrink-0 rounded border-neutral-300 accent-[#5166AE]"
+                        />
+                        <span className="min-w-0">
+                          <span className="block truncate font-semibold text-neutral-900">
+                            {m.material_code}
+                          </span>
+                          <span className="block truncate text-xs text-neutral-500">
+                            {m.material_name ?? "-"}
+                          </span>
+                        </span>
+                      </span>
+                      <span className="shrink-0 rounded-full border border-amber-200/80 bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700">
+                        {fmt(m.in_stock ?? 0)} in stock
+                      </span>
+                    </button>
+                  );
+                })}
+                {!mLoading && materials.rows.length === 0 && (
+                  <p className="col-span-full py-6 text-center text-sm text-neutral-500">
+                    {debounced
+                      ? "No material matches the search."
+                      : "No material has stock for this Type."}
+                  </p>
+                )}
+              </div>
+
+              <MasterPager
+                className="mt-2"
+                page={mPage}
+                pageSize={mSize}
+                total={materials.total}
+                sizes={[9, 18, 27, 45]}
+                onPage={setMPage}
+                onPageSize={(n) => {
+                  setMSize(n);
+                  setMPage(1);
+                }}
+              />
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Select Bins */}
+      {groups.length > 0 && (
+        <div className={CARD}>
+          <SectionHead
+            title="Select Bins"
+            subtitle="Review candidate bins and specify the adjustment quantity for each bin."
+            right={
+              <span className="inline-flex items-center rounded-full border border-[#5166AE]/20 bg-[#5166AE]/10 px-3 py-0.5 text-[13px] font-semibold text-[#5166AE]">
+                {picked.length} Bins Selected
+              </span>
+            }
+          />
+          <div className="space-y-4 p-5">
+            {errors.length > 0 && (
+              <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                <svg
+                  className="h-4 w-4 shrink-0"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  viewBox="0 0 24 24"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <path strokeLinecap="round" d="M12 8v4M12 16h.01" />
+                </svg>
+                Enter a non-zero quantity on every selected bin, and keep a
+                reduction within the available stock.
+              </div>
+            )}
+
+            {groups.map((g) => {
+              const id = g.material.material_id;
+              const binList = g.bins.filter((b) => b.bin_id);
+              const count = binList.filter((b) => g.lines[b.bin_id!]).length;
+              const allOn = binList.length > 0 && count === binList.length;
+              return (
+                <div
+                  key={id}
+                  className="overflow-hidden rounded-xl border border-neutral-200 dark:border-slate-700"
+                >
+                  <div className="flex items-center justify-between gap-3 bg-neutral-50 px-4 py-3 dark:bg-slate-900/40">
+                    <label className="flex min-w-0 cursor-pointer items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={allOn}
+                        ref={(el) => {
+                          if (el) el.indeterminate = count > 0 && !allOn;
+                        }}
+                        onChange={() => toggleAllBins(id)}
+                        className="h-4 w-4 shrink-0 rounded border-neutral-300 accent-[#5166AE]"
+                        aria-label={`Select every bin of ${g.material.material_code}`}
+                      />
+                      <span className="truncate">
+                        <span className="font-semibold text-neutral-900 dark:text-white">
+                          {g.material.material_code}
+                        </span>{" "}
+                        <span className="text-xs text-neutral-500">
+                          ({g.material.material_name ?? "-"})
+                        </span>
+                      </span>
+                    </label>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="rounded-full bg-neutral-200/70 px-2.5 py-0.5 text-xs font-medium text-neutral-700">
+                        {count}/{binList.length} bin(s)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          patchGroup(id, (x) => ({ ...x, open: !x.open }))
+                        }
+                        aria-label={g.open ? "Collapse bins" : "Expand bins"}
+                        className="rounded p-1 text-neutral-500 hover:bg-neutral-200"
+                      >
+                        <svg
+                          className={`h-4 w-4 transition-transform ${g.open ? "" : "-rotate-90"}`}
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M19 9l-7 7-7-7"
+                          />
+                        </svg>
                       </button>
                     </div>
                   </div>
 
-                  {g.lines.length === 0 ? (
-                    <div className="px-4 py-3 text-xs text-slate-400">
-                      Choose a bin for this material.
-                    </div>
-                  ) : (
+                  {g.open && (
                     <div className="overflow-x-auto">
-                      <table className="min-w-full divide-y divide-slate-100 text-sm">
-                        <thead className="text-left text-xs uppercase tracking-wide text-slate-400">
-                          <tr>
-                            <th className="px-4 py-2">Bin</th>
-                            <th className="px-4 py-2 text-right">Available</th>
-                            <th className="px-4 py-2 text-right">Qty Issue</th>
-                            <th className="px-4 py-2 text-right">Quality Issue</th>
-                            {qtyMode === 'passed_non_passed' ? (
+                      <table className="w-full min-w-[760px] text-left text-sm">
+                        <thead className="text-neutral-600">
+                          <tr className="[&>th]:border-y [&>th]:border-neutral-100 [&>th]:px-4 [&>th]:py-3 [&>th]:font-medium">
+                            <th className="w-10" />
+                            <th>Warehouse</th>
+                            <th>Bin</th>
+                            <th>
+                              {qtyMode === "free_signed"
+                                ? "Available Qty"
+                                : rule?.filter_bucket === "qty_issue"
+                                  ? "Quantity Issue"
+                                  : "Quality Issue"}
+                            </th>
+                            {qtyMode === "passed_non_passed" ? (
                               <>
-                                <th className="px-4 py-2 text-right">Qty Passed</th>
-                                <th className="px-4 py-2 text-right">Qty Non-Passed</th>
+                                <th>Qty Passed</th>
+                                <th>Qty Non-Passed</th>
                               </>
                             ) : (
-                              <th className="px-4 py-2 text-right">
-                                Qty Adjustment {qtyMode === 'free_signed' ? '(±)' : '(auto)'}
-                              </th>
+                              <th>Adjustment Qty</th>
                             )}
-                            <th className="px-4 py-2 text-right">After</th>
-                            <th className="px-4 py-2 text-right">Action</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {g.lines.map((l) => {
-                            const err = lineErrors.get(l.key);
+                        <tbody>
+                          {!g.loaded && (
+                            <tr>
+                              <td
+                                colSpan={binColumns}
+                                className="px-4 py-6 text-center text-neutral-400"
+                              >
+                                Loading bins…
+                              </td>
+                            </tr>
+                          )}
+                          {g.loaded && binList.length === 0 && (
+                            <tr>
+                              <td
+                                colSpan={binColumns}
+                                className="px-4 py-6 text-center text-neutral-400"
+                              >
+                                No bin holds this material for this Type.
+                              </td>
+                            </tr>
+                          )}
+                          {binList.map((b) => {
+                            const l = g.lines[b.bin_id!];
+                            const on = !!l;
+                            const err = on ? lineError(g, b, l) : null;
                             return (
-                              <tr key={l.key} className={err ? 'bg-rose-50/50' : undefined}>
-                                <td className="px-4 py-2 font-medium text-slate-800">
-                                  {l.bin_label ?? l.bin_id}
-                                  {err && <div className="mt-0.5 text-xs font-normal text-rose-600">{err}</div>}
+                              <tr
+                                key={b.bin_id}
+                                className={`[&>td]:border-b [&>td]:border-neutral-100 [&>td]:px-4 [&>td]:py-3 ${on ? "bg-[#F7F8FE]" : "bg-white"}`}
+                              >
+                                <td className="text-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={on}
+                                    onChange={() => toggleBin(id, b)}
+                                    className="h-4 w-4 rounded border-neutral-300 accent-[#5166AE]"
+                                    aria-label={`Select bin ${b.bin_code ?? b.bin_label}`}
+                                  />
                                 </td>
-                                <td className="px-4 py-2 text-right text-slate-600">{l.avail}</td>
-                                <td className="px-4 py-2 text-right text-slate-600">{l.qty_issue}</td>
-                                <td className="px-4 py-2 text-right text-slate-600">{l.quality_issue}</td>
-
-                                {qtyMode === 'passed_non_passed' ? (
-                                  <>
-                                    <td className="px-4 py-2">
-                                      <div className="flex justify-end">
-                                        <input
-                                          type="number"
-                                          step={g.allows_decimal ? 'any' : '1'}
-                                          min={0}
-                                          className="input w-24 text-right"
-                                          value={l.qty_passed}
-                                          onChange={(e) =>
-                                            patchLine(g.material_id, l.key, {
-                                              qty_passed: Number(e.target.value),
-                                            })
-                                          }
-                                        />
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-2">
-                                      <div className="flex justify-end">
-                                        <input
-                                          type="number"
-                                          step={g.allows_decimal ? 'any' : '1'}
-                                          min={0}
-                                          className="input w-24 text-right"
-                                          value={l.qty_non_passed}
-                                          onChange={(e) =>
-                                            patchLine(g.material_id, l.key, {
-                                              qty_non_passed: Number(e.target.value),
-                                            })
-                                          }
-                                        />
-                                      </div>
-                                    </td>
-                                  </>
-                                ) : (
-                                  <td className="px-4 py-2">
-                                    <div className="flex justify-end">
-                                      {qtyMode === 'auto_negative' ? (
-                                        // FR-IA-06/07: read-only, whole bucket, always negative.
-                                        <span
-                                          className="input w-24 bg-slate-100 text-right font-semibold text-slate-700"
-                                          title="Filled automatically from the bin's issue quantity"
-                                        >
-                                          {l.qty_adjustment}
-                                        </span>
-                                      ) : (
-                                        <input
-                                          type="number"
-                                          step={g.allows_decimal ? 'any' : '1'}
-                                          className="input w-24 text-right"
-                                          value={l.qty_adjustment}
-                                          onChange={(e) =>
-                                            patchLine(g.material_id, l.key, {
-                                              qty_adjustment: Number(e.target.value),
-                                            })
-                                          }
-                                        />
-                                      )}
+                                <td>
+                                  <div className="text-neutral-900">
+                                    {b.warehouse_name ?? "-"}
+                                  </div>
+                                  {b.warehouse_parent && (
+                                    <div className="text-xs text-neutral-500">
+                                      {b.warehouse_parent}
                                     </div>
-                                  </td>
-                                )}
-
-                                <td className="px-4 py-2 text-right text-xs">
-                                  {qtyMode === 'auto_negative' ? (
-                                    rule?.filter_bucket === 'qty_issue' ? (
-                                      <span className="text-slate-500">
-                                        Qty Issue → <b className="text-brand-700">0</b>
+                                  )}
+                                </td>
+                                <td>
+                                  <div className="text-neutral-900">
+                                    {b.bin_code ?? b.bin_label ?? "-"}
+                                  </div>
+                                  {b.bin_code && b.bin_label && (
+                                    <div className="text-xs text-neutral-500">
+                                      {b.bin_label}
+                                    </div>
+                                  )}
+                                  {b.pending_docs.length > 0 && (
+                                    <PendingDocs
+                                      docs={b.pending_docs}
+                                      total={b.pending_qty}
+                                    />
+                                  )}
+                                </td>
+                                <td className="text-neutral-700">
+                                  {qtyMode === "free_signed" ? (
+                                    b.pending_qty > 0 ? (
+                                      <span
+                                        title={`${fmt(b.qty_available)} recorded, ${fmt(b.pending_qty)} held by other documents`}
+                                      >
+                                        <span className="font-semibold text-neutral-900">
+                                          {fmt(usable(b))}
+                                        </span>
+                                        <span className="text-xs text-neutral-500">
+                                          {" "}
+                                          of {fmt(b.qty_available)}
+                                        </span>
                                       </span>
                                     ) : (
-                                      <span className="text-slate-400">Oracle only</span>
+                                      <span className="font-semibold text-neutral-900">
+                                        {fmt(b.qty_available)}
+                                      </span>
                                     )
-                                  ) : qtyMode === 'passed_non_passed' ? (
-                                    <span className="text-slate-500">
-                                      Avail <b className="text-brand-700">{newAvail(l)}</b>
-                                      <br />
-                                      Quality{' '}
-                                      <b className={newQualityIssue(l) < 0 ? 'text-rose-600' : 'text-brand-700'}>
-                                        {newQualityIssue(l)}
-                                      </b>
-                                    </span>
                                   ) : (
-                                    <span className="text-slate-500">
-                                      Avail{' '}
-                                      <b className={newAvail(l) < 0 ? 'text-rose-600' : 'text-brand-700'}>
-                                        {newAvail(l)}
-                                      </b>
+                                    <span className="font-semibold text-neutral-900">
+                                      {fmt(
+                                        rule?.filter_bucket === "qty_issue"
+                                          ? b.qty_issue
+                                          : b.quality_issue,
+                                      )}
                                     </span>
                                   )}
                                 </td>
-                                <td className="px-4 py-2">
-                                  <div className="flex justify-end">
-                                    <button
-                                      className="rounded-md px-2 py-1 text-xs font-medium text-rose-600 hover:bg-rose-50"
-                                      onClick={() => removeBin(g.material_id, l.key)}
-                                    >
-                                      Remove
-                                    </button>
-                                  </div>
-                                </td>
+                                {qtyMode === "passed_non_passed" ? (
+                                  <>
+                                    <td>
+                                      <QtyPill
+                                        value={on ? l.qty_passed : 0}
+                                        disabled={!on}
+                                        invalid={!!err}
+                                        min={0}
+                                        onChange={(v) =>
+                                          patchLine(id, b.bin_id!, {
+                                            qty_passed: v,
+                                          })
+                                        }
+                                      />
+                                    </td>
+                                    <td>
+                                      <QtyPill
+                                        value={on ? l.qty_non_passed : 0}
+                                        disabled={!on}
+                                        invalid={!!err}
+                                        min={0}
+                                        onChange={(v) =>
+                                          patchLine(id, b.bin_id!, {
+                                            qty_non_passed: v,
+                                          })
+                                        }
+                                      />
+                                      {err && (
+                                        <div className="mt-1 text-xs text-red-600">
+                                          {err}
+                                        </div>
+                                      )}
+                                    </td>
+                                  </>
+                                ) : qtyMode === "auto_negative" ? (
+                                  <td>
+                                    <span className="font-bold text-red-600">
+                                      {fmt(
+                                        on
+                                          ? l.qty_adjustment
+                                          : (b.suggested_qty_adjustment ?? 0),
+                                      )}
+                                    </span>
+                                    <div className="text-xs text-neutral-400">
+                                      Automatic
+                                    </div>
+                                  </td>
+                                ) : (
+                                  <td>
+                                    <QtyPill
+                                      value={on ? l.qty_adjustment : 0}
+                                      disabled={!on}
+                                      invalid={!!err}
+                                      min={-usable(b)}
+                                      onChange={(v) =>
+                                        patchLine(id, b.bin_id!, {
+                                          qty_adjustment: v,
+                                        })
+                                      }
+                                    />
+                                    {err && (
+                                      <div className="mt-1 text-xs text-red-600">
+                                        {err}
+                                      </div>
+                                    )}
+                                  </td>
+                                )}
                               </tr>
                             );
                           })}
@@ -709,178 +890,420 @@ export default function InventoryAdjustmentCreatePage() {
               );
             })}
           </div>
-        )}
-      </div>
-
-      {/* FR-IA-10: discrepancy references — Discrepancy types only */}
-      {rule?.discrepancy_list && (
-        <div className="card p-5">
-          <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-500">
-            Discrepancy References
-          </h3>
-          <p className="mb-3 text-xs text-slate-400">
-            Optional. Only {rule.discrepancy_list} discrepancies for the materials and bins above are listed.
-            Selecting one attaches it to the document as a reference — it does not change the discrepancy's own
-            status.
-          </p>
-          {groups.length === 0 ? (
-            <p className="text-sm text-slate-400">Add a material to see related discrepancies.</p>
-          ) : discrepancies.length === 0 ? (
-            <p className="text-sm text-slate-400">No matching discrepancy documents.</p>
-          ) : (
-            <div className="max-h-64 overflow-y-auto rounded-lg border border-slate-200">
-              <table className="min-w-full divide-y divide-slate-100 text-sm">
-                <tbody className="divide-y divide-slate-100">
-                  {discrepancies.map((d) => (
-                    <tr key={d.id} className="hover:bg-slate-50">
-                      <td className="px-4 py-2">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
-                          checked={selectedDiscs.has(d.id)}
-                          onChange={() => toggleDisc(d.id)}
-                        />
-                      </td>
-                      <td className="px-4 py-2 font-medium text-slate-800">
-                        {d.discrepancy_id}
-                        {!d.bin_matched && (
-                          <span
-                            className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-normal text-slate-500"
-                            title="This discrepancy has no bin reference, so it was matched on the material only"
-                          >
-                            material only
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2 text-slate-600">{d.from ?? '—'}</td>
-                      <td className="px-4 py-2 text-right">
-                        <a
-                          href={`/admin/discrepancy/${d.id}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
-                        >
-                          Detail ↗
-                        </a>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
         </div>
       )}
 
-      <div className="flex items-center justify-end gap-3">
-        {blockingMessage && <span className="text-xs text-amber-600">{blockingMessage}</span>}
-        <Link to="/admin/inventory-adjustments" className="btn-secondary">
-          Cancel
-        </Link>
-        <button
-          className="btn-primary"
-          onClick={() => setConfirming(true)}
-          disabled={!canSave}
-        >
-          Submit for Approval
-        </button>
-      </div>
-
-      {/* FR-IA-12 rule 1: confirmation with a summary of the document. */}
-      <Modal
-        open={confirming}
-        title="Submit this adjustment for approval?"
-        onClose={() => (saving ? null : setConfirming(false))}
-      >
-        <div className="space-y-4">
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-            <Row label="IA Type" value={rule?.label ?? '—'} />
-            <Row
-              label="Class"
-              value={classes.find((c) => c.id === classId)?.name ?? classId}
-            />
-            <Row label="Warehouse" value={activeWarehouseName ?? '—'} />
-            <Row label="Memo" value={memo.trim() || '—'} />
-            <Row label="Materials" value={groups.length} />
-            <Row label="Bin lines" value={allLines.length} />
-            <Row
-              label="Discrepancy refs"
-              value={rule?.discrepancy_list ? selectedDiscs.size : '—'}
-            />
-            <Row label="Total qty" value={totalQty} />
-          </dl>
-
-          <div>
-            <div className="mb-1 text-xs text-slate-400">Memo sent to Oracle</div>
-            <div className="rounded-lg bg-slate-50 px-3 py-2 font-mono text-xs text-slate-600">
-              {rule ? (memo.trim() ? `${rule.label} | ${memo.trim()}` : rule.label) : '—'}
-            </div>
-          </div>
-
-          <div className="max-h-56 overflow-y-auto rounded-lg border border-slate-200">
-            <table className="min-w-full divide-y divide-slate-100 text-xs">
-              <thead className="bg-slate-50 text-left uppercase tracking-wide text-slate-400">
-                <tr>
-                  <th className="px-3 py-2">Material</th>
-                  <th className="px-3 py-2">Bin</th>
-                  <th className="px-3 py-2 text-right">Qty</th>
-                  <th className="px-3 py-2">Effect if approved</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {groups.flatMap((g) =>
-                  g.lines.map((l) => (
-                    <tr key={l.key}>
-                      <td className="px-3 py-2 font-medium text-slate-700">{g.material_code}</td>
-                      <td className="px-3 py-2 text-slate-600">{l.bin_label ?? l.bin_id}</td>
-                      <td className="px-3 py-2 text-right font-semibold text-slate-800">
-                        {rule?.qty_mode === 'passed_non_passed'
-                          ? `${l.qty_passed} / ${l.qty_non_passed}`
-                          : l.qty_adjustment}
-                      </td>
-                      <td className="px-3 py-2 text-slate-500">{lineEffect(l)}</td>
-                    </tr>
-                  )),
-                )}
-              </tbody>
-            </table>
-            {rule?.qty_mode === 'passed_non_passed' && (
-              <div className="border-t border-slate-100 bg-slate-50 px-3 py-1.5 text-[11px] text-slate-400">
-                Qty column shows Passed / Non-Passed.
+      {/* FR-IA-10: discrepancy references, Discrepancy types only. */}
+      {rule?.discrepancy_list && groups.length > 0 && (
+        <div className={CARD}>
+          <SectionHead
+            title="Discrepancy References"
+            subtitle="Optional. Link the discrepancies this adjustment settles; they are sent to Oracle with the document number."
+          />
+          <div className="p-5">
+            {discrepancies.length === 0 ? (
+              <p className="text-sm text-neutral-500">
+                No {rule.discrepancy_list} discrepancy matches the selected
+                materials and bins.
+              </p>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {discrepancies.map((d) => {
+                  const on = selectedDiscs.has(d.id);
+                  return (
+                    <label
+                      key={d.id}
+                      className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm ${on ? "border-[#5166AE] bg-[#F2F4FD]" : "border-neutral-200 hover:bg-neutral-50"}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={() =>
+                          setSelectedDiscs((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(d.id)) next.delete(d.id);
+                            else next.add(d.id);
+                            return next;
+                          })
+                        }
+                        className="h-4 w-4 rounded border-neutral-300 accent-[#5166AE]"
+                      />
+                      <span className="min-w-0">
+                        <span className="block font-semibold text-neutral-900">
+                          {d.discrepancy_id}
+                        </span>
+                        <span className="block text-xs capitalize text-neutral-500">
+                          {d.from} · {d.type}
+                          {!d.bin_matched && " · material match only"}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
             )}
           </div>
+        </div>
+      )}
 
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            Once confirmed the document goes straight to internal approval and{' '}
-            <b>can no longer be edited or deleted</b>. A correction requires a new
-            Inventory Adjustment document. Stock changes only after approval — and,
-            where required, after Oracle approves.
-          </div>
-
-          <div className="flex justify-end gap-2 pt-1">
-            <button
-              className="btn-secondary"
-              onClick={() => setConfirming(false)}
-              disabled={saving}
-            >
-              Cancel
-            </button>
-            <button className="btn-primary" onClick={handleSubmit} disabled={saving}>
-              {saving ? 'Submitting…' : 'Confirm & Submit'}
-            </button>
+      {/* Sticky summary footer, once something is picked. */}
+      {groups.length > 0 && (
+        <div className="sticky bottom-4 z-30">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-neutral-200 bg-white px-5 py-3.5 shadow-[0_-4px_24px_rgba(15,23,42,0.12)] dark:border-slate-700 dark:bg-slate-800">
+            <div className="flex flex-wrap items-center gap-4 text-sm">
+              <Summary
+                label="Warehouse:"
+                value={
+                  <span className="block max-w-[180px] truncate">
+                    {warehouseSummary}
+                  </span>
+                }
+              />
+              <span className="text-neutral-300">|</span>
+              <Summary label="Materials:" value={groups.length} />
+              <span className="text-neutral-300">|</span>
+              <Summary label="Bins:" value={filledBins} />
+              <span className="text-neutral-300">|</span>
+              <span className="flex items-center gap-2">
+                <span className="text-xs text-neutral-500">
+                  Total Adjustment:
+                </span>
+                <span className="text-base font-bold text-[#5166AE]">
+                  {fmt(totalAdjustment)}
+                </span>
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              {blocking && (
+                <span className="hidden text-xs text-neutral-500 xl:inline">
+                  {blocking}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => navigate(BASE)}
+                className="h-10 rounded-lg border border-neutral-300 bg-white px-5 text-sm font-medium text-neutral-800 hover:bg-neutral-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!!blocking}
+                title={blocking || undefined}
+                onClick={() => setReviewing(true)}
+                className="h-10 rounded-lg bg-[#5166AE] px-5 text-sm font-semibold text-white hover:bg-[#41528c] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Submit for Approval
+              </button>
+            </div>
           </div>
         </div>
-      </Modal>
+      )}
+
+      {/* FR-IA-12 rule 1: this confirmation is the submission. */}
+      {reviewing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-[3px]"
+            onClick={() => !saving && setReviewing(false)}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="relative z-10 w-full max-w-[520px] rounded-2xl bg-white p-7 shadow-[0_22px_60px_rgba(15,23,42,0.32)]"
+          >
+            <div className="text-xs text-neutral-500">
+              Inventory Adjustment - Confirm Submit
+            </div>
+            <h2 className="mt-2 text-xl font-semibold text-neutral-900">
+              Submit for approval?
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-neutral-600">
+              The adjustment goes to a manager for approval and cannot be edited
+              afterwards. Stock changes only once it is approved
+              {rule?.oracle_hit === "always" ? " and Oracle approves it" : ""}.
+            </p>
+            <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 rounded-lg bg-neutral-50 p-4 text-sm ring-1 ring-neutral-200">
+              <dt className="text-neutral-500">Type</dt>
+              <dd className="font-medium text-neutral-900">{rule?.label}</dd>
+              <dt className="text-neutral-500">Warehouse</dt>
+              <dd className="font-medium text-neutral-900">
+                {warehouseSummary}
+              </dd>
+              <dt className="text-neutral-500">Materials / Bins</dt>
+              <dd className="font-medium text-neutral-900">
+                {groups.length} / {picked.length}
+              </dd>
+              <dt className="text-neutral-500">Total Adjustment</dt>
+              <dd className="font-bold text-[#5166AE]">
+                {fmt(totalAdjustment)}
+              </dd>
+              {selectedDiscs.size > 0 && (
+                <>
+                  <dt className="text-neutral-500">Discrepancies</dt>
+                  <dd className="font-medium text-neutral-900">
+                    {selectedDiscs.size}
+                  </dd>
+                </>
+              )}
+            </dl>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setReviewing(false)}
+                disabled={saving}
+                className="h-10 rounded-lg border border-neutral-300 bg-white px-5 text-sm font-medium text-neutral-800 hover:bg-neutral-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submit}
+                disabled={saving}
+                className="h-10 rounded-lg bg-[#5166AE] px-5 text-sm font-semibold text-white hover:bg-[#41528c] disabled:opacity-50"
+              >
+                {saving ? "Submitting…" : "Yes, submit"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function Row({ label, value }: { label: string; value: ReactNode }) {
+function Field({
+  label,
+  required,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  children: ReactNode;
+}) {
   return (
     <div>
-      <dt className="text-xs text-slate-400">{label}</dt>
-      <dd className="font-medium text-slate-700">{value}</dd>
+      <div className="mb-1.5 text-sm font-medium text-neutral-800 dark:text-slate-200">
+        {label} {required && <span className="text-red-500">*</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function SectionHead({
+  title,
+  subtitle,
+  right,
+}: {
+  title: string;
+  subtitle: string;
+  right?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-3 rounded-t-xl border-b border-neutral-200 bg-neutral-50/60 px-5 py-4 dark:border-slate-700 dark:bg-slate-900/30">
+      <div>
+        <h2 className="text-base font-semibold text-neutral-900 dark:text-white">
+          {title}
+        </h2>
+        <p className="mt-0.5 text-[13px] text-neutral-600 dark:text-slate-400">
+          {subtitle}
+        </p>
+      </div>
+      {right}
+    </div>
+  );
+}
+
+function Summary({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="text-xs text-neutral-500">{label}</span>
+      <span className="font-semibold text-neutral-900 dark:text-white">
+        {value}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * WMS dev's rounded – qty + pill. Takes a signed value: the text is kept as
+ * typed so "-" or "1." can be entered on the way to a number.
+ */
+function QtyPill({
+  value,
+  onChange,
+  min,
+  disabled,
+  invalid,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  min?: number;
+  disabled?: boolean;
+  invalid?: boolean;
+}) {
+  const [text, setText] = useState(value ? String(value) : "");
+  const [lastValue, setLastValue] = useState(value);
+  // Follow value changes made outside the input (– / +, unticking the bin).
+  if (value !== lastValue) {
+    setLastValue(value);
+    if (Number(text) !== value) setText(value ? String(value) : "");
+  }
+  const set = (n: number) => {
+    const v = min != null ? Math.max(min, n) : n;
+    setText(v ? String(v) : "");
+    setLastValue(v);
+    onChange(v);
+  };
+  const btn =
+    "flex h-full w-9 shrink-0 items-center justify-center text-lg text-neutral-500 transition-colors hover:bg-neutral-200 hover:text-neutral-900 disabled:opacity-40 disabled:hover:bg-transparent";
+  return (
+    <div
+      className={`relative inline-flex h-8 w-[130px] items-center overflow-hidden rounded-full border shadow-sm transition-all ${
+        disabled
+          ? "cursor-not-allowed border-neutral-200 bg-neutral-100 opacity-50"
+          : invalid
+            ? "border-red-400 bg-white"
+            : "border-neutral-200 bg-white focus-within:border-[#5166AE]"
+      }`}
+    >
+      <button
+        type="button"
+        className={btn}
+        disabled={disabled || (min != null && value <= min)}
+        onClick={() => set(value - 1)}
+        aria-label="Decrease quantity"
+      >
+        –
+      </button>
+      <div className="relative flex h-full flex-1 items-center justify-center border-x border-neutral-200 bg-white">
+        <input
+          inputMode="decimal"
+          disabled={disabled}
+          placeholder="0"
+          className="w-full bg-transparent px-1 text-center text-sm text-neutral-900 outline-none disabled:bg-neutral-100 disabled:text-neutral-400"
+          value={text}
+          onChange={(e) => {
+            const raw = e.target.value.replace(",", ".");
+            if (!/^-?\d*\.?\d*$/.test(raw)) return;
+            setText(raw);
+            const n = Number(raw);
+            if (
+              raw !== "" &&
+              raw !== "-" &&
+              raw !== "." &&
+              Number.isFinite(n)
+            ) {
+              setLastValue(n);
+              onChange(n);
+            } else if (raw === "") {
+              setLastValue(0);
+              onChange(0);
+            }
+          }}
+          onBlur={() => min != null && value < min && set(min)}
+        />
+      </div>
+      <button
+        type="button"
+        className={btn}
+        disabled={disabled}
+        onClick={() => set(value + 1)}
+        aria-label="Increase quantity"
+      >
+        +
+      </button>
+    </div>
+  );
+}
+
+/** "Pending N Docs (Q Qty)" with WMS dev's popover listing the documents. */
+function PendingDocs({
+  docs,
+  total,
+}: {
+  docs: AdjPendingDoc[];
+  total: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) =>
+      !ref.current?.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="mt-1 inline-flex select-none items-center gap-1 rounded-md border border-amber-200/80 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 transition-colors hover:bg-amber-100/80"
+      >
+        Pending {docs.length} Doc{docs.length === 1 ? "" : "s"} ({fmt(total)}{" "}
+        Qty)
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-40 mt-1 w-72 rounded-xl border border-neutral-200 bg-white p-3 shadow-lg">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-sm font-semibold text-neutral-900">
+              Pending Adjustments
+            </span>
+            <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+              Total {fmt(total)} Qty
+            </span>
+          </div>
+          <ul className="max-h-56 space-y-1 overflow-y-auto">
+            {docs.map((d) => (
+              <li key={`${d.id}-${d.qty}`}>
+                <a
+                  href={`${BASE}/${d.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-start justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-neutral-50"
+                >
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-1.5">
+                      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+                      <span className="text-sm font-semibold text-[#5166AE]">
+                        {d.adjustment_number}
+                      </span>
+                      <span className="rounded border border-amber-200 bg-amber-50 px-1 text-[10px] font-semibold text-amber-700">
+                        {fmt(d.qty)} Qty
+                      </span>
+                    </span>
+                    <span className="block pl-3 text-xs text-neutral-500">
+                      {adjStatusLabel(d.status)} • by {d.created_by ?? "-"}
+                    </span>
+                  </span>
+                  <span className="mt-0.5 text-neutral-400">
+                    <svg
+                      className="h-3.5 w-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M14 5h5v5M19 5l-8 8M10 5H6a1 1 0 00-1 1v12a1 1 0 001 1h12a1 1 0 001-1v-4"
+                      />
+                    </svg>
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

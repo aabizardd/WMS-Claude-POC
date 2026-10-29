@@ -87,6 +87,29 @@ export class TransferOrderSyncService {
     });
   }
 
+  /**
+   * Refresh ONE Transfer Order (header + lines) from the bridge by its tranid,
+   * e.g. right after a Goods Receive: Oracle's received quantities and status
+   * change on the item receipt, and the incremental sync may not see it soon.
+   */
+  async syncOne(tranId: string): Promise<boolean> {
+    const res = await this.erp.post<OracleToResponse>('/transfer-orders/get', {
+      page: 1,
+      page_size: 1,
+      sort_by: 'lastmodifieddate',
+      sort_order: 'DESC',
+      filters: { tranid: tranId },
+    });
+    const to = (res?.data ?? [])[0];
+    if (!to || to.id == null || to.tranid !== tranId) {
+      this.logger.warn(`syncOne: Transfer Order ${tranId} not returned by the bridge`);
+      return false;
+    }
+    await this.upsert(to);
+    this.logger.log(`syncOne: Transfer Order ${tranId} refreshed (status ${to.status_name ?? '-'})`);
+    return true;
+  }
+
   async sync(options: SyncOptions = {}): Promise<SyncResult> {
     const start = Date.now();
     const pageSize = Math.min(

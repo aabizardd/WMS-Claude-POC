@@ -6,10 +6,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { paginationMeta } from '../common/pagination';
 import { QueryTransferOrderDto } from './dto/query-transfer-order.dto';
+import { scopeWhere } from '../common/warehouse-scope';
 
 export interface WarehouseScope {
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
 }
 
 type ToOrder = Prisma.TransferOrderOrderByWithRelationInput;
@@ -79,6 +81,29 @@ const detailInclude = {
 type ToDetail = Prisma.TransferOrderGetPayload<{ include: typeof detailInclude }>;
 type ToLine = ToDetail['items'][number];
 
+/** One row of the TO export: a TO line, or one shipped delivery line of it. */
+export interface TransferOrderExportRow {
+  tran_id: string | null;
+  status: string | null;
+  erp_doc_id: string;
+  origin: string | null;
+  destination: string | null;
+  created_at: Date;
+  request_qty: number;
+  sd_number: string | null;
+  packing_id: string | null;
+  from_bin: string | null;
+  material_code: string | null;
+  material_name: string | null;
+  erp_line_id: number;
+  staging_bin: string | null;
+  uom: string | null;
+  qty_shipped: number | null;
+  qty_received: number | null;
+  date_shipped: Date | null;
+  date_received: Date | null;
+}
+
 const stockKey = (warehouseId: string, materialId: string) => `${warehouseId}|${materialId}`;
 
 @Injectable()
@@ -87,15 +112,11 @@ export class TransferOrdersService {
 
   // Outbound from Transfer Stock is scoped to the FROM location's warehouse.
   private scopeWhere(scope: WarehouseScope): Prisma.TransferOrderWhereInput {
-    if (scope.role === 'admin') {
-      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
-    }
-    return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
+    return scopeWhere(scope, 'warehouseId');
   }
 
-  async findAll(query: QueryTransferOrderDto, scope: WarehouseScope) {
-    const page = query.page ?? 1;
-    const limit = query.limit ?? 10;
+  /** The TO Out / TO In list's where and order, shared by the list and its export. */
+  private listQuery(query: QueryTransferOrderDto, scope: WarehouseScope) {
     const orderBy = buildOrderBy(query.sort_by, query.sort_order, SORTABLE, DEFAULT_ORDER);
 
     const where: Prisma.TransferOrderWhereInput =
@@ -118,6 +139,157 @@ export class TransferOrdersService {
       if (build && values.length) and.push({ OR: values.map(build) });
     }
     if (and.length) where.AND = and;
+    return { where, orderBy };
+  }
+
+  /**
+   * The TO export (WMS dev's "ITI TO" sheet), the same for TO Out and TO In:
+   * every order the list's filters match — not only one page — in the list's
+   * order (a Part Number filter keeps only the matching lines). One row per
+   * line and shipped delivery line (SD, packing, from and
+   * staging bin); a line WMS has not shipped is one row with those left
+   * empty, carrying Oracle's fulfilled / received qty if it has any. GRs are
+   * tied to the TO line, not to an SD, so a line's received qty is spread
+   * over its SDs in shipping order. Yielded in batches.
+   */
+  async *exportRows(query: QueryTransferOrderDto, scope: WarehouseScope): AsyncGenerator<TransferOrderExportRow[]> {
+    const { where, orderBy } = this.listQuery(query, scope);
+    // A Part Number filter keeps only the matching lines, as the list's
+    // accordion does (item name or material code, values OR-ed).
+    const partFilters = (query.filters ?? [])
+      .filter((f) => f.field === 'material_code')
+      .map((f) => (f.values ?? []).map((v) => v.trim().toLowerCase()).filter(Boolean))
+      .filter((values) => values.length);
+    const lineMatches = (itemName: string | null, code: string | null | undefined) =>
+      partFilters.every((values) =>
+        values.some((v) => (itemName ?? '').toLowerCase().includes(v) || (code ?? '').toLowerCase().includes(v)),
+      );
+    const BATCH = 200;
+    for (let skip = 0; ; skip += BATCH) {
+      const orders = await this.prisma.transferOrder.findMany({
+        where,
+        // The id keeps paging stable when the sort column has ties.
+        orderBy: [orderBy, { id: 'asc' }],
+        skip,
+        take: BATCH,
+        include: {
+          warehouse: { select: { name: true } },
+          items: {
+            orderBy: { lineNumber: 'asc' },
+            include: {
+              deliveryItems: {
+                where: { delivery: { status: 'Closed' } },
+                orderBy: [{ delivery: { updatedAt: 'asc' } }, { createdAt: 'asc' }],
+                select: {
+                  qty: true,
+                  bin: { select: { binLabel: true } },
+                  pickingItem: { select: { bin: { select: { binLabel: true } } } },
+                  packing: { select: { packingCode: true } },
+                  delivery: { select: { sdoId: true, deliveryCode: true, updatedAt: true } },
+                },
+              },
+            },
+          },
+        },
+      });
+      const lines = orders.flatMap((o) => o.items);
+      const [matById, receivedAt, destinations] = await Promise.all([
+        this.materialsById(lines),
+        this.lastReceivedAt(lines.map((l) => l.id)),
+        this.warehouseNames(orders.map((o) => o.toWarehouseId)),
+      ]);
+
+      const rows: TransferOrderExportRow[] = [];
+      for (const o of orders) {
+        const head = {
+          tran_id: o.tranId,
+          status: o.statusName,
+          erp_doc_id: o.oracleId,
+          origin: o.warehouse?.name ?? o.fromLocationName,
+          destination: (o.toWarehouseId && destinations.get(o.toWarehouseId)) || o.toLocationName,
+          created_at: o.createdAt,
+        };
+        for (const l of o.items) {
+          const mat = l.materialId ? matById.get(l.materialId) : null;
+          if (!lineMatches(l.itemName, mat?.materialCode)) continue;
+          const line = {
+            ...head,
+            request_qty: l.quantity,
+            material_code: mat?.materialCode ?? l.itemName,
+            material_name: mat?.materialName ?? l.description,
+            erp_line_id: l.lineNumber,
+            uom: mat?.primaryUom?.uomCode ?? null,
+          };
+          if (!l.deliveryItems.length) {
+            // Nothing shipped through WMS: Oracle's own figures, if any (a TO
+            // fulfilled or received in Oracle directly).
+            rows.push({
+              ...line,
+              sd_number: null,
+              packing_id: null,
+              from_bin: null,
+              staging_bin: null,
+              qty_shipped: l.fulfilled > 0 ? l.fulfilled : null,
+              qty_received: l.received > 0 ? l.received : null,
+              date_shipped: null,
+              date_received: l.received > 0 ? (receivedAt.get(l.id) ?? null) : null,
+            });
+            continue;
+          }
+          let toReceive = l.received;
+          for (const d of l.deliveryItems) {
+            const received = Math.min(d.qty, Math.max(0, toReceive));
+            toReceive -= received;
+            rows.push({
+              ...line,
+              sd_number: d.delivery.sdoId ?? d.delivery.deliveryCode,
+              packing_id: d.packing?.packingCode ?? null,
+              from_bin: d.pickingItem?.bin?.binLabel ?? null,
+              staging_bin: d.bin?.binLabel ?? null,
+              qty_shipped: d.qty,
+              qty_received: received > 0 ? received : null,
+              date_shipped: d.delivery.updatedAt,
+              date_received: received > 0 ? (receivedAt.get(l.id) ?? null) : null,
+            });
+          }
+        }
+      }
+      if (rows.length) yield rows;
+      if (orders.length < BATCH) return;
+    }
+  }
+
+  /** Per TO line, when its latest Goods Receive was closed (received). */
+  private async lastReceivedAt(lineIds: string[]) {
+    const items = lineIds.length
+      ? await this.prisma.goodsReceiveItem.findMany({
+          where: { transferOrderItemId: { in: lineIds }, goodsReceive: { status: 'Closed' } },
+          select: { transferOrderItemId: true, goodsReceive: { select: { updatedAt: true } } },
+        })
+      : [];
+    const at = new Map<string, Date>();
+    for (const it of items) {
+      const id = it.transferOrderItemId;
+      if (!id) continue;
+      const prev = at.get(id);
+      if (!prev || it.goodsReceive.updatedAt > prev) at.set(id, it.goodsReceive.updatedAt);
+    }
+    return at;
+  }
+
+  /** WMS warehouse names by id (a TO stores its destination as a bare id). */
+  private async warehouseNames(ids: (string | null)[]) {
+    const unique = [...new Set(ids.filter((x): x is string => !!x))];
+    const rows = unique.length
+      ? await this.prisma.warehouse.findMany({ where: { id: { in: unique } }, select: { id: true, name: true } })
+      : [];
+    return new Map(rows.map((w) => [w.id, w.name]));
+  }
+
+  async findAll(query: QueryTransferOrderDto, scope: WarehouseScope) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const { where, orderBy } = this.listQuery(query, scope);
 
     const withItems = query.include_items === 'true';
     const [total, rows] = await this.prisma.$transaction([
@@ -311,10 +483,7 @@ export class TransferOrdersService {
 
   // Inbound to Transfer Stock is scoped to the TO's DESTINATION warehouse.
   private inboundScopeWhere(scope: WarehouseScope): Prisma.TransferOrderWhereInput {
-    if (scope.role === 'admin') {
-      return scope.warehouseId ? { toWarehouseId: scope.warehouseId } : {};
-    }
-    return { toWarehouseId: scope.warehouseId ?? '__no_warehouse__' };
+    return scopeWhere(scope, 'toWarehouseId');
   }
 
   /**

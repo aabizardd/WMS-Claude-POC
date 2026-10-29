@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import api from '../../lib/api';
+import { downloadFile } from '../../lib/download';
 import Modal from '../../components/Modal';
 import type {
   Paginated,
@@ -181,6 +182,7 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
   const [pageSize, setPageSize] = useState(10);
   const [status, setStatus] = useState(initial.status);
   const [reloadKey, setReloadKey] = useState(0);
+  const [exporting, setExporting] = useState(false);
 
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initial.filters));
   const [applied, setApplied] = useState<TransferOrderFilter[]>(initial.filters);
@@ -203,6 +205,32 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
   const [syncResult, setSyncResult] = useState<TransferOrderSyncResult | null>(null);
 
   const appliedKey = JSON.stringify(applied);
+
+  /**
+   * Every order the filters match (not only this page), in the list's order.
+   * TO Out and TO In export the same "ITI TO" layout.
+   */
+  async function exportExcel() {
+    if (exporting) return;
+    setExporting(true);
+    toast.info('Preparing the export…');
+    try {
+      await downloadFile(
+        '/transfer-orders/export',
+        {
+          status: status || undefined,
+          filters: applied.length ? JSON.stringify(applied) : undefined,
+          direction: isIn ? 'in' : undefined,
+          ...params(),
+        },
+        'transfer_order_export.xlsx',
+      );
+    } catch {
+      toast.error('Export failed. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -373,9 +401,9 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
           subtitle={isIn ? 'Record incoming requests for transfer order' : 'Initiate a stock transfer between locations'}
           menu={[
             {
-              label: 'Export',
+              label: exporting ? 'Exporting…' : 'Export',
               icon: <ExportIcon />,
-              onClick: () => toast.info('Export is not available yet.'),
+              onClick: exportExcel,
             },
           ]}
         />

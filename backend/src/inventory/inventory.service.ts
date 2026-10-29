@@ -16,6 +16,7 @@ import type {
   InventoryFilterField,
 } from './dto/query-inventory.dto';
 import { loadPibMrn } from '../goods-receive/gr-source.util';
+import { scopeWhere, inScope } from '../common/warehouse-scope';
 
 type InvOrder = Prisma.InventoryManagementOrderByWithRelationInput;
 // Only real columns are server-sortable; the quantity columns are aggregates
@@ -110,7 +111,8 @@ export interface WarehouseScope {
   // stock ledger; optional because older call sites do not set it.
   userId?: number;
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
 }
 
 const materialInclude = {
@@ -155,6 +157,28 @@ type InvDetail = Prisma.InventoryManagementGetPayload<{
   include: typeof detailInclude;
 }>;
 
+/** The query parts the Inventory List and its export share. */
+interface InventoryListQuery {
+  search?: string;
+  filters?: InventoryFilterDto[];
+  sort_by?: string;
+  sort_order?: string;
+}
+
+/** One row of the Inventory List export: a material's stock in one bin. */
+export interface InventoryExportRow {
+  material_code: string;
+  material_name: string | null;
+  warehouse_name: string | null;
+  bin_label: string | null;
+  stock_unit_cuom: string | null;
+  qty_on_hand: number;
+  qty_available: number;
+  qty_freeze: number;
+  qty_reserved: number;
+  qty_in_transit: number;
+}
+
 interface StockDelta {
   avail?: number;
   reserved?: number;
@@ -189,29 +213,13 @@ export class InventoryService {
   constructor(private prisma: PrismaService) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.InventoryManagementWhereInput {
-    if (scope.role === 'admin') {
-      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
-    }
-    return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
+    return scopeWhere(scope, 'warehouseId');
   }
 
   // ---------- read ----------
 
-  async findAll(
-    query: {
-      page?: number;
-      limit?: number;
-      search?: string;
-      filters?: InventoryFilterDto[];
-      include_bins?: string;
-      sort_by?: string;
-      sort_order?: string;
-    },
-    scope: WarehouseScope,
-  ) {
-    const withBins = query.include_bins === 'true';
-    const page = query.page ?? 1;
-    const limit = query.limit ?? 10;
+  /** The Inventory List's where and order, shared by the list and its export. */
+  private listQuery(query: InventoryListQuery, scope: WarehouseScope) {
     const orderBy = buildOrderBy(
       query.sort_by,
       query.sort_order,
@@ -250,6 +258,86 @@ export class InventoryService {
         OR: f.values.map((v) => INVENTORY_FILTERS[f.field](v)),
       }));
     }
+
+    return { where, orderBy, filters };
+  }
+
+  /**
+   * The Inventory List export (WMS dev's "inventory_details" sheet): one row
+   * per material, warehouse and bin, for every inventory row the list's
+   * filters match — not only one page — in the list's order. Every bin is
+   * listed, empty ones too; a Bin filter keeps only the matching bins, as the
+   * list's accordion does. Yielded in batches so a large export streams.
+   */
+  async *exportRows(
+    query: InventoryListQuery,
+    scope: WarehouseScope,
+  ): AsyncGenerator<InventoryExportRow[]> {
+    const { where, orderBy, filters } = this.listQuery(query, scope);
+    const binFilters = filters
+      .filter((f) => f.field === 'bin')
+      .map((f) => f.values.map((v) => v.toLowerCase()));
+    const binMatches = (label: string, code: string) =>
+      binFilters.every((values) => values.some((v) => label.includes(v) || code.includes(v)));
+
+    const BATCH = 500;
+    for (let skip = 0; ; skip += BATCH) {
+      const batch = await this.prisma.inventoryManagement.findMany({
+        where,
+        include: detailInclude,
+        // The id keeps paging stable when the sort column has ties.
+        orderBy: [orderBy, { id: 'asc' }],
+        skip,
+        take: BATCH,
+      });
+      const rows: InventoryExportRow[] = [];
+      for (const m of batch) {
+        const bins = [...m.binStocks].sort((a, b) =>
+          (a.bin?.binLabel ?? '').localeCompare(b.bin?.binLabel ?? ''),
+        );
+        for (const bs of bins) {
+          const label = bs.bin?.binLabel ?? '';
+          if (!binMatches(label.toLowerCase(), (bs.bin?.binCode ?? '').toLowerCase())) continue;
+          const q = this.sumBatches([bs]);
+          // Same split as the bin table: a frozen (KIT) bin's stock is
+          // Freeze, not Available.
+          const frozen = isFrozenBinLabel(bs.bin?.binLabel);
+          rows.push({
+            material_code: m.materialCode,
+            material_name: m.material?.materialName ?? null,
+            warehouse_name: m.warehouse?.name ?? null,
+            bin_label: label || null,
+            stock_unit_cuom: m.material?.primaryUom?.uomCode ?? null,
+            qty_on_hand: q.on_hand,
+            qty_available: frozen ? 0 : q.avail_qty,
+            qty_freeze: q.freeze_qty,
+            qty_reserved: q.reserved_qty,
+            qty_in_transit: q.in_transit_qty,
+          });
+        }
+      }
+      if (rows.length) yield rows;
+      if (batch.length < BATCH) return;
+    }
+  }
+
+
+  async findAll(
+    query: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      filters?: InventoryFilterDto[];
+      include_bins?: string;
+      sort_by?: string;
+      sort_order?: string;
+    },
+    scope: WarehouseScope,
+  ) {
+    const withBins = query.include_bins === 'true';
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const { where, orderBy, filters } = this.listQuery(query, scope);
 
     const [total, rows, all] = await this.prisma.$transaction([
       this.prisma.inventoryManagement.count({ where }),
@@ -335,7 +423,7 @@ export class InventoryService {
     });
     if (
       !inv ||
-      (scope.role !== 'admin' && inv.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, inv.warehouseId))
     ) {
       throw new NotFoundException(`Inventory ${id} not found`);
     }
@@ -355,7 +443,7 @@ export class InventoryService {
     });
     if (
       !inv ||
-      (scope.role !== 'admin' && inv.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, inv.warehouseId))
     ) {
       throw new NotFoundException(`Inventory ${id} not found`);
     }
@@ -559,7 +647,7 @@ export class InventoryService {
         binStocks: { select: { reservedQty: true } },
       },
     });
-    if (!inv || (scope.role !== 'admin' && inv.warehouseId !== scope.warehouseId)) {
+    if (!inv || (scope.role !== 'admin' && !inScope(scope, inv.warehouseId))) {
       throw new NotFoundException(`Inventory ${id} not found`);
     }
     const header = {
@@ -629,8 +717,8 @@ export class InventoryService {
         throw new BadRequestException('filters must be a JSON array of {field, values}');
       }
     }
-    // Admin may narrow to the header's site; everyone else sees their warehouse.
-    const warehouseId = scope.role === 'admin' ? scope.warehouseId : (scope.warehouseId ?? '__no_warehouse__');
+    // Admin may narrow to the header's site; everyone else sees their warehouses.
+    const warehouseId = scope.warehouseIds ? { in: scope.warehouseIds } : null;
 
     let all: DocRow[];
     let cancelledQty = 0;
@@ -927,7 +1015,7 @@ export class InventoryService {
       where: { id },
       select: { warehouseId: true },
     });
-    if (!inv || (scope.role !== 'admin' && inv.warehouseId !== scope.warehouseId)) {
+    if (!inv || (scope.role !== 'admin' && !inScope(scope, inv.warehouseId))) {
       throw new NotFoundException(`Inventory ${id} not found`);
     }
 

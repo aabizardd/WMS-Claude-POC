@@ -4,10 +4,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { highestSeq } from '../common/doc-sequence';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { loadPibMrn } from '../goods-receive/gr-source.util';
+import { scopeWhere, inScope } from '../common/warehouse-scope';
 
 export interface WarehouseScope {
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
 }
 
 type DiscrepancyOrder = Prisma.DiscrepancyOrderByWithRelationInput;
@@ -110,10 +112,7 @@ export class DiscrepancyService {
   constructor(private prisma: PrismaService) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.DiscrepancyWhereInput {
-    if (scope.role === 'admin') {
-      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
-    }
-    return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
+    return scopeWhere(scope, 'warehouseId');
   }
 
   // ---------- read ----------
@@ -213,7 +212,7 @@ export class DiscrepancyService {
     });
     if (
       !disc ||
-      (scope.role !== 'admin' && disc.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, disc.warehouseId))
     ) {
       throw new NotFoundException(`Discrepancy ${id} not found`);
     }

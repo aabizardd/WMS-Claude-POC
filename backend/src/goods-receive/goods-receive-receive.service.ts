@@ -4,10 +4,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { DiscrepancyService } from '../discrepancy/discrepancy.service';
 import { loadPibMrn } from './gr-source.util';
+import { MrnSyncService } from '../mrn/mrn-sync.service';
+import { inScope } from '../common/warehouse-scope';
 
 interface WarehouseScope {
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
 }
 
 interface ErpAuthResponse {
@@ -57,6 +60,7 @@ export class GoodsReceiveReceiveService {
     private config: ConfigService,
     private inventory: InventoryService,
     private discrepancy: DiscrepancyService,
+    private mrnSync: MrnSyncService,
   ) {}
 
   private baseUrl() {
@@ -91,7 +95,7 @@ export class GoodsReceiveReceiveService {
     const gr = await this.prisma.goodsReceive.findUnique({ where: { id } });
     if (
       !gr ||
-      (scope.role !== 'admin' && gr.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, gr.warehouseId))
     ) {
       throw new NotFoundException(`Goods Receive ${id} not found`);
     }
@@ -121,6 +125,24 @@ export class GoodsReceiveReceiveService {
     });
 
     return { accepted: true };
+  }
+
+  /** Re-sync the GR's source inbound shipment (MRN) from Oracle. */
+  private async refreshMrn(grId: string) {
+    try {
+      const gr = await this.prisma.goodsReceive.findUnique({
+        where: { id: grId },
+        select: { sourceType: true, sourceDocId: true },
+      });
+      if (gr?.sourceType !== 'PIB') return;
+      const mrn = await this.prisma.mrn.findUnique({
+        where: { id: gr.sourceDocId },
+        select: { oracleId: true },
+      });
+      if (mrn?.oracleId) await this.mrnSync.syncOne(mrn.oracleId);
+    } catch (e) {
+      this.logger.warn(`MRN refresh after receipt failed for GR ${grId}: ${(e as Error).message}`);
+    }
   }
 
   async processInBackground(id: string): Promise<void> {
@@ -260,6 +282,9 @@ export class GoodsReceiveReceiveService {
               `Discrepancy recording failed for GR ${id}: ${(e as Error).message}`,
             );
           }
+          // Pull the shipment back from Oracle so its status / received
+          // quantities match the receipt. Non-fatal.
+          await this.refreshMrn(id);
           return;
         }
 

@@ -50,10 +50,14 @@ export class CreateInventoryAdjustmentDto {
   @IsUUID()
   class_id!: string;
 
+  // Header department — its Department.oracleId is sent to Oracle.
+  @IsUUID()
+  department_id!: string;
+
   // FR-IA-02: optional free text.
   @IsOptional()
   @IsString()
-  @MaxLength(4000)
+  @MaxLength(300)
   memo?: string;
 
   @IsArray()

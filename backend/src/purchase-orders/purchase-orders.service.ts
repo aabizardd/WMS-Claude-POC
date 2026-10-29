@@ -5,10 +5,12 @@ import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { paginationMeta } from '../common/pagination';
 import { subsidiarySingleFilter } from '../common/subsidiary-filter';
 import { QueryPurchaseOrderDto } from './dto/query-purchase-order.dto';
+import { scopeWhere } from '../common/warehouse-scope';
 
 export interface WarehouseScope {
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
 }
 
 type PoOrder = Prisma.PurchaseOrderOrderByWithRelationInput;
@@ -36,15 +38,10 @@ export class PurchaseOrdersService {
 
   private scopeWhere(scope: WarehouseScope): Prisma.PurchaseOrderWhereInput {
     // Subsidiary allow-list (same as SalesOrder/Vendor) + warehouse scoping.
-    const where: Prisma.PurchaseOrderWhereInput = {
+    return {
       subsidiaryId: subsidiarySingleFilter(),
+      ...scopeWhere(scope),
     };
-    if (scope.role === 'admin') {
-      if (scope.warehouseId) where.warehouseId = scope.warehouseId;
-    } else {
-      where.warehouseId = scope.warehouseId ?? '__no_warehouse__';
-    }
-    return where;
   }
 
   async findAll(query: QueryPurchaseOrderDto, scope: WarehouseScope) {

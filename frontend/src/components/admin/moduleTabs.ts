@@ -68,7 +68,6 @@ export const MODULES: Module[] = [
   {
     match: ['/admin/inbound/pib'],
     tabs: [
-      { to: '/admin/inbound/pib/mrn', label: 'MRN', permission: 'mrn:read' },
       { to: '/admin/inbound/pib/goods-receive', label: 'Goods Receive', permission: 'goods-receive:read' },
       { to: '/admin/inbound/pib/putaway', label: 'Putaway', permission: 'putaway:read' },
       { to: '/admin/inbound/pib/history', label: 'History', permission: 'putaway:read' },

@@ -11,6 +11,7 @@ import type {
 } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import SearchableSelect from '../../components/SearchableSelect';
+import MultiValueSelect from '../../components/MultiValueSelect';
 import FormField, { requiredErrors } from '../../components/form/FormField';
 
 interface FormState {
@@ -21,7 +22,7 @@ interface FormState {
   employeeId: string;
   password: string;
   roleId: number | '';
-  warehouseId: string;
+  warehouseIds: string[];
   departmentId: string;
   subsidiaryId: string;
   isActive: boolean;
@@ -35,7 +36,7 @@ const emptyForm: FormState = {
   employeeId: '',
   password: '',
   roleId: '',
-  warehouseId: '',
+  warehouseIds: [],
   departmentId: '',
   subsidiaryId: '',
   isActive: true,
@@ -49,9 +50,10 @@ export default function UserFormPage() {
   const { has, user } = useAuth();
   const canManage = isNew ? has('users:create') : has('users:update');
   const viewOnly = !canManage;
-  // Non-admins can't grant the admin (super-admin) role, and the warehouse is
-  // fixed to their own (from /me) — not selectable.
+  // Non-admins can't grant the admin (super-admin) role, and may only assign
+  // the warehouses they are assigned themselves (from /me).
   const isAdmin = user?.role === 'admin';
+  const canAssign = (warehouseId: string) => isAdmin || !!user?.warehouseIds.includes(warehouseId);
 
   const [roles, setRoles] = useState<Role[]>([]);
   // The role the user had when the form opened: still listed if it has since
@@ -62,6 +64,9 @@ export default function UserFormPage() {
   const [subsidiaries, setSubsidiaries] = useState<SubsidiaryOption[]>([]);
   const [subsLoading, setSubsLoading] = useState(false);
   const [form, setForm] = useState<FormState>(emptyForm);
+  // Warehouses of the edited user that this editor does not manage: kept as
+  // they are by the server, so only counted here.
+  const [otherWarehouses, setOtherWarehouses] = useState(0);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -89,6 +94,7 @@ export default function UserFormPage() {
         if (!isNew) {
           const u = (res[3] as { data: User }).data;
           setLoadedRoleId(u.roleId);
+          setOtherWarehouses(u.warehouseIds.filter((w) => !canAssign(w)).length);
           setForm({
             firstName: u.firstName ?? '',
             lastName: u.lastName ?? '',
@@ -97,7 +103,7 @@ export default function UserFormPage() {
             employeeId: u.employeeId ?? '',
             password: '',
             roleId: u.roleId,
-            warehouseId: u.warehouseId ?? '',
+            warehouseIds: u.warehouseIds.filter(canAssign),
             departmentId: u.departmentId ?? '',
             subsidiaryId: u.subsidiaryId ?? '',
             isActive: u.isActive,
@@ -106,14 +112,14 @@ export default function UserFormPage() {
           if (u.departmentId) loadSubsidiaries(u.departmentId);
         } else {
           // New user: default to the first assignable role (admins excluded for
-          // non-admin creators) and lock the warehouse to the creator's own.
+          // non-admin creators); a creator with one warehouse starts with it.
           const assignable = roleList.filter(
             (r) => (isAdmin || r.name !== 'admin') && r.isActive !== false,
           );
           setForm((f) => ({
             ...f,
             roleId: assignable[0]?.id ?? '',
-            warehouseId: isAdmin ? f.warehouseId : (user?.warehouseId ?? ''),
+            warehouseIds: !isAdmin && user?.warehouseIds.length === 1 ? [...user.warehouseIds] : f.warehouseIds,
           }));
         }
       })
@@ -168,8 +174,8 @@ export default function UserFormPage() {
       ['username', form.username, 'Username is required'],
       ['email', form.email, 'Email is required'],
       ['roleId', form.roleId, 'Role is required'],
-      ['warehouseId', form.warehouseId, 'Warehouse is required'],
     ]);
+    if (form.warehouseIds.length === 0 && otherWarehouses === 0) errs.warehouseIds = 'Select at least one warehouse';
     if (isNew && !form.password) errs.password = 'Password is required';
     if (form.password && form.password.length < 6)
       errs.password = 'Password must be at least 6 characters';
@@ -185,7 +191,8 @@ export default function UserFormPage() {
       email: form.email,
       employeeId: form.employeeId.trim(),
       roleId: Number(form.roleId),
-      warehouseId: form.warehouseId, // required
+      // At least one; left out when the editor manages none of the user's.
+      warehouseIds: form.warehouseIds.length ? form.warehouseIds : undefined,
       // Optional org assignment; null clears it. Subsidiary only sent with a
       // department (enforced by the dependent dropdown + backend validation).
       departmentId: form.departmentId || null,
@@ -331,22 +338,38 @@ export default function UserFormPage() {
                   }))}
               />
             </Field>
-            <Field label="Warehouse" required error={fieldErrors.warehouseId}>
-              <SearchableSelect
-                value={form.warehouseId}
-                onChange={(v) => set({ warehouseId: v })}
-                // Only admins can choose the warehouse; others are fixed to
-                // their own (from /me).
-                disabled={viewOnly || !isAdmin}
-                placeholder="Select warehouse"
-                searchPlaceholder="Search warehouse…"
-                options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
-              />
-              {!isAdmin && (
-                <p className="mt-1 text-xs text-slate-400">
-                  Fixed to your warehouse.
-                </p>
+            <Field label="Warehouse" required error={fieldErrors.warehouseIds}>
+              {viewOnly ? (
+                <SearchableSelect
+                  value=""
+                  onChange={() => undefined}
+                  disabled
+                  placeholder={
+                    warehouses
+                      .filter((w) => form.warehouseIds.includes(w.id))
+                      .map((w) => w.name)
+                      .join(', ') || '-'
+                  }
+                  options={[]}
+                />
+              ) : (
+                <MultiValueSelect
+                  values={form.warehouseIds}
+                  onChange={(v) => set({ warehouseIds: v })}
+                  max={200}
+                  placeholder="Select warehouses"
+                  searchPlaceholder="Search warehouse…"
+                  // Non-admins only hand out the warehouses they hold.
+                  options={warehouses
+                    .filter((w) => canAssign(w.id))
+                    .map((w) => ({ value: w.id, label: w.name }))}
+                />
               )}
+              <p className="mt-1 text-xs text-slate-400">
+                The user sees the data of every selected warehouse.
+                {otherWarehouses > 0 &&
+                  ` Also assigned to ${otherWarehouses} warehouse(s) you do not manage; those stay as they are.`}
+              </p>
             </Field>
             <Field label="Department">
               <SearchableSelect

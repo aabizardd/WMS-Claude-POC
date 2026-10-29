@@ -9,6 +9,20 @@ import { useConfirm } from '../../context/ConfirmContext';
 import MasterList, { type MasterColumn } from '../../components/master/MasterList';
 import { Cell, StatusPill, fmtDateTime, icons } from '../../components/master/MasterKit';
 
+/** WMS dev: the first warehouse, and "+N" for the rest (all of them on hover). */
+function WarehousesCell({ warehouses }: { warehouses: User['warehouses'] }) {
+  if (!warehouses?.length) return <Cell>{null}</Cell>;
+  const [first, ...rest] = warehouses;
+  return (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap" title={warehouses.map((w) => w.name).join('\n')}>
+      <span>{first.name}</span>
+      {rest.length > 0 && (
+        <span className="rounded-full bg-slate-100 px-1.5 py-px text-[11px] font-medium text-slate-600">+{rest.length}</span>
+      )}
+    </span>
+  );
+}
+
 // WMS dev's User Master columns, as far as the POC's users carry them.
 const COLUMNS: MasterColumn<User>[] = [
   { label: 'Status', sortKey: 'is_active', width: 120, render: (u) => <StatusPill active={u.isActive} /> },
@@ -17,7 +31,7 @@ const COLUMNS: MasterColumn<User>[] = [
   { label: 'Full Name', sortKey: 'name', render: (u) => <Cell>{u.name}</Cell> },
   { label: 'Email', sortKey: 'email', render: (u) => <Cell>{u.email}</Cell> },
   { label: 'Role', sortKey: 'role', render: (u) => <Cell>{u.role?.name}</Cell> },
-  { label: 'Warehouse', sortKey: 'warehouse', render: (u) => <Cell>{u.warehouse?.name}</Cell> },
+  { label: 'Warehouse', render: (u) => <WarehousesCell warehouses={u.warehouses} /> },
   { label: 'Employee ID', sortKey: 'employee_id', render: (u) => <Cell>{u.employeeId}</Cell> },
   { label: 'Department', render: (u) => <Cell>{u.department?.name}</Cell> },
   { label: 'Subsidiary', render: (u) => <Cell>{u.subsidiary?.name}</Cell> },

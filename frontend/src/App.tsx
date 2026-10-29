@@ -31,18 +31,25 @@ import OwnershipsPage from './pages/ownership/OwnershipsPage';
 import ProfilePage from './pages/profile/ProfilePage';
 import InboundLayout from './pages/inbound/InboundLayout';
 import InboundLandingPage from './pages/inbound/InboundLandingPage';
-import MrnTab from './pages/inbound/MrnTab';
 import MrnDetailPage from './pages/inbound/MrnDetailPage';
+import PibGrListPage from './pages/inbound/pib/PibGrListPage';
+import PibGrDetailPage from './pages/inbound/pib/PibGrDetailPage';
+import PibPutawayListPage from './pages/inbound/pib/PibPutawayListPage';
+import PibPutawayDetailPage from './pages/inbound/pib/PibPutawayDetailPage';
+import PibHistoryPage from './pages/inbound/pib/PibHistoryPage';
 import GoodsReceiveTab from './pages/inbound/GoodsReceiveTab';
 import GoodsReceiveDetailPage from './pages/inbound/GoodsReceiveDetailPage';
-import PutawayTab from './pages/inbound/PutawayTab';
-import PutawayDetailPage from './pages/inbound/PutawayDetailPage';
 import LocalInboundLayout from './pages/inbound/LocalInboundLayout';
 import PoTab from './pages/inbound/PoTab';
 import PoDetailPage from './pages/inbound/PoDetailPage';
 import { InboundPlaceholder } from './pages/inbound/InboundLayout';
 import TransferInboundLayout from './pages/inbound/TransferInboundLayout';
 import TransferInDetailPage from './pages/inbound/TransferInDetailPage';
+import TransferGrListPage from './pages/inbound/transfer/TransferGrListPage';
+import TransferGrDetailPage from './pages/inbound/transfer/TransferGrDetailPage';
+import TransferPutawayListPage from './pages/inbound/transfer/TransferPutawayListPage';
+import TransferPutawayDetailPage from './pages/inbound/transfer/TransferPutawayDetailPage';
+import TransferHistoryPage from './pages/inbound/transfer/TransferHistoryPage';
 import InventoryLandingPage from './pages/inventory/InventoryLandingPage';
 import InventoryPage from './pages/inventory/InventoryPage';
 import InventoryQtySourcePage from './pages/inventory/InventoryQtySourcePage';
@@ -313,21 +320,16 @@ export default function App() {
           <Route path="inbound" element={<InboundLandingPage />} />
 
           {/* Inbound from PIB (tabbed) */}
+          {/* Inbound from PIB, as WMS dev lays it out: Goods Receive, Putaway, History. */}
           <Route path="inbound/pib" element={<InboundLayout />}>
-            <Route index element={<Navigate to="mrn" replace />} />
-            <Route
-              path="mrn"
-              element={
-                <RequirePermission permission="mrn:read">
-                  <MrnTab />
-                </RequirePermission>
-              }
-            />
+            <Route index element={<Navigate to="goods-receive" replace />} />
+            {/* The MRN tab is gone (WMS dev has none); old links land on Goods Receive. */}
+            <Route path="mrn" element={<Navigate to="/admin/inbound/pib/goods-receive" replace />} />
             <Route
               path="goods-receive"
               element={
                 <RequirePermission permission="goods-receive:read">
-                  <GoodsReceiveTab source="PIB" />
+                  <PibGrListPage />
                 </RequirePermission>
               }
             />
@@ -335,7 +337,7 @@ export default function App() {
               path="putaway"
               element={
                 <RequirePermission permission="putaway:read">
-                  <PutawayTab source="PIB" />
+                  <PibPutawayListPage />
                 </RequirePermission>
               }
             />
@@ -343,7 +345,7 @@ export default function App() {
               path="history"
               element={
                 <RequirePermission permission="putaway:read">
-                  <PutawayTab history source="PIB" />
+                  <PibHistoryPage />
                 </RequirePermission>
               }
             />
@@ -360,7 +362,7 @@ export default function App() {
               path="inbound/pib/goods-receive/:id"
               element={
                 <RequirePermission permission="goods-receive:read">
-                  <GoodsReceiveDetailPage />
+                  <PibGrDetailPage />
                 </RequirePermission>
               }
             />
@@ -377,7 +379,7 @@ export default function App() {
               path="inbound/pib/putaway/:id"
               element={
                 <RequirePermission permission="putaway:read">
-                  <PutawayDetailPage />
+                  <PibPutawayDetailPage />
                 </RequirePermission>
               }
             />
@@ -429,7 +431,7 @@ export default function App() {
               path="goods-receive"
               element={
                 <RequirePermission permission="goods-receive:read">
-                  <GoodsReceiveTab source="TO" basePath="/admin/inbound/transfer" />
+                  <TransferGrListPage />
                 </RequirePermission>
               }
             />
@@ -437,7 +439,7 @@ export default function App() {
               path="putaway"
               element={
                 <RequirePermission permission="putaway:read">
-                  <PutawayTab source="TO" basePath="/admin/inbound/transfer" />
+                  <TransferPutawayListPage />
                 </RequirePermission>
               }
             />
@@ -445,7 +447,7 @@ export default function App() {
               path="history"
               element={
                 <RequirePermission permission="putaway:read">
-                  <PutawayTab history source="TO" basePath="/admin/inbound/transfer" />
+                  <TransferHistoryPage />
                 </RequirePermission>
               }
             />
@@ -462,7 +464,7 @@ export default function App() {
             path="inbound/transfer/goods-receive/:id"
             element={
               <RequirePermission permission="goods-receive:read">
-                <GoodsReceiveDetailPage />
+                <TransferGrDetailPage />
               </RequirePermission>
             }
           />
@@ -470,7 +472,7 @@ export default function App() {
             path="inbound/transfer/putaway/:id"
             element={
               <RequirePermission permission="putaway:read">
-                <PutawayDetailPage />
+                <TransferPutawayDetailPage />
               </RequirePermission>
             }
           />

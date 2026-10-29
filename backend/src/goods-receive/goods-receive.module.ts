@@ -7,9 +7,11 @@ import { GoodsReceiveController } from './goods-receive.controller';
 import { InventoryModule } from '../inventory/inventory.module';
 import { DiscrepancyModule } from '../discrepancy/discrepancy.module';
 import { PurchaseOrdersModule } from '../purchase-orders/purchase-orders.module';
+import { TransferOrdersModule } from '../transfer-orders/transfer-orders.module';
+import { MrnModule } from '../mrn/mrn.module';
 
 @Module({
-  imports: [InventoryModule, DiscrepancyModule, PurchaseOrdersModule],
+  imports: [InventoryModule, DiscrepancyModule, PurchaseOrdersModule, TransferOrdersModule, MrnModule],
   controllers: [GoodsReceiveController],
   providers: [
     GoodsReceiveService,

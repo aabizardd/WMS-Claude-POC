@@ -1,18 +1,15 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import axios from 'axios';
 import api from '../../lib/api';
-import type {
-  AdjustmentOracleCheckResult,
-  InventoryAdjustmentDetail,
-} from '../../types';
-import { adjStatusBadge, adjStatusLabel } from './InventoryAdjustmentsPage';
+import type { AdjustmentOracleCheckResult, InventoryAdjustmentDetail } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import Modal from '../../components/Modal';
-import Collapsible from '../../components/Collapsible';
+import { DetailCard, InfoGrid, PrimaryButton } from '../../components/wms/DocKit';
+import { AdjLinesTable, AdjStatusPill, SignedQty, adjTypeLabel } from './iaShared';
 
 type PendingAction = 'approve' | 'reject' | 'send' | null;
+type Tab = 'bins' | 'history' | 'discrepancies' | 'oracle';
 
 function errMessage(err: unknown, fallback: string): string {
   if (axios.isAxiosError(err)) {
@@ -23,39 +20,69 @@ function errMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
+/** "2026-10-27 10:45" — WMS dev shows minutes, labelled WIB. */
+function fmtWib(v: string | null | undefined) {
+  if (!v) return '-';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return '-';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** The audit trail's actions, worded the way WMS dev's History tab words them. */
+const EVENT_LABELS: Record<string, string> = {
+  created: 'Submitted for approval',
+  submitted: 'Submitted for approval',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  oracle_sent: 'Sent to Oracle',
+  oracle_failed: 'Oracle send failed',
+  oracle_approved: 'Approved by Oracle',
+  oracle_rejected: 'Rejected by Oracle',
+  completed: 'Completed — stock updated',
+  stock_failed: 'Stock update failed',
+  updated: 'Updated',
+};
+const eventLabel = (a: string) => EVENT_LABELS[a] ?? a.replace(/_/g, ' ');
+
 export default function InventoryAdjustmentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { has } = useAuth();
   const toast = useToast();
-
   const canApprove = has('inventory-adjustments:approve');
 
   const [a, setA] = useState<InventoryAdjustmentDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [tab, setTab] = useState<Tab>('bins');
 
   const [pending, setPending] = useState<PendingAction>(null);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
-  // Which material is on screen in the inventory slider.
-  const [slide, setSlide] = useState(0);
-  const [logsOpen, setLogsOpen] = useState(false);
 
-  function load() {
-    setLoading(true);
-    api
-      .get<InventoryAdjustmentDetail>(`/inventory-adjustments/${id}`)
-      .then((r) => setA(r.data))
-      .catch(() => setError('Failed to load adjustment.'))
-      .finally(() => setLoading(false));
-  }
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  const load = useCallback(
+    (quiet = false) => {
+      if (quiet) setRefreshing(true);
+      else setLoading(true);
+      api
+        .get<InventoryAdjustmentDetail>(`/inventory-adjustments/${id}`)
+        .then((r) => {
+          setA(r.data);
+          setError('');
+        })
+        .catch(() => setError('Failed to load adjustment.'))
+        .finally(() => {
+          setLoading(false);
+          setRefreshing(false);
+        });
+    },
+    [id],
+  );
+  useEffect(() => load(), [load]);
 
-  function open(action: Exclude<PendingAction, null>) {
+  function openDialog(action: Exclude<PendingAction, null>) {
     setPending(action);
     setReason('');
   }
@@ -69,19 +96,11 @@ export default function InventoryAdjustmentDetailPage() {
     }
     setBusy(true);
     try {
-      const url =
-        pending === 'send'
-          ? `/inventory-adjustments/${id}/send-oracle`
-          : `/inventory-adjustments/${id}/approve`;
-      const body =
-        pending === 'approve' || pending === 'reject'
-          ? { action: pending, reason: reason.trim() || undefined }
-          : {};
-
+      const url = pending === 'send' ? `/inventory-adjustments/${id}/send-oracle` : `/inventory-adjustments/${id}/approve`;
+      const body = pending === 'send' ? {} : { action: pending, reason: reason.trim() || undefined };
       const r = await api.put<InventoryAdjustmentDetail>(url, body);
       setA(r.data);
       setPending(null);
-
       if (pending === 'reject') toast.success('Adjustment rejected');
       else if (r.data.oracle_error) toast.error(`Oracle: ${r.data.oracle_error}`);
       else if (r.data.status === 'Completed') toast.success('Approved and stock updated');
@@ -99,10 +118,7 @@ export default function InventoryAdjustmentDetailPage() {
     if (checking) return;
     setChecking(true);
     try {
-      const r = await api.put<AdjustmentOracleCheckResult>(
-        `/inventory-adjustments/${id}/check-oracle`,
-        {},
-      );
+      const r = await api.put<AdjustmentOracleCheckResult>(`/inventory-adjustments/${id}/check-oracle`, {});
       setA(r.data);
       const c = r.data.oracle_check;
       if (!c) toast.success('Status refreshed');
@@ -122,9 +138,7 @@ export default function InventoryAdjustmentDetailPage() {
   if (error || !a) {
     return (
       <div className="space-y-4">
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error || 'Adjustment not found.'}
-        </div>
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error || 'Adjustment not found.'}</div>
         <Link to="/admin/inventory-adjustments" className="btn-secondary">
           ← Back
         </Link>
@@ -133,460 +147,345 @@ export default function InventoryAdjustmentDetailPage() {
   }
 
   const isQuality = a.qty_mode === 'passed_non_passed';
-  const isAuto = a.qty_mode === 'auto_negative';
+  const decided = a.approved_by && a.status !== 'WaitingApproval';
 
-  // Group items by material — one material per slide.
-  const groups = new Map<string, typeof a.items>();
-  for (const it of a.items) {
-    const k = it.material_id ?? it.material_code ?? 'unknown';
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k)!.push(it);
+  const fields: { label: string; value: ReactNode }[] = [
+    { label: 'Status', value: <AdjStatusPill status={a.status} compact /> },
+    { label: 'Adjustment Code', value: a.adjustment_number },
+    { label: 'Type', value: adjTypeLabel(a.adjustment_type) },
+    { label: 'Total Adjustment', value: <SignedQty value={a.total_qty} className="font-semibold" /> },
+    { label: 'ERP Doc ID', value: a.oracle_id && a.oracle_id !== '-' ? a.oracle_id : '-' },
+    { label: 'Class', value: a.class_name },
+    { label: 'Department', value: a.department_name },
+    { label: 'Warehouse', value: a.warehouse },
+    { label: 'Ownership', value: a.ownership },
+    { label: 'Created By', value: a.created_by },
+    { label: 'Created At (WIB)', value: fmtWib(a.created_at) },
+  ];
+  if (decided) {
+    const rejected = a.status === 'Rejected';
+    fields.push(
+      { label: rejected ? 'Rejected By' : 'Approved By', value: a.approved_by },
+      { label: rejected ? 'Rejected At (WIB)' : 'Approved At (WIB)', value: fmtWib(a.approved_at) },
+    );
   }
-  const groupList = [...groups.entries()];
-  // Clamp rather than reset, so the index stays valid if the document reloads.
-  const current = Math.min(slide, Math.max(groupList.length - 1, 0));
-  const hasSlider = groupList.length > 1;
-  const go = (i: number) => setSlide((i + groupList.length) % groupList.length);
+  if (a.oracle_approval_status && a.oracle_approval_status !== '-') {
+    fields.push({ label: 'Oracle Approval Status', value: a.oracle_approval_status });
+  }
 
-  const dialogCopy: Record<Exclude<PendingAction, null>, { title: string; body: string; cta: string }> = {
+  const tabs: { key: Tab; label: string; count: number }[] = [
+    { key: 'bins', label: 'Adjustment Bins', count: a.items.length },
+    { key: 'history', label: 'History', count: a.events.length },
+    ...(a.discrepancies.length ? [{ key: 'discrepancies' as Tab, label: 'Discrepancy References', count: a.discrepancies.length }] : []),
+    ...(a.integration_logs.length ? [{ key: 'oracle' as Tab, label: 'Oracle Log', count: a.integration_logs.length }] : []),
+  ];
+
+  const dialog: Record<Exclude<PendingAction, null>, { kicker: string; title: string; body: string; cta: string; danger?: boolean }> = {
     approve: {
-      title: 'Approve adjustment?',
-      body: a.oracle_error
-        ? 'This document already has a failed Oracle send. Use "Resend to Oracle" instead.'
-        : 'Approving records the internal decision. The document is then sent to Oracle (unless it has no Qty Passed), and stock changes only once Oracle approves.',
-      cta: 'Approve',
+      kicker: 'Inventory Adjustment - Confirm Approve',
+      title: 'Approve this adjustment?',
+      body: 'The document is sent to Oracle (unless it has no Qty Passed); inventory changes once Oracle approves it.',
+      cta: 'Yes, approve',
     },
     reject: {
-      title: 'Reject adjustment?',
-      body: 'The document becomes final. A rejected document cannot be resubmitted — a correction needs a new document.',
-      cta: 'Reject',
+      kicker: 'Inventory Adjustment - Confirm Reject',
+      title: 'Reject this adjustment?',
+      body: 'Inventory will not be changed. Please write the reason so the submitter understands the decision.',
+      cta: 'Yes, reject',
+      danger: true,
     },
     send: {
+      kicker: 'Inventory Adjustment - Resend',
       title: 'Resend to Oracle?',
-      body: 'The previous send failed and no stock was changed. Resending reuses the same document, so Oracle will not receive a duplicate adjustment.',
-      cta: 'Resend',
+      body: 'The previous send failed and no stock was changed. Resending reuses the same document, so Oracle will not receive a duplicate.',
+      cta: 'Yes, resend',
     },
   };
 
-  return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <Link
-            to="/admin/inventory-adjustments"
-            className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-            aria-label="Back"
+  const actions = (
+    <>
+      <button
+        type="button"
+        onClick={() => load(true)}
+        aria-label="Refresh"
+        title="Refresh"
+        className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-700 shadow-sm hover:bg-neutral-50"
+      >
+        <svg className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h5M20 20v-5h-5M5 19a9 9 0 0014.13-3M19 5A9 9 0 004.87 8" />
+        </svg>
+      </button>
+      {a.status === 'WaitingApproval' && canApprove && (
+        <>
+          <button
+            type="button"
+            onClick={() => openDialog('reject')}
+            className="inline-flex h-[34px] items-center rounded-lg border border-red-300 bg-white px-4 text-sm font-medium text-red-600 shadow-sm hover:bg-red-50"
           >
-            <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-            </svg>
-          </Link>
-          <div>
-            <h1 className="text-2xl font-semibold text-slate-800">{a.adjustment_number}</h1>
-            <p className="mt-1 text-sm text-slate-500">
-              {a.adjustment_type_label} · {a.warehouse ?? 'No warehouse'}
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <span className={`badge ${adjStatusBadge(a.status)}`}>{adjStatusLabel(a.status)}</span>
+            Reject
+          </button>
+          <PrimaryButton onClick={() => openDialog('approve')}>Approve</PrimaryButton>
+        </>
+      )}
+      {/* FR-IA-16 rule 3: an approved document whose Oracle send failed. */}
+      {a.status === 'Approved' && a.oracle_error && canApprove && (
+        <PrimaryButton onClick={() => openDialog('send')}>Resend to Oracle</PrimaryButton>
+      )}
+      {a.status === 'WaitingOracleApproval' && (
+        <PrimaryButton onClick={checkOracle} disabled={checking}>
+          {checking ? 'Checking…' : 'Check Oracle Status'}
+        </PrimaryButton>
+      )}
+    </>
+  );
 
-          {a.status === 'WaitingApproval' && canApprove && (
-            <>
-              <button className="btn-secondary" onClick={() => open('reject')}>
-                Reject
-              </button>
-              <button className="btn-primary" onClick={() => open('approve')}>
-                Approve
-              </button>
-            </>
-          )}
-
-          {/* FR-IA-16 rule 3: an approved document whose Oracle send failed. */}
-          {a.status === 'Approved' && a.oracle_error && canApprove && (
-            <button className="btn-primary" onClick={() => open('send')}>
-              Resend to Oracle
-            </button>
-          )}
-
-          {a.status === 'WaitingOracleApproval' && (
-            <button className="btn-primary" onClick={checkOracle} disabled={checking}>
-              {checking ? 'Checking…' : 'Check Oracle Status'}
-            </button>
-          )}
-        </div>
-      </div>
-
+  return (
+    <DetailCard title="Detail Inventory Adjustment" backTo="/admin/inventory-adjustments" actions={actions}>
       {/* FR-IA-16 rule 2: the failure is visible with its cause. */}
       {a.oracle_error && (
-        <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+        <Banner tone="red">
           <b>Oracle send failed.</b> No stock was changed. {a.oracle_error}
-        </div>
+        </Banner>
+      )}
+      {a.status === 'Rejected' && a.approval_reason && (
+        <Banner tone="red">
+          <b>Rejection reason:</b> {a.approval_reason}
+        </Banner>
       )}
       {a.status === 'RejectedByOracle' && (
-        <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          <b>Rejected by Oracle.</b> No stock was changed. This document is final — create a new one to correct
-          it. {a.oracle_reject_reason ?? ''}
-        </div>
+        <Banner tone="red">
+          <b>Rejected by Oracle.</b> No stock was changed. This document is final — create a new one to correct it.{' '}
+          {a.oracle_reject_reason ?? ''}
+        </Banner>
       )}
 
-      <div className="card p-5">
-        <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
-          <Meta label="Adjustment No." value={a.adjustment_number} />
-          <Meta label="IA Type" value={a.adjustment_type_label} />
-          <Meta label="Warehouse" value={a.warehouse} />
-          <Meta
-            label="Class"
-            value={a.class_name ? `${a.class_name} (${a.class_oracle_id})` : a.class_oracle_id}
-          />
-          <Meta label="Status" value={adjStatusLabel(a.status)} />
-          <Meta label="Total Qty" value={a.total_qty} />
-          <Meta label="Memo" value={a.memo} />
-          <Meta
-            label="Memo sent to Oracle"
-            value={<span className="font-mono text-xs">{a.oracle_memo}</span>}
-          />
-          <Meta label="Oracle IA ID" value={a.oracle_id} />
-          <Meta label="Oracle Approval Status" value={a.oracle_approval_status} />
-          <Meta
-            label="Sent to Oracle"
-            value={a.oracle_sent_at ? new Date(a.oracle_sent_at).toLocaleString() : null}
-          />
-          <Meta
-            label="Completed"
-            value={a.completed_at ? new Date(a.completed_at).toLocaleString() : null}
-          />
-        </dl>
+      <InfoGrid
+        columns={2}
+        fields={fields}
+        footer={
+          <div className="mt-6 border-t border-neutral-200 pt-5 dark:border-slate-700">
+            <div className="text-sm font-semibold text-neutral-900 dark:text-white">Memo</div>
+            <div className="mt-2 min-h-[42px] rounded-lg border border-neutral-200 bg-white px-3 py-2.5 text-sm text-neutral-800 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
+              {a.memo || <span className="text-neutral-400">-</span>}
+            </div>
+          </div>
+        }
+      />
 
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <Stage
-            title="Created & Submitted"
-            who={a.created_by}
-            when={a.created_at}
-            note={null}
-            done
-          />
-          <Stage
-            title={a.status === 'Rejected' ? 'Rejected' : 'Approved'}
-            who={a.approved_by}
-            when={a.approved_at}
-            note={a.approval_reason}
-            done={!!a.approved_at}
-          />
-        </div>
+      {/* Tabs */}
+      <div className="flex flex-wrap gap-6 border-b border-neutral-200 dark:border-slate-700">
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setTab(t.key)}
+            className={`-mb-px inline-flex items-center gap-2 border-b-2 pb-2.5 text-sm font-medium transition-colors ${
+              tab === t.key ? 'border-[#5166AE] text-[#5166AE]' : 'border-transparent text-neutral-500 hover:text-neutral-700'
+            }`}
+          >
+            {t.label}
+            <span
+              className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                tab === t.key ? 'bg-[#E1E4F8] text-[#5166AE]' : 'bg-neutral-100 text-neutral-500'
+              }`}
+            >
+              {t.count}
+            </span>
+          </button>
+        ))}
       </div>
 
-      {/* Inventory information — one material per slide so the page stays short. */}
-      {groupList.length > 0 && (() => {
-        const [k, items] = groupList[current];
-        return (
-          <div key={k} className="card overflow-hidden">
-            <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-3">
-              <h3 className="min-w-0 text-sm font-semibold text-slate-700">
-                {items[0].material_code}
-                {items[0].material_name ? (
-                  <span className="ml-2 text-xs font-normal text-slate-400">
-                    {items[0].material_name}
-                  </span>
-                ) : null}
-              </h3>
+      <div className="overflow-hidden rounded-lg border border-neutral-200 dark:border-slate-700">
+        <div className="overflow-x-auto">
+          {tab === 'bins' && <AdjLinesTable lines={a.items} qualityMode={isQuality} />}
 
-              {hasSlider && (
-                <div className="flex shrink-0 items-center gap-2">
-                  <span className="text-xs text-slate-400">
-                    Material {current + 1} of {groupList.length}
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="Previous material"
-                    className="rounded-lg border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-                    onClick={() => go(current - 1)}
-                  >
-                    <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Next material"
-                    className="rounded-lg border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-                    onClick={() => go(current + 1)}
-                  >
-                    <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                    </svg>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-200 text-sm">
-                <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="px-5 py-3">Bin</th>
-                    <th className="px-5 py-3 text-right">Available (at create)</th>
-                    <th className="px-5 py-3 text-right">Qty Issue (at create)</th>
-                    <th className="px-5 py-3 text-right">Quality Issue (at create)</th>
-                    {isQuality ? (
-                      <>
-                        <th className="px-5 py-3 text-right">Qty Passed</th>
-                        <th className="px-5 py-3 text-right">Qty Non-Passed</th>
-                      </>
-                    ) : (
-                      <th className="px-5 py-3 text-right">Qty Adjustment</th>
-                    )}
-                    <th className="px-5 py-3 text-right">Effect on WMS</th>
+          {tab === 'history' && (
+            <table className="w-full text-left text-sm">
+              <thead className="bg-white text-[#525252]">
+                <tr className="[&>th]:border-b [&>th]:border-neutral-100 [&>th]:px-4 [&>th]:py-2.5 [&>th]:font-medium">
+                  <th className="w-12">No</th>
+                  <th>Action</th>
+                  <th>Status Changes</th>
+                  <th>Created By</th>
+                  <th>Created At (WIB)</th>
+                </tr>
+              </thead>
+              <tbody className="text-neutral-800">
+                {a.events.map((e, i) => (
+                  <tr key={e.id} className="[&>td]:border-b [&>td]:border-neutral-100 [&>td]:px-4 [&>td]:py-3">
+                    <td>{i + 1}</td>
+                    <td>
+                      <div className="font-semibold">{eventLabel(e.action)}</div>
+                      {e.message && <div className="mt-0.5 max-w-md text-xs text-neutral-500">{e.message}</div>}
+                    </td>
+                    <td>{e.to_status ? <AdjStatusPill status={e.to_status} compact /> : '-'}</td>
+                    <td className="whitespace-nowrap">{e.actor ?? 'System'}</td>
+                    <td className="whitespace-nowrap">{fmtWib(e.created_at)}</td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {items.map((it) => (
-                    <tr key={it.id} className="hover:bg-slate-50">
-                      <td className="px-5 py-3 font-medium text-slate-800">{it.bin_label ?? '—'}</td>
-                      <td className="px-5 py-3 text-right text-slate-600">{it.avail_at_create}</td>
-                      <td className="px-5 py-3 text-right text-slate-600">{it.qty_issue_at_create}</td>
-                      <td className="px-5 py-3 text-right text-slate-600">{it.quality_issue_at_create}</td>
-                      {isQuality ? (
-                        <>
-                          <td className="px-5 py-3 text-right font-semibold text-slate-800">{it.qty_passed}</td>
-                          <td className="px-5 py-3 text-right font-semibold text-slate-800">
-                            {it.qty_non_passed}
-                          </td>
-                        </>
-                      ) : (
-                        <td className="px-5 py-3 text-right font-semibold text-slate-800">
-                          {it.qty_adjustment}
-                        </td>
-                      )}
-                      <td className="px-5 py-3 text-right text-xs text-slate-500">
-                        {isAuto ? (
-                          a.adjustment_type === 'DiscrepancyQuantity' ? (
-                            <>Qty Issue → 0</>
-                          ) : (
-                            <>Oracle only</>
-                          )
-                        ) : isQuality ? (
-                          <>
-                            Available +{it.qty_passed}
-                            <br />
-                            Quality Issue −{it.qty_passed + it.qty_non_passed}
-                          </>
-                        ) : (
-                          <>
-                            Available {it.qty_adjustment >= 0 ? '+' : ''}
-                            {it.qty_adjustment}
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {hasSlider && (
-              <div className="flex flex-wrap items-center justify-center gap-1.5 border-t border-slate-100 px-5 py-3">
-                {groupList.map(([gk, gItems], i) => (
-                  <button
-                    key={gk}
-                    type="button"
-                    title={gItems[0].material_code ?? undefined}
-                    aria-label={`Go to material ${i + 1}`}
-                    className={`h-1.5 rounded-full transition-all ${
-                      i === current ? 'w-5 bg-brand-600' : 'w-1.5 bg-slate-300 hover:bg-slate-400'
-                    }`}
-                    onClick={() => setSlide(i)}
-                  />
                 ))}
-              </div>
-            )}
-          </div>
-        );
-      })()}
-
-      {a.discrepancies.length > 0 && (
-        <div className="card p-5">
-          <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
-            Discrepancy References ({a.discrepancies.length})
-          </h3>
-          <div className="flex flex-wrap gap-2">
-            {a.discrepancies.map((d) => (
-              <a
-                key={d.id}
-                href={`/admin/discrepancy/${d.id}`}
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-brand-700 hover:bg-brand-50"
-              >
-                {d.discrepancy_id} · {d.type} ↗
-              </a>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* FR-IA-13 rule 8 / FR-IA-16 rule 6: raw Oracle traffic for reconciliation. */}
-      {a.integration_logs.length > 0 && (
-        <Collapsible
-          title="Oracle Integration Log"
-          subtitle={`${a.integration_logs.length} call(s)`}
-          open={logsOpen}
-          onToggle={() => setLogsOpen((v) => !v)}
-        >
-          <div className="space-y-3 px-4 pb-4">
-            {a.integration_logs.map((l) => (
-              <div key={l.id} className="rounded-lg border border-slate-200">
-                <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-3 py-2 text-xs">
-                  <span
-                    className={`badge ${l.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}
-                  >
-                    {l.ok ? 'OK' : 'FAILED'}
-                  </span>
-                  <span className="font-medium text-slate-700">
-                    {l.operation === 'post' ? 'Send adjustment' : 'Check status'}
-                  </span>
-                  <span className="font-mono text-slate-400">{l.endpoint}</span>
-                  {l.http_status != null && (
-                    <span className="text-slate-400">HTTP {l.http_status}</span>
-                  )}
-                  {l.duration_ms != null && (
-                    <span className="text-slate-400">{l.duration_ms} ms</span>
-                  )}
-                  <span className="ml-auto text-slate-400">
-                    {new Date(l.created_at).toLocaleString()}
-                  </span>
-                </div>
-                {l.error && (
-                  <div className="border-b border-slate-100 bg-rose-50 px-3 py-1.5 text-xs text-rose-700">
-                    {l.error}
-                  </div>
+                {a.events.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-8 text-center text-neutral-400">
+                      No activity recorded.
+                    </td>
+                  </tr>
                 )}
-                <div className="grid gap-3 p-3 md:grid-cols-2">
-                  <div>
-                    <div className="mb-1 text-xs text-slate-400">Request</div>
-                    <pre className="max-h-48 overflow-auto rounded bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-600">
-                      {JSON.stringify(l.request, null, 2)}
-                    </pre>
-                  </div>
-                  <div>
-                    <div className="mb-1 text-xs text-slate-400">Response</div>
-                    <pre className="max-h-48 overflow-auto rounded bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-600">
-                      {l.response == null ? '—' : JSON.stringify(l.response, null, 2)}
-                    </pre>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Collapsible>
-      )}
+              </tbody>
+            </table>
+          )}
 
-      {/* FR-IA-15: audit trail */}
-      <div className="card p-5">
-        <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Document History
-        </h3>
-        {a.events.length === 0 ? (
-          <p className="text-sm text-slate-400">No activity recorded.</p>
-        ) : (
-          <ol className="space-y-3">
-            {a.events.map((e) => (
-              <li key={e.id} className="flex gap-3 text-sm">
-                <div className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-slate-300" />
-                <div className="min-w-0">
-                  <div className="font-medium text-slate-700">
-                    {e.action.replace(/_/g, ' ')}
-                    {e.from_status && e.to_status && e.from_status !== e.to_status && (
-                      <span className="ml-2 text-xs font-normal text-slate-400">
-                        {adjStatusLabel(e.from_status)} → {adjStatusLabel(e.to_status)}
-                      </span>
-                    )}
+          {tab === 'discrepancies' && (
+            <table className="w-full text-left text-sm">
+              <thead className="bg-white text-[#525252]">
+                <tr className="[&>th]:border-b [&>th]:border-neutral-100 [&>th]:px-4 [&>th]:py-2.5 [&>th]:font-medium">
+                  <th className="w-12">No</th>
+                  <th>Discrepancy ID</th>
+                  <th>Type</th>
+                  <th>From</th>
+                </tr>
+              </thead>
+              <tbody className="text-neutral-800">
+                {a.discrepancies.map((d, i) => (
+                  <tr key={d.id} className="[&>td]:border-b [&>td]:border-neutral-100 [&>td]:px-4 [&>td]:py-3">
+                    <td>{i + 1}</td>
+                    <td>
+                      <a href={`/admin/discrepancy/${d.id}`} target="_blank" rel="noreferrer" className="font-medium text-[#5166AE] hover:underline">
+                        {d.discrepancy_id} ↗
+                      </a>
+                    </td>
+                    <td className="capitalize">{d.type}</td>
+                    <td className="capitalize">{d.from}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {/* FR-IA-13 rule 8 / FR-IA-16 rule 6: raw Oracle traffic for reconciliation. */}
+          {tab === 'oracle' && (
+            <div className="space-y-3 p-4">
+              {a.integration_logs.map((l) => (
+                <div key={l.id} className="rounded-lg border border-neutral-200">
+                  <div className="flex flex-wrap items-center gap-2 border-b border-neutral-100 px-3 py-2 text-xs">
+                    <span className={`rounded-full px-2 py-0.5 font-semibold ${l.ok ? 'bg-[#EFFAF4] text-[#2E8F5C]' : 'bg-[#FEF2F2] text-[#B91C1C]'}`}>
+                      {l.ok ? 'OK' : 'FAILED'}
+                    </span>
+                    <span className="font-medium text-neutral-700">{l.operation === 'post' ? 'Send adjustment' : 'Check status'}</span>
+                    <span className="font-mono text-neutral-400">{l.endpoint}</span>
+                    {l.http_status != null && <span className="text-neutral-400">HTTP {l.http_status}</span>}
+                    {l.duration_ms != null && <span className="text-neutral-400">{l.duration_ms} ms</span>}
+                    <span className="ml-auto text-neutral-400">{fmtWib(l.created_at)}</span>
                   </div>
-                  <div className="text-xs text-slate-400">
-                    {e.actor ?? 'System'} · {new Date(e.created_at).toLocaleString()}
+                  {l.error && <div className="border-b border-neutral-100 bg-red-50 px-3 py-1.5 text-xs text-red-700">{l.error}</div>}
+                  <div className="grid gap-3 p-3 md:grid-cols-2">
+                    <div>
+                      <div className="mb-1 text-xs text-neutral-400">Request</div>
+                      <pre className="max-h-48 overflow-auto rounded bg-neutral-50 p-2 text-[11px] leading-relaxed text-neutral-600">
+                        {JSON.stringify(l.request, null, 2)}
+                      </pre>
+                    </div>
+                    <div>
+                      <div className="mb-1 text-xs text-neutral-400">Response</div>
+                      <pre className="max-h-48 overflow-auto rounded bg-neutral-50 p-2 text-[11px] leading-relaxed text-neutral-600">
+                        {l.response == null ? '—' : JSON.stringify(l.response, null, 2)}
+                      </pre>
+                    </div>
                   </div>
-                  {e.message && <div className="mt-0.5 text-xs text-slate-500">{e.message}</div>}
                 </div>
-              </li>
-            ))}
-          </ol>
-        )}
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
-      <Modal
-        open={pending !== null}
-        title={pending ? dialogCopy[pending].title : ''}
-        onClose={() => (busy ? null : setPending(null))}
-      >
-        {pending && (
-          <div className="space-y-4">
-            <p className="text-sm text-slate-500">{dialogCopy[pending].body}</p>
-            {(pending === 'approve' || pending === 'reject') && (
-              <div>
-                <div className="mb-1 text-xs text-slate-400">
-                  Reason {pending === 'reject' ? '(required)' : '(optional)'}
-                </div>
-                <textarea
-                  className="input min-h-[80px] w-full"
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                  placeholder="Reason…"
-                />
-              </div>
-            )}
-            <div className="flex justify-end gap-2 pt-1">
-              <button className="btn-secondary" onClick={() => setPending(null)} disabled={busy}>
-                Cancel
-              </button>
-              <button className="btn-primary" onClick={runPending} disabled={busy}>
-                {busy ? 'Working…' : dialogCopy[pending].cta}
-              </button>
-            </div>
-          </div>
-        )}
-      </Modal>
-    </div>
+      {pending && (
+        <ConfirmDialog
+          {...dialog[pending]}
+          busy={busy}
+          onCancel={() => !busy && setPending(null)}
+          onConfirm={runPending}
+          confirmDisabled={pending === 'reject' && !reason.trim()}
+        >
+          {(pending === 'approve' || pending === 'reject') && (
+            <textarea
+              className="mt-4 min-h-[68px] w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-800 outline-none focus:border-[#5166AE] focus:ring-2 focus:ring-[#5166AE]/20"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={pending === 'reject' ? 'Reason for rejection' : 'Note (optional)'}
+              autoFocus
+            />
+          )}
+        </ConfirmDialog>
+      )}
+    </DetailCard>
   );
 }
 
-function Meta({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div>
-      <dt className="text-xs text-slate-400">{label}</dt>
-      <dd className="font-medium text-slate-700">{value || <span className="text-slate-300">—</span>}</dd>
-    </div>
-  );
+function Banner({ tone, children }: { tone: 'red'; children: ReactNode }) {
+  const cls = tone === 'red' ? 'border-red-200 bg-red-50 text-red-700' : '';
+  return <div className={`rounded-lg border px-4 py-3 text-sm ${cls}`}>{children}</div>;
 }
 
-function Stage({
+/** WMS dev's small confirmation dialog: kicker, title, text, then Cancel / "Yes, …". */
+function ConfirmDialog({
+  kicker,
   title,
-  who,
-  when,
-  note,
-  done,
+  body,
+  cta,
+  danger,
+  busy,
+  confirmDisabled,
+  onCancel,
+  onConfirm,
+  children,
 }: {
+  kicker: string;
   title: string;
-  who: string | null;
-  when: string | null;
-  note: string | null;
-  done: boolean;
+  body: string;
+  cta: string;
+  danger?: boolean;
+  busy: boolean;
+  confirmDisabled?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+  children?: ReactNode;
 }) {
   return (
-    <div
-      className={`rounded-lg border px-4 py-3 ${
-        done ? 'border-slate-200 bg-slate-50' : 'border-dashed border-slate-200'
-      }`}
-    >
-      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</div>
-      {done ? (
-        <>
-          <div className="mt-1 text-sm font-medium text-slate-700">{who ?? '—'}</div>
-          <div className="text-xs text-slate-400">{when ? new Date(when).toLocaleString() : '—'}</div>
-          {note && <div className="mt-1 text-xs text-slate-500">{note}</div>}
-        </>
-      ) : (
-        <div className="mt-1 text-sm text-slate-300">Pending</div>
-      )}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[3px]" onClick={onCancel} />
+      <div role="dialog" aria-modal="true" className="relative z-10 w-full max-w-[460px] rounded-2xl bg-white p-7 shadow-[0_22px_60px_rgba(15,23,42,0.32)]">
+        <div className="flex items-start justify-between gap-3">
+          <div className="text-xs text-neutral-500">{kicker}</div>
+          <button type="button" onClick={onCancel} aria-label="Close" className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700">
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <h2 className="mt-2 text-xl font-semibold text-neutral-900">{title}</h2>
+        <p className="mt-2 text-sm leading-relaxed text-neutral-600">{body}</p>
+        {children}
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="h-10 rounded-lg border border-neutral-300 bg-white px-5 text-sm font-medium text-neutral-800 hover:bg-neutral-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy || confirmDisabled}
+            className={`h-10 rounded-lg px-5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 ${
+              danger ? 'bg-red-600 hover:bg-red-700' : 'bg-[#5166AE] hover:bg-[#41528c]'
+            }`}
+          >
+            {busy ? 'Working…' : cta}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

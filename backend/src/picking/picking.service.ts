@@ -11,6 +11,7 @@ import { InventoryService } from '../inventory/inventory.service';
 import type { GeneratePickingDto } from './dto/generate-picking.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { usableBinStockWhere } from '../common/frozen-bins';
+import { scopeWhere, inScope } from '../common/warehouse-scope';
 
 type PickingOrder = Prisma.PickingOrderByWithRelationInput;
 const PICKING_SORTABLE: Record<string, (d: SortDir) => PickingOrder> = {
@@ -27,7 +28,8 @@ export interface WarehouseScope {
   // stock ledger; optional because older call sites do not set it.
   userId?: number;
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
 }
 
 const listInclude = {
@@ -77,10 +79,7 @@ export class PickingService {
   ) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.PickingWhereInput {
-    if (scope.role === 'admin') {
-      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
-    }
-    return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
+    return scopeWhere(scope, 'warehouseId');
   }
 
   // ---------- read ----------
@@ -153,7 +152,7 @@ export class PickingService {
     });
     if (
       !pk ||
-      (scope.role !== 'admin' && pk.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, pk.warehouseId))
     ) {
       throw new NotFoundException(`Picking ${id} not found`);
     }
@@ -186,7 +185,7 @@ export class PickingService {
     });
     if (
       !so ||
-      (scope.role !== 'admin' && so.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, so.warehouseId))
     ) {
       throw new NotFoundException(`Sales Order ${salesOrderId} not found`);
     }
@@ -243,7 +242,7 @@ export class PickingService {
     });
     if (
       !so ||
-      (scope.role !== 'admin' && so.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, so.warehouseId))
     ) {
       throw new NotFoundException(`Sales Order ${dto.salesOrderId} not found`);
     }
@@ -445,7 +444,7 @@ export class PickingService {
     });
     if (
       !to ||
-      (scope.role !== 'admin' && to.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, to.warehouseId))
     ) {
       throw new NotFoundException(`Transfer Order ${transferOrderId} not found`);
     }
@@ -493,7 +492,7 @@ export class PickingService {
     });
     if (
       !to ||
-      (scope.role !== 'admin' && to.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, to.warehouseId))
     ) {
       throw new NotFoundException(
         `Transfer Order ${dto.transferOrderId} not found`,
@@ -655,7 +654,7 @@ export class PickingService {
     });
     if (
       !pk ||
-      (scope.role !== 'admin' && pk.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, pk.warehouseId))
     ) {
       throw new NotFoundException(`Picking ${id} not found`);
     }
@@ -735,7 +734,7 @@ export class PickingService {
       where: { id },
       include: { items: true },
     });
-    if (!pk || (scope.role !== 'admin' && pk.warehouseId !== scope.warehouseId)) {
+    if (!pk || (scope.role !== 'admin' && !inScope(scope, pk.warehouseId))) {
       throw new NotFoundException(`Picking ${id} not found`);
     }
     if (pk.status === 'Closed') {

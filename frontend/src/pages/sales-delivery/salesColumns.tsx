@@ -4,7 +4,7 @@ import type { SortState } from '../../hooks/useSort';
 import SortableTh from '../../components/SortableTh';
 
 /**
- * The Inventory Sales list table columns: No, Status, SD Number, Origin, Destination,
+ * The Inventory Sales list table columns: No, Status, SD Number, Netsuite ID, Origin, Destination,
  * Department, Class, Customer, Total Materials, Total Qty, Memo, Created By,
  * Created At (Actions is added by each page).
  */
@@ -12,6 +12,7 @@ import SortableTh from '../../components/SortableTh';
 export type SalesColumnKey =
   | 'status'
   | 'number'
+  | 'netsuite_id'
   | 'origin'
   | 'destination'
   | 'department'
@@ -74,6 +75,7 @@ export const SALES_COLUMNS: SalesColumn[] = [
       </div>
     ),
   },
+  { key: 'netsuite_id', label: () => 'Netsuite ID', sortCol: 'netsuite_id', cell: (d) => d.netsuite_id ?? '-' },
   {
     key: 'origin',
     label: () => 'Origin Location',

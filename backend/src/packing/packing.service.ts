@@ -12,6 +12,7 @@ import { reopenPicking } from '../common/outbound-revert';
 import type { GeneratePackingDto } from './dto/generate-packing.dto';
 import type { ProgressPackingDto } from './dto/progress-packing.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { scopeWhere, inScope } from '../common/warehouse-scope';
 
 type PackingOrder = Prisma.PackingOrderByWithRelationInput;
 const PACKING_SORTABLE: Record<string, (d: SortDir) => PackingOrder> = {
@@ -29,7 +30,8 @@ export interface WarehouseScope {
   // stock ledger; optional because older call sites do not set it.
   userId?: number;
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
 }
 
 const listInclude = {
@@ -76,10 +78,7 @@ export class PackingService {
   ) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.PackingWhereInput {
-    if (scope.role === 'admin') {
-      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
-    }
-    return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
+    return scopeWhere(scope, 'warehouseId');
   }
 
   // ---------- read ----------
@@ -160,7 +159,7 @@ export class PackingService {
     });
     if (
       !pk ||
-      (scope.role !== 'admin' && pk.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, pk.warehouseId))
     ) {
       throw new NotFoundException(`Packing ${id} not found`);
     }
@@ -172,12 +171,8 @@ export class PackingService {
     const where: Prisma.PickingWhereInput = {
       status: 'Closed',
       packing: { is: null },
+      ...scopeWhere(scope),
     };
-    if (scope.role === 'admin') {
-      if (scope.warehouseId) where.warehouseId = scope.warehouseId;
-    } else {
-      where.warehouseId = scope.warehouseId ?? '__no_warehouse__';
-    }
 
     const rows = await this.prisma.picking.findMany({
       where,
@@ -216,7 +211,7 @@ export class PackingService {
     for (const id of dto.pickingIds) {
       const p = byId.get(id);
       if (!p) throw new BadRequestException(`Picking ${id} not found`);
-      if (scope.role !== 'admin' && p.warehouseId !== scope.warehouseId) {
+      if (scope.role !== 'admin' && !inScope(scope, p.warehouseId)) {
         throw new NotFoundException(`Picking ${id} not found`);
       }
       if (p.status !== 'Closed') {
@@ -321,7 +316,7 @@ export class PackingService {
         _count: { select: { deliveries: true, deliveryItems: true } },
       },
     });
-    if (!pk || (scope.role !== 'admin' && pk.warehouseId !== scope.warehouseId)) {
+    if (!pk || (scope.role !== 'admin' && !inScope(scope, pk.warehouseId))) {
       throw new NotFoundException(`Packing ${id} not found`);
     }
     if (pk.status !== 'Open') {
@@ -366,7 +361,7 @@ export class PackingService {
     });
     if (
       !pk ||
-      (scope.role !== 'admin' && pk.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, pk.warehouseId))
     ) {
       throw new NotFoundException(`Packing ${id} not found`);
     }

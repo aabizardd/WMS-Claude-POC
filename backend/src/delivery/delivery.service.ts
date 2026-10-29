@@ -14,6 +14,7 @@ import { reopenPacking } from '../common/outbound-revert';
 import type { GenerateDeliveryDto } from './dto/generate-delivery.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { subsidiarySingleFilter } from '../common/subsidiary-filter';
+import { scopeWhere, inScope } from '../common/warehouse-scope';
 
 interface ErpAuthResponse {
   success: boolean;
@@ -39,7 +40,8 @@ export interface WarehouseScope {
   // stock ledger; optional because older call sites do not set it.
   userId?: number;
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
 }
 
 /** Where a picking line was taken from: the bin it was picked out of. */
@@ -276,10 +278,7 @@ export class DeliveryService {
   }
 
   private scopeWhere(scope: WarehouseScope): Prisma.DeliveryWhereInput {
-    if (scope.role === 'admin') {
-      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
-    }
-    return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
+    return scopeWhere(scope, 'warehouseId');
   }
 
   async findAll(
@@ -396,7 +395,7 @@ export class DeliveryService {
       where: { id },
       include: detailInclude,
     });
-    if (!d || (scope.role !== 'admin' && d.warehouseId !== scope.warehouseId)) {
+    if (!d || (scope.role !== 'admin' && !inScope(scope, d.warehouseId))) {
       throw new NotFoundException(`Delivery ${id} not found`);
     }
     return this.serializeDetail(d);
@@ -423,7 +422,7 @@ export class DeliveryService {
     for (const id of dto.packingIds) {
       const p = byId.get(id);
       if (!p) throw new BadRequestException(`Packing ${id} not found`);
-      if (scope.role !== 'admin' && p.warehouseId !== scope.warehouseId) {
+      if (scope.role !== 'admin' && !inScope(scope, p.warehouseId)) {
         throw new NotFoundException(`Packing ${id} not found`);
       }
       if (p.status !== 'Closed') {
@@ -536,7 +535,7 @@ export class DeliveryService {
       where: { id },
       include: { items: { select: { packingId: true } } },
     });
-    if (!d || (scope.role !== 'admin' && d.warehouseId !== scope.warehouseId)) {
+    if (!d || (scope.role !== 'admin' && !inScope(scope, d.warehouseId))) {
       throw new NotFoundException(`Delivery ${id} not found`);
     }
     if (d.status !== 'Open' || d.sdoId) {
@@ -594,7 +593,7 @@ export class DeliveryService {
         },
       },
     });
-    if (!d || (scope.role !== 'admin' && d.warehouseId !== scope.warehouseId)) {
+    if (!d || (scope.role !== 'admin' && !inScope(scope, d.warehouseId))) {
       throw new NotFoundException(`Delivery ${id} not found`);
     }
     if (d.status === 'Closed' || d.sdoId) {

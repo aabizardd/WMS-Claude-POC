@@ -24,6 +24,8 @@ export default function MrnTab() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const [aju, setAju] = useState('');
+  const [ajuInput, setAjuInput] = useState('');
   const { sort, toggle, params } = useSort();
   const onSort = (col: string) => {
     setPage(1);
@@ -40,7 +42,7 @@ export default function MrnTab() {
   async function load() {
     setLoading(true);
     const r = await api.get<Paginated<Mrn>>('/mrn', {
-      params: { page, limit: LIMIT, search: search || undefined, ...params() },
+      params: { page, limit: LIMIT, search: search || undefined, aju_no: aju || undefined, ...params() },
     });
     setData(r.data);
     setLoading(false);
@@ -48,7 +50,7 @@ export default function MrnTab() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, sort.sortBy, sort.order]);
+  }, [page, search, aju, sort.sortBy, sort.order]);
 
   async function openSync() {
     setSyncError('');
@@ -122,8 +124,9 @@ export default function MrnTab() {
           e.preventDefault();
           setPage(1);
           setSearch(searchInput.trim());
+          setAju(ajuInput.trim());
         }}
-        className="flex gap-2"
+        className="flex flex-wrap gap-2"
       >
         <input
           className="input max-w-xs"
@@ -131,16 +134,25 @@ export default function MrnTab() {
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
         />
+        <input
+          className="input max-w-xs"
+          placeholder="Search Nomor Aju…"
+          aria-label="Nomor Aju"
+          value={ajuInput}
+          onChange={(e) => setAjuInput(e.target.value)}
+        />
         <button type="submit" className="btn-secondary">
           Search
         </button>
-        {search && (
+        {(search || aju) && (
           <button
             type="button"
             className="btn-secondary"
             onClick={() => {
               setSearchInput('');
               setSearch('');
+              setAjuInput('');
+              setAju('');
               setPage(1);
             }}
           >
@@ -155,6 +167,7 @@ export default function MrnTab() {
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <SortableTh label="Shipment No." col="shipment_number" sort={sort} onSort={onSort} />
+                <SortableTh label="Nomor Aju" col="aju_number" sort={sort} onSort={onSort} />
                 <SortableTh label="Receiving Location" col="receiving_location" sort={sort} onSort={onSort} />
                 <th className="px-6 py-3">Items</th>
                 <SortableTh label="MRN Status" col="status" sort={sort} onSort={onSort} />
@@ -166,7 +179,7 @@ export default function MrnTab() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-10 text-center text-slate-400">
+                  <td colSpan={8} className="px-6 py-10 text-center text-slate-400">
                     Loading…
                   </td>
                 </tr>
@@ -176,6 +189,7 @@ export default function MrnTab() {
                     <td className="px-6 py-3 font-medium text-slate-800">
                       {m.shipment_number ?? m.oracle_id}
                     </td>
+                    <td className="whitespace-nowrap px-6 py-3 text-slate-600">{m.aju_number ?? '—'}</td>
                     <td className="px-6 py-3 text-slate-600">
                       {m.receiving_location_name ?? '—'}
                     </td>
@@ -211,7 +225,7 @@ export default function MrnTab() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={7} className="px-6 py-10 text-center text-slate-400">
+                  <td colSpan={8} className="px-6 py-10 text-center text-slate-400">
                     No MRN documents. Click “Sync from ERP” to pull PIB data.
                   </td>
                 </tr>

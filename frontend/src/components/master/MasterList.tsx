@@ -34,6 +34,7 @@ export default function MasterList<T extends { id: string | number }>({
   onAdd,
   menuActions = [],
   reloadKey = 0,
+  searchPlaceholder,
 }: {
   endpoint: string;
   columns: MasterColumn<T>[];
@@ -42,6 +43,7 @@ export default function MasterList<T extends { id: string | number }>({
   onAdd?: () => void;
   menuActions?: MenuAction[];
   reloadKey?: number;
+  searchPlaceholder?: string;
 }) {
   const [data, setData] = useState<Paginated<T> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -92,7 +94,7 @@ export default function MasterList<T extends { id: string | number }>({
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex w-full items-center">
-          <SearchBox value={searchInput} onChange={setSearchInput} />
+          <SearchBox value={searchInput} onChange={setSearchInput} placeholder={searchPlaceholder} />
         </div>
         <div className="flex w-full items-end justify-end gap-2.5">
           {menuActions.length > 0 && <ToolbarActions actions={menuActions} />}

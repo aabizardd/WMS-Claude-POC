@@ -1,4 +1,7 @@
 import {
+  ArrayMaxSize,
+  ArrayNotEmpty,
+  IsArray,
   IsBoolean,
   IsEmail,
   IsInt,
@@ -37,9 +40,12 @@ export class CreateUserDto {
   @IsInt()
   roleId!: number;
 
-  // Required single warehouse for the user.
-  @IsUUID()
-  warehouseId!: string;
+  // The warehouses the user works in (at least one, as on WMS dev).
+  @IsArray()
+  @ArrayNotEmpty({ message: 'Select at least one warehouse' })
+  @ArrayMaxSize(200)
+  @IsUUID('all', { each: true })
+  warehouseIds!: string[];
 
   // Optional org assignment. Subsidiary requires a department and must belong
   // to it (validated in the service).

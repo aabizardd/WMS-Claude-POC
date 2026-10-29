@@ -13,10 +13,12 @@ import {
   SALES_ORDER_ITEM_FIELDS,
   type SalesOrderFilterDto,
 } from './dto/query-sales-order.dto';
+import { scopeWhere, inScope } from '../common/warehouse-scope';
 
 export interface WarehouseScope {
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
 }
 
 /** Who writes sales orders in WMS: they only ever arrive through the sync. */
@@ -107,10 +109,7 @@ export class SalesOrdersService {
   constructor(private prisma: PrismaService) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.SalesOrderWhereInput {
-    if (scope.role === 'admin') {
-      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
-    }
-    return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
+    return scopeWhere(scope, 'warehouseId');
   }
 
   async findAll(
@@ -299,7 +298,7 @@ export class SalesOrdersService {
     });
     if (
       !so ||
-      (scope.role !== 'admin' && so.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, so.warehouseId))
     ) {
       throw new NotFoundException(`Sales Order ${id} not found`);
     }

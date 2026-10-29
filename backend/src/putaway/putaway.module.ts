@@ -7,5 +7,6 @@ import { InventoryModule } from '../inventory/inventory.module';
   imports: [InventoryModule],
   controllers: [PutawayController],
   providers: [PutawayService],
+  exports: [PutawayService],
 })
 export class PutawayModule {}

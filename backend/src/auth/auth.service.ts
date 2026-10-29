@@ -24,6 +24,7 @@ export class AuthService {
 
   private roleInclude = {
     role: { include: { permissions: { include: { permission: true } } } },
+    warehouses: { select: { warehouseId: true } },
   };
 
   private permissionKeys(user: {
@@ -78,7 +79,6 @@ export class AuthService {
       username: user.username,
       role: user.role.name,
       permissions,
-      warehouseId: user.warehouseId,
     });
 
     return {
@@ -90,7 +90,7 @@ export class AuthService {
         username: user.username,
         role: user.role.name,
         permissions,
-        warehouseId: user.warehouseId,
+        warehouseIds: user.warehouses.map((w) => w.warehouseId),
       },
     };
   }
@@ -110,7 +110,7 @@ export class AuthService {
       username: user.username,
       role: user.role.name,
       permissions: this.permissionKeys(user),
-      warehouseId: user.warehouseId,
+      warehouseIds: user.warehouses.map((w) => w.warehouseId),
     };
   }
 
@@ -125,7 +125,10 @@ export class AuthService {
     email: true,
     employeeId: true,
     role: { select: { name: true } },
-    warehouse: { select: { name: true } },
+    warehouses: {
+      select: { warehouse: { select: { name: true } } },
+      orderBy: { warehouse: { name: 'asc' } },
+    },
     department: { select: { name: true } },
     subsidiary: { select: { name: true } },
     updatedAt: true,

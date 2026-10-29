@@ -1,7 +1,10 @@
-import { Body, Controller, Get, Param, Patch, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { InventoryService } from './inventory.service';
 import { QueryInventoryDto } from './dto/query-inventory.dto';
 import { AdjustBinsDto } from './dto/adjust-bins.dto';
+import { inventoryExportFileName, writeInventoryXlsx } from './inventory-export';
+import { xlsxHeaders } from '../common/xlsx-export';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import {
   CurrentUser,
@@ -16,6 +19,21 @@ export class InventoryController {
   @RequirePermissions('inventory:read')
   findAll(@Query() query: QueryInventoryDto, @CurrentUser() user: AuthUser) {
     return this.service.findAll(query, user);
+  }
+
+  /**
+   * The Inventory List as an Excel file, for whatever the list is filtered
+   * and sorted by: one row per material, warehouse and bin.
+   */
+  @Get('export')
+  @RequirePermissions('inventory:read')
+  async export(
+    @Query() query: QueryInventoryDto,
+    @CurrentUser() user: AuthUser,
+    @Res() res: Response,
+  ) {
+    res.set(xlsxHeaders(inventoryExportFileName()));
+    await writeInventoryXlsx(this.service.exportRows(query, user), res);
   }
 
   /** Reserved / In Transit documents of every inventory row (filtered, paged). */

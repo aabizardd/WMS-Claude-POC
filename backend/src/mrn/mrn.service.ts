@@ -2,15 +2,18 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { scopeWhere, inScope } from '../common/warehouse-scope';
 
 export interface WarehouseScope {
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
 }
 
 type MrnOrder = Prisma.MrnOrderByWithRelationInput;
 const MRN_SORTABLE: Record<string, (d: SortDir) => MrnOrder> = {
   shipment_number: (d) => ({ shipmentNumber: d }),
+  aju_number: (d) => ({ ajuNumber: d }),
   receiving_location: (d) => ({ receivingLocationName: d }),
   status: (d) => ({ status: d }),
   created_at: (d) => ({ createdAt: d }),
@@ -32,10 +35,7 @@ export class MrnService {
   constructor(private prisma: PrismaService) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.MrnWhereInput {
-    if (scope.role === 'admin') {
-      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
-    }
-    return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
+    return scopeWhere(scope, 'warehouseId');
   }
 
   // Map mrn.id -> its PIB Goods Receive (if any) for the given MRN ids.
@@ -58,6 +58,7 @@ export class MrnService {
       page?: number;
       limit?: number;
       search?: string;
+      aju_no?: string;
       sort_by?: string;
       sort_order?: string;
     },
@@ -75,6 +76,10 @@ export class MrnService {
         { shipmentNumber: { contains: query.search, mode: 'insensitive' } },
         { oracleId: { contains: query.search, mode: 'insensitive' } },
       ];
+    }
+    // Nomor Aju search (customs registration number), its own filter.
+    if (query.aju_no?.trim()) {
+      where.ajuNumber = { contains: query.aju_no.trim(), mode: 'insensitive' };
     }
 
     const [total, rows] = await this.prisma.$transaction([
@@ -110,7 +115,7 @@ export class MrnService {
     });
     if (
       !mrn ||
-      (scope.role !== 'admin' && mrn.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, mrn.warehouseId))
     ) {
       throw new NotFoundException(`MRN ${id} not found`);
     }
@@ -142,6 +147,7 @@ export class MrnService {
       memo: m.memo,
       vessel_number: m.vesselNumber,
       bill_of_lading: m.billOfLading,
+      aju_number: m.ajuNumber,
       port: m.port,
       date_created: m.dateCreated,
       last_modified: m.lastModified,

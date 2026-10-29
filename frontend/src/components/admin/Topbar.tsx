@@ -77,7 +77,7 @@ function ThemeToggle() {
 }
 
 function WarehouseSelector() {
-  const { warehouses, activeWarehouseId, activeWarehouseName, canSwitch, setActiveWarehouse } =
+  const { warehouses, activeWarehouseId, activeWarehouseName, assignedWarehouses, canSwitch, setActiveWarehouse } =
     useWarehouse();
   const { t } = useI18n();
 
@@ -99,7 +99,11 @@ function WarehouseSelector() {
           searchPlaceholder={t('common.search')}
         />
       ) : (
-        <span className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+        // Every assigned warehouse is seen together; hover lists them.
+        <span
+          className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+          title={assignedWarehouses.map((w) => w.name).join('\n') || undefined}
+        >
           {activeWarehouseName ?? '—'}
         </span>
       )}

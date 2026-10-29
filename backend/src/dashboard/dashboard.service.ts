@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUser } from '../auth/decorators/current-user.decorator';
+import { scopeWhere } from '../common/warehouse-scope';
 
 // Available stock below this (but > 0) counts as "low stock". Heuristic — the
 // WMS has no per-material reorder point yet.
@@ -13,12 +14,9 @@ export class DashboardService {
   constructor(private prisma: PrismaService) {}
 
   // Warehouse scope: admins with no active warehouse see everything; otherwise
-  // scope to the active/own warehouse. Mirrors the CurrentUser semantics.
-  private whScope(user: AuthUser): { warehouseId?: string } {
-    if (user.role === 'admin') {
-      return user.warehouseId ? { warehouseId: user.warehouseId } : {};
-    }
-    return { warehouseId: user.warehouseId ?? '__none__' };
+  // the active warehouse, or every warehouse a user is assigned.
+  private whScope(user: AuthUser): { warehouseId?: { in: string[] } } {
+    return scopeWhere(user, 'warehouseId');
   }
 
   private rangeStart(days: number): Date {

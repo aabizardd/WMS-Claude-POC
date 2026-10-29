@@ -6,12 +6,16 @@ import {
   Param,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { TransferOrdersService } from './transfer-orders.service';
 import { TransferOrderSyncService } from './transfer-order-sync.service';
 import { QueryTransferOrderDto } from './dto/query-transfer-order.dto';
 import { SyncTransferOrderDto } from './dto/sync-transfer-order.dto';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
+import { transferOrderExportFileName, writeTransferOrderXlsx } from './transfer-order-export';
+import { xlsxHeaders } from '../common/xlsx-export';
 import {
   CurrentUser,
   type AuthUser,
@@ -33,6 +37,18 @@ export class TransferOrdersController {
       lastModified: dto.lastModified,
       pageSize: dto.pageSize,
     });
+  }
+
+  /**
+   * The TO Out (direction=out) or TO In (direction=in) list as an Excel file,
+   * for whatever it is filtered and sorted by. Both come out in the same
+   * "ITI TO" layout: they are the same Transfer Orders.
+   */
+  @Get('export')
+  @RequirePermissions('transfer-orders:read')
+  async export(@Query() query: QueryTransferOrderDto, @CurrentUser() user: AuthUser, @Res() res: Response) {
+    res.set(xlsxHeaders(transferOrderExportFileName()));
+    await writeTransferOrderXlsx(this.service.exportRows(query, user), res);
   }
 
   @Get()

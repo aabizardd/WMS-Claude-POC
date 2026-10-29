@@ -27,7 +27,7 @@ export class ComplaintsController {
     return this.service.create(dto, {
       userId: user.userId,
       role: user.role,
-      warehouseId: user.warehouseId,
+      warehouseIds: user.warehouseIds,
     });
   }
 
@@ -37,7 +37,7 @@ export class ComplaintsController {
     return this.service.findAll(query, {
       userId: user.userId,
       role: user.role,
-      warehouseId: user.warehouseId,
+      warehouseIds: user.warehouseIds,
     });
   }
 
@@ -47,7 +47,7 @@ export class ComplaintsController {
     return this.service.findOne(id, {
       userId: user.userId,
       role: user.role,
-      warehouseId: user.warehouseId,
+      warehouseIds: user.warehouseIds,
     });
   }
 

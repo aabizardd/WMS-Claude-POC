@@ -83,6 +83,7 @@ export default function MrnDetailPage() {
           </h3>
           <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2 text-sm">
             <Meta label="Shipment Number" value={mrn.shipment_number} />
+            <Meta label="Nomor Aju" value={mrn.aju_number} />
             <Meta label="Oracle ID" value={mrn.oracle_id} />
             <Meta label="Oracle Status" value={mrn.oracle_status} />
             <Meta label="Receiving Location" value={mrn.receiving_location_name} />

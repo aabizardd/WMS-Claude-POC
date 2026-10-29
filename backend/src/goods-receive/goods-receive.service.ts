@@ -8,10 +8,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { UpdateActualsDto } from './dto/update-actuals.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { loadPibMrn, pibMrnInclude, type PibMrn } from './gr-source.util';
+import { scopeWhere, inScope } from '../common/warehouse-scope';
 
 export interface WarehouseScope {
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
 }
 
 type GrOrder = Prisma.GoodsReceiveOrderByWithRelationInput;
@@ -67,10 +69,7 @@ export class GoodsReceiveService {
   constructor(private prisma: PrismaService) {}
 
   private scopeWhere(scope: WarehouseScope): Prisma.GoodsReceiveWhereInput {
-    if (scope.role === 'admin') {
-      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
-    }
-    return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
+    return scopeWhere(scope, 'warehouseId');
   }
 
   async findAll(
@@ -248,7 +247,7 @@ export class GoodsReceiveService {
     });
     if (
       !gr ||
-      (scope.role !== 'admin' && gr.warehouseId !== scope.warehouseId)
+      (scope.role !== 'admin' && !inScope(scope, gr.warehouseId))
     ) {
       throw new NotFoundException(`Goods Receive ${id} not found`);
     }

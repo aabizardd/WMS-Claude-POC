@@ -1,7 +1,10 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { SalesDeliveryService } from './sales-delivery.service';
 import { CreateSalesDeliveryDto } from './dto/create-sales-delivery.dto';
 import { QuerySalesDeliveryDto } from './dto/query-sales-delivery.dto';
+import { salesDeliveryExportFileName, writeSalesDeliveryXlsx } from './sales-delivery-export';
+import { xlsxHeaders } from '../common/xlsx-export';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import {
   CurrentUser,
@@ -11,6 +14,27 @@ import {
 @Controller('sales-delivery')
 export class SalesDeliveryController {
   constructor(private readonly service: SalesDeliveryService) {}
+
+  /**
+   * The list as an Excel file (WMS dev's "SDKawasan" workbook): a Sales
+   * Delivery and a Sales Return sheet, one row per line, for whatever the
+   * list is filtered and sorted by. Declared before ':id'.
+   */
+  @Get('export')
+  @RequirePermissions('sales-delivery:read')
+  async export(
+    @Query() query: QuerySalesDeliveryDto,
+    @CurrentUser() user: AuthUser,
+    @Res() res: Response,
+  ) {
+    const { from, to } = await this.service.exportPeriod(query, user);
+    res.set(xlsxHeaders(salesDeliveryExportFileName(from, to)));
+    await writeSalesDeliveryXlsx(
+      this.service.exportLines(query, user, 'SalesDelivery'),
+      this.service.exportLines(query, user, 'SalesReturn'),
+      res,
+    );
+  }
 
   // ---- create-form lookups (declared before ':id') ----
 

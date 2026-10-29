@@ -20,6 +20,8 @@ import { VendorsModule } from "./vendors/vendors.module";
 import { ErpModule } from "./erp/erp.module";
 import { CustomersModule } from "./customers/customers.module";
 import { OwnershipsModule } from "./ownerships/ownerships.module";
+import { TransferInboundModule } from "./transfer-inbound/transfer-inbound.module";
+import { PibInboundModule } from "./pib-inbound/pib-inbound.module";
 import { DepartmentsModule } from "./departments/departments.module";
 import { ClassesModule } from "./classes/classes.module";
 import { SubsidiariesModule } from "./subsidiaries/subsidiaries.module";
@@ -67,6 +69,8 @@ import { PermissionsGuard } from "./auth/guards/permissions.guard";
     VendorsModule,
     CustomersModule,
     OwnershipsModule,
+    TransferInboundModule,
+    PibInboundModule,
     DepartmentsModule,
     ClassesModule,
     SubsidiariesModule,

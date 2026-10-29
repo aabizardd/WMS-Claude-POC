@@ -28,6 +28,7 @@
     "seed:bin-variety": "ts-node src/scripts/seed-bin-variety.ts",
     "seed:billing-stock": "ts-node src/scripts/seed-billing-stock.ts",
     "seed:multi-packing-delivery": "ts-node src/scripts/seed-multi-packing-delivery.ts",
+    "seed:pickers": "ts-node src/scripts/seed-pickers.ts",
     "db:reset": "prisma migrate reset --force"
   },
   "prisma": {
@@ -46,6 +47,7 @@
     "bcryptjs": "^2.4.3",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
+    "exceljs": "4.4.0",
     "helmet": "^8.2.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",

@@ -14,7 +14,7 @@ interface Profile {
   email: string;
   employeeId: string | null;
   role: { name: string } | null;
-  warehouse: { name: string } | null;
+  warehouses: { warehouse: { name: string } }[];
   department: { name: string | null } | null;
   subsidiary: { name: string | null } | null;
 }
@@ -155,7 +155,7 @@ export default function ProfilePage() {
         </div>
         <dl className="ml-auto hidden grid-cols-2 gap-x-8 gap-y-1 text-sm md:grid">
           <Info label="Role" value={profile.role?.name} />
-          <Info label="Warehouse" value={profile.warehouse?.name} />
+          <Info label="Warehouse" value={profile.warehouses.map((w) => w.warehouse.name).join(', ') || null} />
           <Info label="Department" value={profile.department?.name} />
           <Info label="Subsidiary" value={profile.subsidiary?.name} />
         </dl>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../lib/api';
+import { downloadFile } from '../../lib/download';
 import type {
   Paginated,
   SalesDeliveryFilter,
@@ -107,6 +108,7 @@ const EXTRA_FIELDS: FieldDef[] = [
   { value: 'bin', label: 'Bin', kind: 'text', item: true },
   { value: 'material_name', label: 'Material Name', kind: 'text', item: true },
   { value: 'delivery_number', label: 'SD/SR Number', kind: 'text' },
+  { value: 'netsuite_id', label: 'Netsuite ID', kind: 'text' },
   { value: 'created_by', label: 'Created By', kind: 'text' },
   { value: 'status', label: 'Status', kind: 'status' },
 ];
@@ -229,6 +231,7 @@ export default function SalesDeliveryListPage() {
   /** Set when an SD/SR Number filter moved the user to the other tab, to say so. */
   const [switchedTo, setSwitchedTo] = useState<DocTypeView | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [exporting, setExporting] = useState(false);
 
   // Draft values are what the user edits; `applied` is what the server was
   // asked for. Keeping them apart stops every keystroke from firing a request.
@@ -370,6 +373,27 @@ export default function SalesDeliveryListPage() {
   /** How many of the modal's fields are in force. */
   const extraCount = applied.filter((f) => EXTRA_FIELDS.some((x) => x.value === f.field)).length;
 
+  /**
+   * Every document the filters match (not only this page), in the list's
+   * order: a Sales Delivery and a Sales Return sheet, whichever tab is open.
+   */
+  async function exportExcel() {
+    if (exporting) return;
+    setExporting(true);
+    toast.info('Preparing the export…');
+    try {
+      await downloadFile(
+        '/sales-delivery/export',
+        { filters: applied.length ? JSON.stringify(applied) : undefined, ...params() },
+        'SDKawasan.xlsx',
+      );
+    } catch {
+      toast.error('Export failed. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   /** One input for one field, by kind. */
   function renderField(f: FieldDef) {
     const values = draft[f.value] ?? [];
@@ -431,9 +455,9 @@ export default function SalesDeliveryListPage() {
           subtitle="Stock transfer between the MSO and VHS warehouses"
           menu={[
             {
-              label: 'Export',
+              label: exporting ? 'Exporting…' : 'Export',
               icon: <ExportIcon />,
-              onClick: () => toast.info('Export is not available yet.'),
+              onClick: exportExcel,
             },
           ]}
           actions={

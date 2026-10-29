@@ -10,6 +10,7 @@ import { ErpHttpService } from '../erp/erp-http.service';
 import { PurchaseOrderSyncService } from '../purchase-orders/purchase-order-sync.service';
 import type { GenerateGrFromPoDto } from './dto/generate-gr-from-po.dto';
 import type { WarehouseScope } from './goods-receive.service';
+import { inScope } from '../common/warehouse-scope';
 
 // PO statuses that allow receiving.
 const RECEIVABLE_PO_STATUSES = ['pendingReceipt', 'pendingBillPartReceived'];
@@ -45,12 +46,12 @@ export class GoodsReceiveFromPoService {
     private poSync: PurchaseOrderSyncService,
   ) {}
 
-  async generate(dto: GenerateGrFromPoDto, scope: WarehouseScope) {
+  async generate(dto: GenerateGrFromPoDto, scope: WarehouseScope & { userId?: number }) {
     const po = await this.prisma.purchaseOrder.findUnique({
       where: { id: dto.purchaseOrderId },
       include: { lines: true },
     });
-    if (!po || (scope.role !== 'admin' && po.warehouseId !== scope.warehouseId)) {
+    if (!po || (scope.role !== 'admin' && !inScope(scope, po.warehouseId))) {
       throw new NotFoundException(`Purchase Order ${dto.purchaseOrderId} not found`);
     }
     if (!RECEIVABLE_PO_STATUSES.includes(po.poStatus ?? '')) {
@@ -132,6 +133,7 @@ export class GoodsReceiveFromPoService {
           grNumber,
           status: 'Open',
           warehouseId: po.warehouseId,
+          createdById: scope.userId ?? null,
           items: {
             create: dto.items.map((row) => {
               const line = lineById.get(row.lineId)!;

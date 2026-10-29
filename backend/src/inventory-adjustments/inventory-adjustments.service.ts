@@ -16,6 +16,8 @@ import { ErpHttpService } from '../erp/erp-http.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { isFrozenBinLabel, usableBinStockWhere } from '../common/frozen-bins';
+import { parseDateRange } from '../common/date-range.util';
+import { subsidiarySingleFilter } from '../common/subsidiary-filter';
 import {
   IA_TYPES,
   buildOracleMemo,
@@ -24,11 +26,13 @@ import {
 } from './ia-rules';
 import type { CreateInventoryAdjustmentDto } from './dto/create-inventory-adjustment.dto';
 import type { ApproveInventoryAdjustmentDto } from './dto/approve-inventory-adjustment.dto';
+import { scopeWhere, inScope } from '../common/warehouse-scope';
 
 export interface WarehouseScope {
   userId: number;
   role: string;
-  warehouseId: string | null;
+  // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
+  warehouseIds: string[] | null;
 }
 
 // Static header values for the Oracle inventory adjustment (env-overridable).
@@ -56,22 +60,34 @@ interface OracleAdjustmentStatusResponse {
   }[];
 }
 
+const warehouseSelect = {
+  select: { id: true, name: true, parentName: true, subsidiaryName: true },
+} as const;
+
+const itemInclude = {
+  include: {
+    bin: { select: { binCode: true, binLabel: true } },
+    warehouse: warehouseSelect,
+  },
+  orderBy: { createdAt: 'asc' as const },
+};
+
 const listInclude = {
-  warehouse: { select: { id: true, name: true } },
+  warehouse: warehouseSelect,
+  class: { select: { id: true, name: true } },
+  department: { select: { id: true, name: true } },
   createdBy: { select: { id: true, name: true } },
-  items: true,
+  items: itemInclude,
   _count: { select: { discrepancies: true } },
 } satisfies Prisma.InventoryAdjustmentInclude;
 
 const detailInclude = {
-  warehouse: { select: { id: true, name: true } },
+  warehouse: warehouseSelect,
   class: { select: { id: true, name: true, oracleId: true } },
+  department: { select: { id: true, name: true, oracleId: true } },
   createdBy: { select: { id: true, name: true } },
   approvedBy: { select: { id: true, name: true } },
-  items: {
-    include: { bin: { select: { binLabel: true } } },
-    orderBy: { createdAt: 'asc' as const },
-  },
+  items: itemInclude,
   discrepancies: {
     include: {
       discrepancy: {
@@ -105,6 +121,9 @@ const SORTABLE: Record<string, (d: SortDir) => AdjOrder> = {
   status: (d) => ({ status: d }),
   oracle_approval_status: (d) => ({ oracleApprovalStatus: d }),
   warehouse: (d) => ({ warehouse: { name: d } }),
+  class: (d) => ({ class: { name: d } }),
+  department: (d) => ({ department: { name: d } }),
+  ownership: (d) => ({ warehouse: { subsidiaryName: d } }),
   created_by: (d) => ({ createdBy: { name: d } }),
   created_at: (d) => ({ createdAt: d }),
 };
@@ -114,6 +133,7 @@ interface PreparedLine {
   materialId: string;
   materialCode: string | null;
   materialName: string | null;
+  warehouseId: string;
   binId: string;
   binLabel: string | null;
   qtyAdjustment: number;
@@ -123,6 +143,25 @@ interface PreparedLine {
   qtyIssue: number;
   qualityIssue: number;
 }
+
+/** Statuses whose reductions still hold stock that is not yet moved. */
+const PENDING_STATUSES: InventoryAdjustmentStatus[] = [
+  'WaitingApproval',
+  'Approved',
+  'WaitingOracleApproval',
+];
+
+/** List filter fields; every one but created_at is free text. */
+export const IA_FILTER_FIELDS = [
+  'material_code',
+  'warehouse',
+  'created_at',
+  'bin',
+  'material_name',
+  'type',
+  'created_by',
+] as const;
+export type IaFilterField = (typeof IA_FILTER_FIELDS)[number];
 
 @Injectable()
 export class InventoryAdjustmentsService {
@@ -134,21 +173,89 @@ export class InventoryAdjustmentsService {
     private inventory: InventoryService,
   ) {}
 
+  // A document belongs to every warehouse one of its lines touches.
   private scopeWhere(scope: WarehouseScope): Prisma.InventoryAdjustmentWhereInput {
-    if (scope.role === 'admin') {
-      return scope.warehouseId ? { warehouseId: scope.warehouseId } : {};
-    }
-    return { warehouseId: scope.warehouseId ?? '__no_warehouse__' };
+    if (!scope.warehouseIds) return {};
+    const wh = { in: scope.warehouseIds };
+    return { OR: [{ warehouseId: wh }, { items: { some: { warehouseId: wh } } }] };
   }
 
-  // The concrete warehouse to act on. Admin "All" (null) can't create/lookup.
-  private requireWarehouse(scope: WarehouseScope): string {
-    if (!scope.warehouseId) {
-      throw new BadRequestException(
-        'Select a specific warehouse first (Inventory Adjustment cannot use "All sites")',
-      );
+  /** Detail/action access: admins may open any document by id. */
+  private canSee(
+    a: { warehouseId: string; items: { warehouseId: string | null }[] },
+    scope: WarehouseScope,
+  ): boolean {
+    if (scope.role === 'admin') return true;
+    return inScope(scope, a.warehouseId) || a.items.some((it) => inScope(scope, it.warehouseId));
+  }
+
+  /**
+   * Inventories the create form may draw from: the user's warehouses, or —
+   * for an admin on "All" — every active warehouse of the allowed subsidiary,
+   * so one document can span warehouses.
+   */
+  private inventoryScope(scope: WarehouseScope): Prisma.InventoryManagementWhereInput {
+    if (scope.warehouseIds) return scopeWhere(scope);
+    return { warehouse: { isInactive: false, subsidiaryId: subsidiarySingleFilter() } };
+  }
+
+  /**
+   * Reductions already promised by documents that have not completed yet, per
+   * material|bin. The create form shows them and a new reduction may not dip
+   * into them.
+   */
+  private async pendingHolds(
+    materialIds: string[],
+    binIds: string[],
+    excludeId?: string,
+  ) {
+    const rows = await this.prisma.inventoryAdjustmentItem.findMany({
+      where: {
+        materialId: { in: materialIds },
+        binId: { in: binIds },
+        qtyAdjustment: { lt: 0 },
+        adjustment: {
+          status: { in: PENDING_STATUSES },
+          // Only the free-signed types draw on Available; the discrepancy types
+          // clear Quantity/Quality Issue instead.
+          adjustmentType: { in: IA_TYPES.filter((t) => ruleFor(t).qtyMode === 'free_signed') },
+          ...(excludeId ? { id: { not: excludeId } } : {}),
+        },
+      },
+      select: {
+        materialId: true,
+        binId: true,
+        qtyAdjustment: true,
+        adjustment: {
+          select: {
+            id: true,
+            adjustmentNumber: true,
+            status: true,
+            createdBy: { select: { name: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    const byKey = new Map<
+      string,
+      { qty: number; docs: { id: string; adjustment_number: string; status: string; qty: number; created_by: string | null }[] }
+    >();
+    for (const r of rows) {
+      const key = `${r.materialId}|${r.binId}`;
+      const entry = byKey.get(key) ?? { qty: 0, docs: [] };
+      const qty = -r.qtyAdjustment;
+      entry.qty += qty;
+      entry.docs.push({
+        id: r.adjustment.id,
+        adjustment_number: r.adjustment.adjustmentNumber,
+        status: r.adjustment.status,
+        qty,
+        created_by: r.adjustment.createdBy?.name ?? null,
+      });
+      byKey.set(key, entry);
     }
-    return scope.warehouseId;
+    return byKey;
   }
 
   private parseType(value: string | undefined): InventoryAdjustmentType {
@@ -176,86 +283,156 @@ export class InventoryAdjustmentsService {
 
   // ---------- lookups (create form) ----------
 
-  /** FR-IA-05: materials that have at least one bin matching the type's bucket. */
-  async materialOptions(type: string | undefined, scope: WarehouseScope) {
-    const warehouseId = this.requireWarehouse(scope);
+  /**
+   * FR-IA-05: materials that have at least one bin matching the type's bucket,
+   * with the stock they hold in that bucket across the scope, searched by code
+   * or name and paged for the card grid.
+   */
+  async materialOptions(
+    type: string | undefined,
+    scope: WarehouseScope,
+    query: { search?: string; page?: number; limit?: number } = {},
+  ) {
     const iaType = this.parseType(type);
+    const bucket = ruleFor(iaType).filterBucket;
+    const search = query.search?.trim();
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 9));
 
-    const invs = await this.prisma.inventoryManagement.findMany({
+    const stocks = await this.prisma.inventoryBinStock.findMany({
       where: {
-        warehouseId,
-        materialId: { not: null },
-        binStocks: {
-          some: {
-            binId: { not: null },
-            ...this.bucketWhere(iaType),
-            // Frozen (KIT) stock is out of scope for adjustments.
-            ...usableBinStockWhere(),
-          },
+        binId: { not: null },
+        ...this.bucketWhere(iaType),
+        ...usableBinStockWhere(),
+        inventory: {
+          ...this.inventoryScope(scope),
+          materialId: { not: null },
+          ...(search
+            ? {
+                OR: [
+                  { materialCode: { contains: search, mode: 'insensitive' } },
+                  { material: { materialName: { contains: search, mode: 'insensitive' } } },
+                ],
+              }
+            : {}),
         },
       },
       select: {
-        materialId: true,
-        materialCode: true,
-        material: {
+        availQty: true,
+        qtyIssue: true,
+        qualityIssue: true,
+        inventory: {
           select: {
-            materialName: true,
-            primaryUom: { select: { uomCode: true, allowsDecimal: true } },
+            materialId: true,
+            materialCode: true,
+            material: {
+              select: {
+                materialName: true,
+                primaryUom: { select: { uomCode: true, allowsDecimal: true } },
+              },
+            },
           },
         },
       },
-      orderBy: { materialCode: 'asc' },
     });
 
-    return invs.map((i) => ({
-      material_id: i.materialId,
-      material_code: i.materialCode,
-      material_name: i.material?.materialName ?? null,
-      uom_code: i.material?.primaryUom?.uomCode ?? null,
-      allows_decimal: i.material?.primaryUom?.allowsDecimal ?? true,
-    }));
+    const byMaterial = new Map<
+      string,
+      {
+        material_id: string;
+        material_code: string | null;
+        material_name: string | null;
+        uom_code: string | null;
+        allows_decimal: boolean;
+        in_stock: number;
+        bin_count: number;
+      }
+    >();
+    for (const st of stocks) {
+      const inv = st.inventory;
+      const id = inv.materialId!;
+      const row = byMaterial.get(id) ?? {
+        material_id: id,
+        material_code: inv.materialCode,
+        material_name: inv.material?.materialName ?? null,
+        uom_code: inv.material?.primaryUom?.uomCode ?? null,
+        allows_decimal: inv.material?.primaryUom?.allowsDecimal ?? true,
+        in_stock: 0,
+        bin_count: 0,
+      };
+      row.in_stock +=
+        bucket === 'qty_issue' ? st.qtyIssue : bucket === 'quality_issue' ? st.qualityIssue : st.availQty;
+      row.bin_count += 1;
+      byMaterial.set(id, row);
+    }
+
+    const all = [...byMaterial.values()].sort((a, b) =>
+      (a.material_code ?? '').localeCompare(b.material_code ?? ''),
+    );
+    return {
+      total_page: Math.ceil(all.length / limit) || 0,
+      total_data: all.length,
+      rows: all.slice((page - 1) * limit, page * limit),
+    };
   }
 
-  /** FR-IA-05: bins of a material matching the type's bucket, with quantities. */
+  /**
+   * FR-IA-05: every bin of a material matching the type's bucket, across the
+   * scope's warehouses, with what other pending documents already hold there.
+   */
   async binOptions(
     materialId: string,
     type: string | undefined,
     scope: WarehouseScope,
   ) {
-    const warehouseId = this.requireWarehouse(scope);
     const iaType = this.parseType(type);
     if (!materialId) return [];
+    const rule = ruleFor(iaType);
 
-    const inv = await this.prisma.inventoryManagement.findFirst({
-      where: { warehouseId, materialId },
+    const stocks = await this.prisma.inventoryBinStock.findMany({
+      where: {
+        binId: { not: null },
+        ...this.bucketWhere(iaType),
+        ...usableBinStockWhere(),
+        inventory: { ...this.inventoryScope(scope), materialId },
+      },
       include: {
-        binStocks: {
-          where: {
-            binId: { not: null },
-            ...this.bucketWhere(iaType),
-            ...usableBinStockWhere(),
+        bin: { select: { binCode: true, binLabel: true } },
+        inventory: {
+          select: {
+            warehouse: { select: { id: true, name: true, parentName: true } },
           },
-          include: { bin: { select: { binLabel: true } } },
-          orderBy: { createdAt: 'asc' },
         },
       },
+      orderBy: [{ inventory: { warehouse: { name: 'asc' } } }, { createdAt: 'asc' }],
     });
-    if (!inv) return [];
+    const holds = await this.pendingHolds(
+      [materialId],
+      stocks.map((s) => s.binId!),
+    );
 
-    return inv.binStocks.map((bs) => ({
-      bin_id: bs.binId,
-      bin_label: bs.bin?.binLabel ?? null,
-      qty_available: bs.availQty,
-      qty_issue: bs.qtyIssue,
-      quality_issue: bs.qualityIssue,
-      // FR-IA-06/07: what the read-only qty will be for the Discrepancy types.
-      suggested_qty_adjustment:
-        ruleFor(iaType).qtyMode === 'auto_negative'
-          ? -(ruleFor(iaType).filterBucket === 'qty_issue'
-              ? bs.qtyIssue
-              : bs.qualityIssue)
-          : null,
-    }));
+    return stocks.map((bs) => {
+      const hold = holds.get(`${materialId}|${bs.binId}`);
+      return {
+        bin_id: bs.binId,
+        bin_code: bs.bin?.binCode ?? null,
+        bin_label: bs.bin?.binLabel ?? null,
+        warehouse_id: bs.inventory.warehouse?.id ?? null,
+        warehouse_name: bs.inventory.warehouse?.name ?? null,
+        warehouse_parent: bs.inventory.warehouse?.parentName ?? null,
+        qty_available: bs.availQty,
+        qty_issue: bs.qtyIssue,
+        quality_issue: bs.qualityIssue,
+        // Reductions on other pending documents; a new one may not use them.
+        pending_qty: hold?.qty ?? 0,
+        pending_docs: hold?.docs ?? [],
+        // FR-IA-06/07: what the read-only qty will be for the Discrepancy types.
+        suggested_qty_adjustment:
+          rule.qtyMode === 'auto_negative'
+            ? -(rule.filterBucket === 'qty_issue' ? bs.qtyIssue : bs.qualityIssue)
+            : null,
+      };
+    });
   }
 
   /**
@@ -277,7 +454,6 @@ export class InventoryAdjustmentsService {
     binIds: string[],
     scope: WarehouseScope,
   ) {
-    const warehouseId = this.requireWarehouse(scope);
     const iaType = this.parseType(type);
     const kind = ruleFor(iaType).discrepancyList;
     if (!kind) return [];
@@ -329,7 +505,11 @@ export class InventoryAdjustmentsService {
     });
 
     const rows = await this.prisma.discrepancy.findMany({
-      where: { warehouseId, discrepancyType: kind, OR: or },
+      where: {
+        ...scopeWhere(scope),
+        discrepancyType: kind,
+        OR: or,
+      },
       select: {
         id: true,
         discrepancyId: true,
@@ -359,7 +539,7 @@ export class InventoryAdjustmentsService {
 
   private async prepareLines(
     type: InventoryAdjustmentType,
-    warehouseId: string,
+    scope: WarehouseScope,
     items: {
       material_id: string;
       bin_id: string;
@@ -380,34 +560,34 @@ export class InventoryAdjustmentsService {
     const materialIds = [...new Set(items.map((i) => i.material_id))];
     const binIds = [...new Set(items.map((i) => i.bin_id))];
 
-    const inventories = await this.prisma.inventoryManagement.findMany({
-      where: { warehouseId, materialId: { in: materialIds } },
-      select: {
-        materialId: true,
-        materialCode: true,
-        material: {
-          select: {
-            materialName: true,
-            primaryUom: { select: { allowsDecimal: true } },
-          },
-        },
-      },
-    });
-    const invByMaterial = new Map(inventories.map((i) => [i.materialId!, i]));
-
+    // A bin belongs to one warehouse, so material|bin finds one stock row in
+    // whichever warehouse of the scope holds it.
     const stocks = await this.prisma.inventoryBinStock.findMany({
       where: {
         binId: { in: binIds },
-        inventory: { warehouseId, materialId: { in: materialIds } },
+        inventory: { ...this.inventoryScope(scope), materialId: { in: materialIds } },
       },
       include: {
         bin: { select: { binLabel: true } },
-        inventory: { select: { materialId: true } },
+        inventory: {
+          select: {
+            materialId: true,
+            materialCode: true,
+            warehouseId: true,
+            material: {
+              select: {
+                materialName: true,
+                primaryUom: { select: { allowsDecimal: true } },
+              },
+            },
+          },
+        },
       },
     });
     const stockByKey = new Map(
       stocks.map((st) => [`${st.inventory.materialId}|${st.binId}`, st]),
     );
+    const holds = await this.pendingHolds(materialIds, binIds);
 
     for (const line of items) {
       const key = `${line.material_id}|${line.bin_id}`;
@@ -418,19 +598,19 @@ export class InventoryAdjustmentsService {
       }
       seen.add(key);
 
-      const inv = invByMaterial.get(line.material_id);
-      if (!inv) {
-        throw new BadRequestException(
-          'Material is not in inventory for this warehouse',
-        );
-      }
-
       const stock = stockByKey.get(key);
       if (!stock) {
         throw new BadRequestException(
-          'Selected bin does not hold this material in this warehouse',
+          'Selected bin does not hold this material in a warehouse you can adjust',
         );
       }
+      const inv = stock.inventory;
+      if (!inv.warehouseId) {
+        throw new BadRequestException(
+          `${inv.materialCode ?? line.material_id}: this stock row has no warehouse`,
+        );
+      }
+      const warehouseId = inv.warehouseId;
 
       const label = `${inv.materialCode ?? line.material_id} @ ${
         stock.bin?.binLabel ?? line.bin_id
@@ -489,10 +669,14 @@ export class InventoryAdjustmentsService {
         if (Math.abs(qtyAdjustment) < EPS) {
           throw new BadRequestException(`${label}: Qty Adjustment cannot be 0`);
         }
-        // FR-IA-09 rule 3.
-        if (stock.availQty + qtyAdjustment < -EPS) {
+        // FR-IA-09 rule 3, net of what other pending documents already hold.
+        const held = holds.get(key)?.qty ?? 0;
+        const usable = stock.availQty - held;
+        if (qtyAdjustment < 0 && usable + qtyAdjustment < -EPS) {
           throw new BadRequestException(
-            `${label}: a negative adjustment of ${qtyAdjustment} exceeds the available qty (${stock.availQty})`,
+            held > EPS
+              ? `${label}: a negative adjustment of ${qtyAdjustment} exceeds the available qty (${Math.max(0, usable)} of ${stock.availQty}; ${held} held by pending documents)`
+              : `${label}: a negative adjustment of ${qtyAdjustment} exceeds the available qty (${stock.availQty})`,
           );
         }
         this.assertDecimals(label, allowsDecimal, qtyAdjustment);
@@ -502,6 +686,7 @@ export class InventoryAdjustmentsService {
         materialId: line.material_id,
         materialCode: inv.materialCode,
         materialName: inv.material?.materialName ?? null,
+        warehouseId,
         binId: line.bin_id,
         binLabel: stock.bin?.binLabel ?? null,
         qtyAdjustment,
@@ -566,7 +751,7 @@ export class InventoryAdjustmentsService {
           `Discrepancy must be of type "${kind}" for this adjustment type`,
         );
       }
-      if (scope.role !== 'admin' && d.warehouseId !== scope.warehouseId) {
+      if (scope.role !== 'admin' && !inScope(scope, d.warehouseId)) {
         throw new BadRequestException(`Discrepancy ${id} not found`);
       }
     }
@@ -644,16 +829,21 @@ export class InventoryAdjustmentsService {
    * that moment on.
    */
   async create(dto: CreateInventoryAdjustmentDto, scope: WarehouseScope) {
-    const warehouseId = this.requireWarehouse(scope);
     const type = this.parseType(dto.adjustment_type);
 
-    const klass = await this.prisma.class.findUnique({
-      where: { id: dto.class_id },
-      select: { id: true },
-    });
+    const [klass, department] = await Promise.all([
+      this.prisma.class.findUnique({ where: { id: dto.class_id }, select: { id: true } }),
+      this.prisma.department.findUnique({
+        where: { id: dto.department_id },
+        select: { id: true },
+      }),
+    ]);
     if (!klass) throw new BadRequestException('Selected class does not exist');
+    if (!department) throw new BadRequestException('Selected department does not exist');
 
-    const prepared = await this.prepareLines(type, warehouseId, dto.items);
+    const prepared = await this.prepareLines(type, scope, dto.items);
+    // The header carries the first line's warehouse; each line keeps its own.
+    const warehouseId = prepared[0].warehouseId;
     const discrepancyIds = await this.validateDiscrepancies(
       type,
       dto.discrepancy_ids ?? [],
@@ -666,6 +856,7 @@ export class InventoryAdjustmentsService {
           adjustmentNumber,
           warehouseId,
           classId: dto.class_id,
+          departmentId: dto.department_id,
           adjustmentType: type,
           status: 'WaitingApproval',
           memo: dto.memo ?? null,
@@ -695,6 +886,7 @@ export class InventoryAdjustmentsService {
       materialId: p.materialId,
       materialCode: p.materialCode,
       materialName: p.materialName,
+      warehouseId: p.warehouseId,
       binId: p.binId,
       binLabel: p.binLabel,
       qtyAdjustment: p.qtyAdjustment,
@@ -761,7 +953,7 @@ export class InventoryAdjustmentsService {
       where: { id },
       include: { items: true },
     });
-    if (!a || (scope.role !== 'admin' && a.warehouseId !== scope.warehouseId)) {
+    if (!a || !this.canSee(a, scope)) {
       throw new NotFoundException(`Inventory adjustment ${id} not found`);
     }
     return a;
@@ -781,7 +973,7 @@ export class InventoryAdjustmentsService {
         createdBy: { select: { id: true, role: { select: { name: true } } } },
       },
     });
-    if (!a || (scope.role !== 'admin' && a.warehouseId !== scope.warehouseId)) {
+    if (!a || !this.canSee(a, scope)) {
       throw new NotFoundException(`Inventory adjustment ${id} not found`);
     }
     if (a.status !== 'WaitingApproval') {
@@ -891,14 +1083,20 @@ export class InventoryAdjustmentsService {
       include: {
         warehouse: { select: { oracleId: true } },
         class: { select: { oracleId: true } },
+        department: { select: { oracleId: true } },
         createdBy: { select: { department: { select: { oracleId: true } } } },
-        items: { include: { material: { select: { erpDocId: true } } } },
+        items: {
+          include: {
+            material: { select: { erpDocId: true } },
+            warehouse: { select: { oracleId: true } },
+          },
+        },
         discrepancies: {
           include: { discrepancy: { select: { discrepancyId: true } } },
         },
       },
     });
-    if (!a || (scope.role !== 'admin' && a.warehouseId !== scope.warehouseId)) {
+    if (!a || !this.canSee(a, scope)) {
       throw new NotFoundException(`Inventory adjustment ${id} not found`);
     }
     if (a.status !== 'Approved') {
@@ -1098,6 +1296,7 @@ export class InventoryAdjustmentsService {
     adjustmentNumber: string;
     warehouse: { oracleId: string | null } | null;
     class: { oracleId: string } | null;
+    department: { oracleId: string } | null;
     createdBy: { department: { oracleId: string } | null } | null;
     memo: string | null;
     adjustmentType: InventoryAdjustmentType;
@@ -1105,12 +1304,15 @@ export class InventoryAdjustmentsService {
       qtyAdjustment: number;
       qtyPassed: number;
       material: { erpDocId: string | null } | null;
+      warehouse: { oracleId: string | null } | null;
     }[];
     discrepancies: { discrepancy: { discrepancyId: string } }[];
   }): Promise<{ inventoryAdjustmentId: number; message: string }> {
     const locationOracle = a.warehouse?.oracleId;
     const classOracle = a.class?.oracleId;
-    const deptOracle = a.createdBy?.department?.oracleId;
+    // The header department; documents from before it existed fall back to the
+    // creator's.
+    const deptOracle = a.department?.oracleId ?? a.createdBy?.department?.oracleId;
 
     if (!locationOracle) {
       throw new BadRequestException(
@@ -1132,18 +1334,27 @@ export class InventoryAdjustmentsService {
     const department = Number(deptOracle);
     const rule = ruleFor(a.adjustmentType);
 
-    // Group lines by item so multiple bins of one material go out as ONE Oracle
-    // line with the summed quantity.
-    const qtyByItem = new Map<number, number>();
+    // Group lines by item and location so multiple bins of one material in one
+    // warehouse go out as ONE Oracle line with the summed quantity.
+    const qtyByLine = new Map<string, { item: number; location: number; quantity: number }>();
     for (const it of a.items) {
       const item = Number(it.material?.erpDocId);
       if (!Number.isFinite(item)) continue;
+      const lineLocation = Number(it.warehouse?.oracleId ?? locationOracle);
+      if (!Number.isFinite(lineLocation)) {
+        throw new BadRequestException(
+          'A line warehouse has no Oracle location id — cannot post to Oracle',
+        );
+      }
       // Quality Adjustment only moves Qty Passed on the Oracle side.
       const q = rule.qtyMode === 'passed_non_passed' ? it.qtyPassed : it.qtyAdjustment;
-      qtyByItem.set(item, (qtyByItem.get(item) ?? 0) + q);
+      const key = `${item}|${lineLocation}`;
+      const row = qtyByLine.get(key) ?? { item, location: lineLocation, quantity: 0 };
+      row.quantity += q;
+      qtyByLine.set(key, row);
     }
-    const lines = [...qtyByItem.entries()]
-      .map(([item, quantity]) => ({ item, location, quantity, department }))
+    const lines = [...qtyByLine.values()]
+      .map((l) => ({ ...l, department }))
       .filter((l) => Math.abs(l.quantity) > EPS);
     if (lines.length === 0) {
       throw new BadRequestException(
@@ -1244,7 +1455,6 @@ export class InventoryAdjustmentsService {
           where: {
             binId: { in: lines.map((it) => it.binId!) },
             inventory: {
-              warehouseId: a.warehouseId,
               materialId: { in: lines.map((it) => it.materialId!) },
             },
           },
@@ -1399,6 +1609,51 @@ export class InventoryAdjustmentsService {
 
   // ---------- read ----------
 
+  /** One filter field → a where clause. Free text matches by "contains". */
+  private filterWhere(field: IaFilterField, raw: string): Prisma.InventoryAdjustmentWhereInput {
+    const v = raw.trim();
+    const contains = { contains: v, mode: 'insensitive' as const };
+    switch (field) {
+      case 'created_at':
+        return { createdAt: parseDateRange(v) };
+      case 'material_code':
+        return { items: { some: { materialCode: contains } } };
+      case 'material_name':
+        return { items: { some: { materialName: contains } } };
+      case 'bin':
+        return {
+          items: {
+            some: {
+              OR: [
+                { binLabel: contains },
+                { bin: { binCode: contains } },
+                { bin: { binLabel: contains } },
+              ],
+            },
+          },
+        };
+      case 'warehouse':
+        return {
+          OR: [
+            { warehouse: { name: contains } },
+            { items: { some: { warehouse: { name: contains } } } },
+          ],
+        };
+      case 'created_by':
+        return { createdBy: { name: contains } };
+      case 'type': {
+        // Typed as text, matched against the labels people see.
+        const needle = v.toLowerCase();
+        const types = IA_TYPES.filter(
+          (t) =>
+            ruleFor(t).oracleLabel.toLowerCase().includes(needle) ||
+            t.toLowerCase().includes(needle.replace(/\s+/g, '')),
+        );
+        return { adjustmentType: { in: types } };
+      }
+    }
+  }
+
   async findAll(
     query: {
       page?: number;
@@ -1406,6 +1661,7 @@ export class InventoryAdjustmentsService {
       search?: string;
       adjustment_type?: string;
       status?: string;
+      filters?: { field: IaFilterField; values: string[] }[];
       sort_by?: string;
       sort_order?: string;
     },
@@ -1417,32 +1673,91 @@ export class InventoryAdjustmentsService {
       createdAt: 'desc',
     });
 
-    const where: Prisma.InventoryAdjustmentWhereInput = {
-      ...this.scopeWhere(scope),
-    };
+    const and: Prisma.InventoryAdjustmentWhereInput[] = [this.scopeWhere(scope)];
     if (
       query.adjustment_type &&
       IA_TYPES.includes(query.adjustment_type as InventoryAdjustmentType)
     ) {
-      where.adjustmentType = query.adjustment_type as InventoryAdjustmentType;
+      and.push({ adjustmentType: query.adjustment_type as InventoryAdjustmentType });
     }
     if (query.status) {
-      where.status = query.status as InventoryAdjustmentStatus;
+      and.push({ status: query.status as InventoryAdjustmentStatus });
     }
     if (query.search) {
-      where.adjustmentNumber = { contains: query.search, mode: 'insensitive' };
+      and.push({ adjustmentNumber: { contains: query.search, mode: 'insensitive' } });
+    }
+    // OR within a field, AND across fields.
+    for (const f of query.filters ?? []) {
+      const values = f.values.map((v) => v.trim()).filter(Boolean);
+      if (values.length) and.push({ OR: values.map((v) => this.filterWhere(f.field, v)) });
+    }
+    const where: Prisma.InventoryAdjustmentWhereInput = { AND: and };
+
+    // One list row per document AND warehouse: a document spanning three
+    // warehouses shows as three rows, each holding only its own lines.
+    const docs = await this.prisma.inventoryAdjustment.findMany({
+      where,
+      orderBy,
+      select: { id: true, warehouseId: true },
+    });
+    const lines = await this.prisma.inventoryAdjustmentItem.findMany({
+      where: { adjustmentId: { in: docs.map((d) => d.id) } },
+      select: {
+        adjustmentId: true,
+        warehouseId: true,
+        materialCode: true,
+        materialName: true,
+        binLabel: true,
+        bin: { select: { binCode: true, binLabel: true } },
+        warehouse: { select: { name: true } },
+      },
+    });
+    type Pair = { adjustmentId: string; warehouseId: string; name: string; lines: typeof lines };
+    const pairsByDoc = new Map<string, Map<string, Pair>>();
+    const headerWh = new Map(docs.map((d) => [d.id, d.warehouseId]));
+    for (const l of lines) {
+      const wh = l.warehouseId ?? headerWh.get(l.adjustmentId)!;
+      const byWh = pairsByDoc.get(l.adjustmentId) ?? new Map<string, Pair>();
+      const pair = byWh.get(wh) ?? { adjustmentId: l.adjustmentId, warehouseId: wh, name: l.warehouse?.name ?? '', lines: [] };
+      pair.lines.push(l);
+      byWh.set(wh, pair);
+      pairsByDoc.set(l.adjustmentId, byWh);
     }
 
-    const [total, rows] = await this.prisma.$transaction([
-      this.prisma.inventoryAdjustment.count({ where }),
-      this.prisma.inventoryAdjustment.findMany({
-        where,
-        include: listInclude,
-        orderBy,
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-    ]);
+    // Line-level filters and the warehouse scope decide which of a document's
+    // warehouses are listed; the document-level ones were applied in SQL.
+    const lineFilters = (query.filters ?? [])
+      .filter((f) => ['material_code', 'material_name', 'bin', 'warehouse'].includes(f.field))
+      .map((f) => ({ field: f.field, values: f.values.map((v) => v.trim().toLowerCase()).filter(Boolean) }))
+      .filter((f) => f.values.length);
+    const hay = (field: IaFilterField, l: (typeof lines)[number], pair: Pair) =>
+      (field === 'material_code'
+        ? (l.materialCode ?? '')
+        : field === 'material_name'
+          ? (l.materialName ?? '')
+          : field === 'bin'
+            ? `${l.binLabel ?? ''} ${l.bin?.binCode ?? ''} ${l.bin?.binLabel ?? ''}`
+            : pair.name
+      ).toLowerCase();
+    const keep = (pair: Pair) =>
+      inScope(scope, pair.warehouseId) &&
+      lineFilters.every((f) => pair.lines.some((l) => f.values.some((v) => hay(f.field, l, pair).includes(v))));
+
+    let pairs = docs.flatMap((d) =>
+      [...(pairsByDoc.get(d.id)?.values() ?? [])].sort((a, b) => a.name.localeCompare(b.name)).filter(keep),
+    );
+    if (query.sort_by === 'warehouse') {
+      const dir = query.sort_order === 'desc' ? -1 : 1;
+      pairs = [...pairs].sort((a, b) => dir * a.name.localeCompare(b.name));
+    }
+
+    const total = pairs.length;
+    const pagePairs = pairs.slice((page - 1) * limit, page * limit);
+    const full = await this.prisma.inventoryAdjustment.findMany({
+      where: { id: { in: [...new Set(pagePairs.map((p) => p.adjustmentId))] } },
+      include: listInclude,
+    });
+    const byId = new Map(full.map((a) => [a.id, a]));
 
     return {
       total_page: Math.ceil(total / limit) || 0,
@@ -1455,8 +1770,17 @@ export class InventoryAdjustmentsService {
         status: query.status ?? null,
         adjustment_type: query.adjustment_type ?? null,
       },
-      rows: rows.map((r) => this.serializeList(r)),
+      rows: pagePairs.map((p) => this.serializeList(byId.get(p.adjustmentId)!, p.warehouseId)),
     };
+  }
+
+  /** Create-form default: the signed-in user's own department. */
+  async defaults(scope: WarehouseScope) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: scope.userId },
+      select: { departmentId: true },
+    });
+    return { department_id: user?.departmentId ?? null };
   }
 
   async findOne(id: string, scope: WarehouseScope) {
@@ -1464,7 +1788,7 @@ export class InventoryAdjustmentsService {
       where: { id },
       include: detailInclude,
     });
-    if (!a || (scope.role !== 'admin' && a.warehouseId !== scope.warehouseId)) {
+    if (!a || !this.canSee(a, scope)) {
       throw new NotFoundException(`Inventory adjustment ${id} not found`);
     }
     return this.serializeDetail(a);
@@ -1496,25 +1820,80 @@ export class InventoryAdjustmentsService {
       : it.qtyAdjustment;
   }
 
-  private serializeList(a: AdjList) {
-    const materials = new Set(a.items.map((it) => it.materialId ?? it.materialCode));
-    const bins = new Set(a.items.map((it) => it.binId ?? it.binLabel));
+  /** "Multiple warehouses" once the lines span more than one. */
+  private warehouseLabel(a: AdjList | AdjDetail): string | null {
+    const names = new Set(
+      a.items.map((it) => it.warehouse?.name).filter((n): n is string => !!n),
+    );
+    if (names.size > 1) return 'Multiple warehouses';
+    return [...names][0] ?? a.warehouse?.name ?? null;
+  }
+
+  /** The bucket a line's "Before Adjustment" refers to. */
+  private beforeQty(
+    type: InventoryAdjustmentType,
+    it: { availAtCreate: number; qtyIssueAtCreate: number; qualityIssueAtCreate: number },
+  ) {
+    const bucket = ruleFor(type).filterBucket;
+    if (bucket === 'qty_issue') return it.qtyIssueAtCreate;
+    if (bucket === 'quality_issue') return it.qualityIssueAtCreate;
+    return it.availAtCreate;
+  }
+
+  private serializeLine(type: InventoryAdjustmentType, it: AdjList['items'][number]) {
     return {
-      id: a.id,
+      id: it.id,
+      material_id: it.materialId,
+      material_code: it.materialCode,
+      material_name: it.materialName,
+      warehouse_id: it.warehouseId,
+      warehouse_name: it.warehouse?.name ?? null,
+      warehouse_parent: it.warehouse?.parentName ?? null,
+      bin_id: it.binId,
+      bin_code: it.bin?.binCode ?? null,
+      bin_label: it.binLabel ?? it.bin?.binLabel ?? null,
+      before_qty: this.beforeQty(type, it),
+      qty_adjustment: it.qtyAdjustment,
+      qty_passed: it.qtyPassed,
+      qty_non_passed: it.qtyNonPassed,
+      avail_at_create: it.availAtCreate,
+      qty_issue_at_create: it.qtyIssueAtCreate,
+      quality_issue_at_create: it.qualityIssueAtCreate,
+    };
+  }
+
+  /** One document in one warehouse: the header plus only that warehouse's lines. */
+  private serializeList(a: AdjList, warehouseId: string) {
+    const items = a.items.filter((it) => (it.warehouseId ?? a.warehouseId) === warehouseId);
+    const wh = items[0]?.warehouse ?? (a.warehouseId === warehouseId ? a.warehouse : null);
+    const materials = new Set(items.map((it) => it.materialId ?? it.materialCode));
+    const bins = new Set(items.map((it) => it.binId ?? it.binLabel));
+    const warehouseCount = new Set(a.items.map((it) => it.warehouseId ?? a.warehouseId)).size;
+    return {
+      id: `${a.id}:${warehouseId}`,
+      adjustment_id: a.id,
       adjustment_number: a.adjustmentNumber,
-      warehouse: a.warehouse?.name ?? null,
+      warehouse_id: warehouseId,
+      warehouse: wh?.name ?? null,
+      warehouse_parent: wh?.parentName ?? null,
+      // How many warehouses the whole document spans (this row is one of them).
+      warehouse_count: warehouseCount,
       adjustment_type: a.adjustmentType,
       adjustment_type_label: ruleFor(a.adjustmentType).oracleLabel,
       status: a.status,
       material_count: materials.size,
       bin_count: bins.size,
-      total_qty: a.items.reduce((s, it) => s + this.lineQty(a.adjustmentType, it), 0),
+      total_qty: items.reduce((s, it) => s + this.lineQty(a.adjustmentType, it), 0),
       discrepancy_count: a._count.discrepancies,
+      class_name: a.class?.name ?? null,
+      department_name: a.department?.name ?? null,
+      ownership: wh?.subsidiaryName ?? a.warehouse?.subsidiaryName ?? null,
       oracle_id: a.oracleId,
       oracle_approval_status: a.oracleApprovalStatus,
       oracle_error: a.oracleError,
       created_by: a.createdBy?.name ?? null,
       created_at: a.createdAt,
+      items: items.map((it) => this.serializeLine(a.adjustmentType, it)),
     };
   }
 
@@ -1523,8 +1902,11 @@ export class InventoryAdjustmentsService {
     return {
       id: a.id,
       adjustment_number: a.adjustmentNumber,
-      warehouse: a.warehouse?.name ?? null,
+      warehouse: this.warehouseLabel(a),
       warehouse_id: a.warehouseId,
+      ownership: a.warehouse?.subsidiaryName ?? null,
+      department_id: a.departmentId,
+      department_name: a.department?.name ?? null,
       class_id: a.classId,
       class_name: a.class?.name ?? null,
       class_oracle_id: a.class?.oracleId ?? null,
@@ -1547,20 +1929,7 @@ export class InventoryAdjustmentsService {
       approved_at: a.approvedAt,
       approval_reason: a.approvalReason,
       total_qty: a.items.reduce((s, it) => s + this.lineQty(a.adjustmentType, it), 0),
-      items: a.items.map((it) => ({
-        id: it.id,
-        material_id: it.materialId,
-        material_code: it.materialCode,
-        material_name: it.materialName,
-        bin_id: it.binId,
-        bin_label: it.binLabel ?? it.bin?.binLabel ?? null,
-        qty_adjustment: it.qtyAdjustment,
-        qty_passed: it.qtyPassed,
-        qty_non_passed: it.qtyNonPassed,
-        avail_at_create: it.availAtCreate,
-        qty_issue_at_create: it.qtyIssueAtCreate,
-        quality_issue_at_create: it.qualityIssueAtCreate,
-      })),
+      items: a.items.map((it) => this.serializeLine(a.adjustmentType, it)),
       discrepancies: a.discrepancies.map((d) => ({
         id: d.discrepancy.id,
         discrepancy_id: d.discrepancy.discrepancyId,
