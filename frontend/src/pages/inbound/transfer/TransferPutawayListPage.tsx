@@ -8,8 +8,7 @@ import MasterList, { type MasterColumn } from '../../../components/master/Master
 import { Cell, fmtDateTime, icons } from '../../../components/master/MasterKit';
 import { DocStatusPill, PageCard } from '../../../components/wms/DocKit';
 import { deleteTransferDoc } from './transferInbound';
-
-const BASE = '/admin/inbound/transfer';
+import { TRANSFER_IN, type InboundSource } from './inboundSource';
 
 const COLUMNS: MasterColumn<TransferPutawayRow>[] = [
   { label: 'Status', sortKey: 'status', width: 150, render: (r) => <DocStatusPill status={r.status} /> },
@@ -23,8 +22,9 @@ const COLUMNS: MasterColumn<TransferPutawayRow>[] = [
   { label: 'Last Modified At', sortKey: 'updated_at', render: (r) => <Cell>{fmtDateTime(r.updated_at)}</Cell> },
 ];
 
-/** Putaway - TO, as on WMS dev. */
-export default function TransferPutawayListPage() {
+/** Putaway - TO / PO, as on WMS dev. */
+export default function TransferPutawayListPage({ source = TRANSFER_IN }: { source?: InboundSource } = {}) {
+  const BASE = source.base;
   const navigate = useNavigate();
   const { has } = useAuth();
   const toast = useToast();
@@ -32,9 +32,9 @@ export default function TransferPutawayListPage() {
   const [reloadKey, setReloadKey] = useState(0);
 
   return (
-    <PageCard title="Putaway - TO" description="Move items to their storage locations for transfer order">
+    <PageCard title={`Putaway - ${source.code}`} description={`Move items to their storage locations for ${source.noun}`}>
       <MasterList<TransferPutawayRow>
-        endpoint="/transfer-inbound/putaway"
+        endpoint={`${source.api}/putaway`}
         columns={COLUMNS}
         reloadKey={reloadKey}
         searchPlaceholder="Search by ID..."
@@ -46,7 +46,7 @@ export default function TransferPutawayListPage() {
                   label: 'Delete',
                   icon: icons.trash,
                   onClick: async () => {
-                    if (await deleteTransferDoc('putaway', r.id, r.putaway_code, confirm, toast))
+                    if (await deleteTransferDoc('putaway', r.id, r.putaway_code, confirm, toast, source))
                       setReloadKey((k) => k + 1);
                   },
                 },

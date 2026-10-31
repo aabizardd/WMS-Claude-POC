@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { assignOutboundId } from '../common/outbound-id';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpHttpService } from '../erp/erp-http.service';
 
@@ -88,6 +89,30 @@ export class SalesOrderSyncService {
     });
   }
 
+  /**
+   * Refresh ONE Sales Order (header + lines) from the bridge by its tranid,
+   * e.g. right after a shipment: Oracle's status and line `shipped` change on
+   * the item fulfillment, and the incremental sync may not see it soon.
+   */
+  async syncOne(tranId: string): Promise<boolean> {
+    const res = await this.erp.post<OracleSalesOrdersResponse>('/sales-orders/get', {
+      page: 1,
+      page_size: 1,
+      sort_by: 'lastmodifieddate',
+      sort_order: 'DESC',
+      is_sync: false,
+      filters: { tranid: tranId },
+    });
+    const so = (res?.data ?? [])[0];
+    if (!so || so.id == null || so.tranid !== tranId) {
+      this.logger.warn(`syncOne: Sales Order ${tranId} not returned by the bridge`);
+      return false;
+    }
+    await this.upsert(so);
+    this.logger.log(`syncOne: Sales Order ${tranId} refreshed (status ${so.status_name ?? '-'})`);
+    return true;
+  }
+
   async sync(options: SyncOptions = {}): Promise<SyncResult> {
     const start = Date.now();
     const pageSize = Math.min(
@@ -162,7 +187,7 @@ export class SalesOrderSyncService {
     // skipping items when the header is unchanged leaves details stale.
     const existing = await this.prisma.salesOrder.findUnique({
       where: { oracleId },
-      select: { id: true, lastModified: true },
+      select: { id: true, lastModified: true, outboundId: true, createdAt: true },
     });
     const headerChanged = !(
       existing &&
@@ -211,6 +236,7 @@ export class SalesOrderSyncService {
             create: { oracleId, createdBy: 'ERP Sync', ...header },
           })
         : existing!;
+      if (!record.outboundId) await assignOutboundId(tx, 'SO', record.id, record.createdAt);
 
       // Upsert details by (salesOrderId, lineNumber) — no duplicates, header-
       // detail relation preserved, and WMS-managed remainingQty/picking links

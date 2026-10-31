@@ -1,26 +1,3 @@
-import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Min } from 'class-validator';
-import { SortableQueryDto } from '../../common/dto/sortable-query.dto';
+import { QueryOutboundDocDto } from '../../picking/dto/query-picking.dto';
 
-export class QueryPackingDto extends SortableQueryDto {
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number = 1;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  limit?: number = 10;
-
-  @IsOptional()
-  @IsString()
-  search?: string;
-
-  // SALES_ORDER | TRANSFER_ORDER — filters the packing list by source.
-  @IsOptional()
-  @IsString()
-  source?: string;
-}
+export class QueryPackingDto extends QueryOutboundDocDto {}

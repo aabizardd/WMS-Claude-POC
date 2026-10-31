@@ -1,6 +1,7 @@
 import axios from 'axios';
 import api from '../../../lib/api';
 import type { ConfirmOptions } from '../../../context/ConfirmContext';
+import { TRANSFER_IN, type InboundSource } from './inboundSource';
 
 /** The Material List search text of a Transfer IN line. */
 export const materialText = (r: { material_code: string | null; material_name: string | null }) =>
@@ -17,31 +18,38 @@ export function apiError(err: unknown, fallback: string) {
 
 const COPY = {
   gr: {
-    path: '/transfer-inbound/goods-receive',
+    path: 'goods-receive',
     noun: 'Goods Receive',
-    description: 'The GR List is removed and its planned quantity is free again on the Transfer Order lines.',
+    description: (src: InboundSource) =>
+      `The GR List is removed and its planned quantity is free again on the ${src.sourceName} lines.`,
   },
   putaway: {
-    path: '/transfer-inbound/putaway',
+    path: 'putaway',
     noun: 'Putaway',
-    description:
+    description: () =>
       'The putaway is removed: its stock leaves the destination bin and the quantity goes back to the Goods Receive to be put away again.',
   },
 } as const;
 
-/** Confirm, then delete an Open Transfer IN GR List or an untouched putaway. */
+/** Confirm, then delete an Open GR List or an untouched putaway. */
 export async function deleteTransferDoc(
   kind: keyof typeof COPY,
   id: string,
   code: string,
   confirm: (o: ConfirmOptions) => Promise<boolean>,
   toast: { success: (m: string) => void; error: (m: string) => void },
+  source: InboundSource = TRANSFER_IN,
 ) {
   const c = COPY[kind];
-  const ok = await confirm({ title: `Delete ${c.noun} ${code}?`, description: c.description, type: 'danger', confirmText: 'Delete' });
+  const ok = await confirm({
+    title: `Delete ${c.noun} ${code}?`,
+    description: c.description(source),
+    type: 'danger',
+    confirmText: 'Delete',
+  });
   if (!ok) return false;
   try {
-    await api.delete(`${c.path}/${id}`);
+    await api.delete(`${source.api}/${c.path}/${id}`);
     toast.success(`${c.noun} ${code} deleted`);
     return true;
   } catch (err) {

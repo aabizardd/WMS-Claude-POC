@@ -37,12 +37,10 @@ import PibGrDetailPage from './pages/inbound/pib/PibGrDetailPage';
 import PibPutawayListPage from './pages/inbound/pib/PibPutawayListPage';
 import PibPutawayDetailPage from './pages/inbound/pib/PibPutawayDetailPage';
 import PibHistoryPage from './pages/inbound/pib/PibHistoryPage';
-import GoodsReceiveTab from './pages/inbound/GoodsReceiveTab';
-import GoodsReceiveDetailPage from './pages/inbound/GoodsReceiveDetailPage';
 import LocalInboundLayout from './pages/inbound/LocalInboundLayout';
-import PoTab from './pages/inbound/PoTab';
-import PoDetailPage from './pages/inbound/PoDetailPage';
-import { InboundPlaceholder } from './pages/inbound/InboundLayout';
+import PoRequestListPage from './pages/inbound/local/PoRequestListPage';
+import PoDetailPage from './pages/inbound/local/PoDetailPage';
+import { LOCAL_VENDOR } from './pages/inbound/transfer/inboundSource';
 import TransferInboundLayout from './pages/inbound/TransferInboundLayout';
 import TransferInDetailPage from './pages/inbound/TransferInDetailPage';
 import TransferGrListPage from './pages/inbound/transfer/TransferGrListPage';
@@ -76,9 +74,8 @@ import DeliveryList from './pages/outbound/DeliveryList';
 import DeliveryPrintPage from './pages/outbound/DeliveryPrintPage';
 import DeliveryDetailPage from './pages/outbound/DeliveryDetailPage';
 import HistoryList from './pages/outbound/HistoryList';
-import HistoryDetailPage from './pages/outbound/HistoryDetailPage';
 import SalesOrderDetailPage from './pages/outbound/SalesOrderDetailPage';
-import SalesOrderTrackingPage from './pages/outbound/SalesOrderTrackingPage';
+import SoTrackingRedirect from './pages/outbound/SoTrackingRedirect';
 import TransferStockLayout from './pages/outbound/TransferStockLayout';
 import TransferOrderTab from './pages/outbound/TransferOrderTab';
 import TransferOrderDetailPage from './pages/outbound/TransferOrderDetailPage';
@@ -366,15 +363,6 @@ export default function App() {
                 </RequirePermission>
               }
             />
-            {/* Local Vendor GR detail — same page, renders the PO variant. */}
-            <Route
-              path="inbound/local/goods-receive/:id"
-              element={
-                <RequirePermission permission="goods-receive:read">
-                  <GoodsReceiveDetailPage />
-                </RequirePermission>
-              }
-            />
             <Route
               path="inbound/pib/putaway/:id"
               element={
@@ -384,14 +372,16 @@ export default function App() {
               }
             />
 
-          {/* Inbound from Local Vendor (tabbed) — source is PO instead of MRN */}
+          {/* Inbound from Local Vendor (tabbed) — as on WMS dev: Request (PO),
+              Goods Receive, Putaway, History; the GR/Putaway/History pages
+              are Transfer IN's, fed with the PO source. */}
           <Route path="inbound/local" element={<LocalInboundLayout />}>
             <Route index element={<Navigate to="po" replace />} />
             <Route
               path="po"
               element={
                 <RequirePermission permission="purchase-orders:read">
-                  <PoTab />
+                  <PoRequestListPage />
                 </RequirePermission>
               }
             />
@@ -399,7 +389,7 @@ export default function App() {
               path="goods-receive"
               element={
                 <RequirePermission permission="goods-receive:read">
-                  <GoodsReceiveTab source="PO" basePath="/admin/inbound/local" />
+                  <TransferGrListPage source={LOCAL_VENDOR} />
                 </RequirePermission>
               }
             />
@@ -407,15 +397,35 @@ export default function App() {
               path="putaway"
               element={
                 <RequirePermission permission="putaway:read">
-                  <InboundPlaceholder title="Putaway (Local Vendor)" />
+                  <TransferPutawayListPage source={LOCAL_VENDOR} />
                 </RequirePermission>
               }
             />
             <Route
               path="history"
-              element={<InboundPlaceholder title="History (Local Vendor)" />}
+              element={
+                <RequirePermission permission="putaway:read">
+                  <TransferHistoryPage source={LOCAL_VENDOR} />
+                </RequirePermission>
+              }
             />
           </Route>
+          <Route
+            path="inbound/local/goods-receive/:id"
+            element={
+              <RequirePermission permission="goods-receive:read">
+                <TransferGrDetailPage source={LOCAL_VENDOR} />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="inbound/local/putaway/:id"
+            element={
+              <RequirePermission permission="putaway:read">
+                <TransferPutawayDetailPage source={LOCAL_VENDOR} />
+              </RequirePermission>
+            }
+          />
           {/* Inbound from Transfer Stock (tabbed) — source is a Transfer Order coming in. */}
           <Route path="inbound/transfer" element={<TransferInboundLayout />}>
             <Route index element={<Navigate to="to" replace />} />
@@ -606,16 +616,8 @@ export default function App() {
           {/* Outbound — landing page (type selection) */}
           <Route path="outbound" element={<OutboundLandingPage />} />
 
-          {/* Opened in its own tab from the Sales Order list; stands outside
-              the tabbed layout so it fills the page. */}
-          <Route
-            path="outbound/sales-order/tracking"
-            element={
-              <RequirePermission permission="sales-orders:read">
-                <SalesOrderTrackingPage />
-              </RequirePermission>
-            }
-          />
+          {/* SO Tracking now lives on the Sales Order list; keep old links working. */}
+          <Route path="outbound/sales-order/tracking" element={<SoTrackingRedirect />} />
           {/* SD Tracking — opened in its own tab from the Delivery Plan list. */}
           <Route
             path="outbound/sales-order/delivery/tracking"
@@ -704,14 +706,6 @@ export default function App() {
             element={
               <RequirePermission permission="delivery:read">
                 <DeliveryPrintPage basePath="/admin/outbound/sales-order" />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="outbound/sales-order/history/:id"
-            element={
-              <RequirePermission permission="delivery:read">
-                <HistoryDetailPage />
               </RequirePermission>
             }
           />
@@ -809,14 +803,6 @@ export default function App() {
             element={
               <RequirePermission permission="delivery:read">
                 <DeliveryPrintPage basePath="/admin/outbound/transfer-stock" />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="outbound/transfer-stock/history/:id"
-            element={
-              <RequirePermission permission="delivery:read">
-                <HistoryDetailPage />
               </RequirePermission>
             }
           />

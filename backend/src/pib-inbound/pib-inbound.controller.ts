@@ -1,7 +1,10 @@
-import { Controller, Delete, Get, Param, Query } from '@nestjs/common';
+import { Controller, Delete, Get, Param, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { PibInboundService } from './pib-inbound.service';
 import { PutawayService } from '../putaway/putaway.service';
 import { QueryPibInboundDto } from './dto/query-pib-inbound.dto';
+import { pibGrExportFileName, writePibGrXlsx } from './pib-gr-export';
+import { xlsxHeaders } from '../common/xlsx-export';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { CurrentUser, type AuthUser } from '../auth/decorators/current-user.decorator';
 
@@ -17,6 +20,17 @@ export class PibInboundController {
   @RequirePermissions('goods-receive:read')
   listGoodsReceives(@Query() q: QueryPibInboundDto, @CurrentUser() user: AuthUser) {
     return this.service.listGoodsReceives(q, user);
+  }
+
+  /**
+   * The Goods Receive - PIB list as an Excel file (WMS dev's "PIB" sheet), for
+   * whatever it is filtered and sorted by. Declared before 'goods-receive/:id'.
+   */
+  @Get('goods-receive/export')
+  @RequirePermissions('goods-receive:read')
+  async exportGoodsReceives(@Query() q: QueryPibInboundDto, @CurrentUser() user: AuthUser, @Res() res: Response) {
+    res.set(xlsxHeaders(pibGrExportFileName()));
+    await writePibGrXlsx(this.service.exportRows(q, user), res);
   }
 
   @Get('goods-receive/:id')

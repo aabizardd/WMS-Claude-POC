@@ -40,9 +40,17 @@ const STATUS_BADGE: Record<string, string> = {
   Closed: 'border-slate-300 bg-slate-100 text-slate-600',
   Cancelled: 'border-rose-300 bg-rose-50 text-rose-700',
   Rejected: 'border-rose-300 bg-rose-50 text-rose-700',
+  // Purchase orders (Local Vendor), plus WMS's own "On Progress".
+  'Pending Supervisor Approval': 'border-violet-300 bg-violet-50 text-violet-700',
+  'Pending Billing/Partially Received': 'border-amber-300 bg-amber-50 text-amber-700',
+  'Partially Received': 'border-blue-300 bg-blue-50 text-blue-700',
+  'Pending Bill': 'border-amber-300 bg-amber-50 text-amber-700',
+  'Fully Billed': 'border-emerald-300 bg-emerald-50 text-emerald-700',
+  'Rejected by Supervisor': 'border-rose-300 bg-rose-50 text-rose-700',
+  'On Progress': 'border-orange-300 bg-orange-50 text-orange-700',
 };
 
-/** Outlined pill colours for an Oracle sales- or transfer-order status. */
+/** Outlined pill colours for an Oracle sales-, transfer- or purchase-order status. */
 export function soStatusBadgeClass(status: string | null | undefined): string {
   return STATUS_BADGE[status ?? ''] ?? 'border-slate-300 bg-slate-50 text-slate-600';
 }

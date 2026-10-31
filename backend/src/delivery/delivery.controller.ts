@@ -1,4 +1,7 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
+import { xlsxHeaders } from '../common/xlsx-export';
+import { soDeliveryExportFileName } from '../sales-orders/so-delivery-export';
 import { DeliveryService } from './delivery.service';
 import { GenerateDeliveryDto } from './dto/generate-delivery.dto';
 import { QueryDeliveryDto } from './dto/query-delivery.dto';
@@ -16,6 +19,17 @@ export class DeliveryController {
   @RequirePermissions('delivery:read')
   findAll(@Query() query: QueryDeliveryDto, @CurrentUser() user: AuthUser) {
     return this.service.findAll(query, user);
+  }
+
+  /**
+   * Delivery Plan export: the shipped Sales Order plans the list's filters
+   * match, with their SO lines. Declared before ':id'.
+   */
+  @Get('export')
+  @RequirePermissions('delivery:read')
+  async exportXlsx(@Query() query: QueryDeliveryDto, @CurrentUser() user: AuthUser, @Res() res: Response) {
+    res.set(xlsxHeaders(soDeliveryExportFileName('dp')));
+    await this.service.exportXlsx(query, user, res);
   }
 
   /** Dropdown values (master warehouses, customers, users) for SD Tracking. */

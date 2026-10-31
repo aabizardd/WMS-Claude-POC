@@ -6,7 +6,11 @@ import {
   Param,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
+import { xlsxHeaders } from '../common/xlsx-export';
+import { soDeliveryExportFileName } from './so-delivery-export';
 import { SalesOrdersService } from './sales-orders.service';
 import { SalesOrderSyncService } from './sales-order-sync.service';
 import { QuerySalesOrderDto } from './dto/query-sales-order.dto';
@@ -39,6 +43,15 @@ export class SalesOrdersController {
   @RequirePermissions('sales-orders:read')
   findAll(@Query() query: QuerySalesOrderDto, @CurrentUser() user: AuthUser) {
     return this.service.findAll(query, user);
+  }
+
+  // Every SO the list's filters match, with its delivery plans, as Excel.
+  // Declared before ':id'.
+  @Get('export')
+  @RequirePermissions('sales-orders:read')
+  async exportXlsx(@Query() query: QuerySalesOrderDto, @CurrentUser() user: AuthUser, @Res() res: Response) {
+    res.set(xlsxHeaders(soDeliveryExportFileName('so')));
+    await this.service.exportXlsx(query, user, res);
   }
 
   @Get('statuses')

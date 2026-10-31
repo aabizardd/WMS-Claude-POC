@@ -14,10 +14,11 @@ import {
 } from 'class-validator';
 import { SortableQueryDto } from '../../common/dto/sortable-query.dto';
 
-/** Fields the Transfer IN Goods Receive list can be filtered on. */
+/** Fields the Transfer IN / Local Vendor Goods Receive lists can be filtered on. */
 export const GR_FILTER_FIELDS = [
   'material_code',
   'origin_warehouse',
+  'warehouse',
   'created_at',
   'material_name',
   'transaction_id',

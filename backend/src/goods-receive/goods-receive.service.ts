@@ -167,8 +167,8 @@ export class GoodsReceiveService {
   // Fill the actual received quantity for the GR's items.
   async updateActuals(id: string, dto: UpdateActualsDto, scope: WarehouseScope) {
     const gr = await this.getScoped(id, scope);
-    // TO source: the lines are the GR's own items (planned qty in `qty`).
-    if (gr.sourceType === 'TO') {
+    // TO / PO source: the lines are the GR's own items (planned qty in `qty`).
+    if (gr.sourceType === 'TO' || gr.sourceType === 'PO') {
       if (gr.status !== 'Open' && gr.status !== 'SyncFailed') {
         throw new BadRequestException(`Cannot edit a Goods Receive that is ${gr.status}`);
       }

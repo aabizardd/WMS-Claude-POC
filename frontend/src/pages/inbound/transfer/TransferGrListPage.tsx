@@ -30,8 +30,7 @@ import {
 } from '../../../components/ListView';
 import TransferGrLinesTable from './TransferGrLinesTable';
 import { deleteTransferDoc } from './transferInbound';
-
-const BASE = '/admin/inbound/transfer';
+import { TRANSFER_IN, type InboundSource } from './inboundSource';
 /** Server-side cap on values within one filter. */
 const MAX_VALUES = 10;
 /** Without a material filter an open row shows at most this many lines. */
@@ -51,38 +50,54 @@ interface FieldDef {
   kind: FieldKind;
 }
 
-/** The list/tracking filter habit: three fields above the table, the rest in "Additional filters". */
-const PRIMARY_FIELDS: FieldDef[] = [
-  { value: 'material_code', label: 'Part Number', kind: 'text' },
-  { value: 'origin_warehouse', label: 'Origin Warehouse', kind: 'text' },
-  { value: 'created_at', label: 'Created Date', kind: 'date' },
-];
-const EXTRA_FIELDS: FieldDef[] = [
-  { value: 'material_name', label: 'Material Name', kind: 'text' },
-  { value: 'transaction_id', label: 'Transaction ID', kind: 'text' },
-  { value: 'destination_warehouse', label: 'Destination Warehouse', kind: 'text' },
-  { value: 'erp_doc_id', label: 'ERP Doc ID', kind: 'text' },
-  { value: 'created_by', label: 'Created By', kind: 'text' },
-];
-const FILTER_FIELDS = [...PRIMARY_FIELDS, ...EXTRA_FIELDS];
+/**
+ * The list/tracking filter habit: three fields above the table, the rest in
+ * "Additional filters" — per inbound, as WMS dev lays each one out.
+ */
+const FIELDS: Record<InboundSource['code'], { primary: FieldDef[]; extra: FieldDef[] }> = {
+  TO: {
+    primary: [
+      { value: 'material_code', label: 'Part Number', kind: 'text' },
+      { value: 'origin_warehouse', label: 'Origin Warehouse', kind: 'text' },
+      { value: 'created_at', label: 'Created Date', kind: 'date' },
+    ],
+    extra: [
+      { value: 'material_name', label: 'Material Name', kind: 'text' },
+      { value: 'transaction_id', label: 'Transaction ID', kind: 'text' },
+      { value: 'destination_warehouse', label: 'Destination Warehouse', kind: 'text' },
+      { value: 'erp_doc_id', label: 'ERP Doc ID', kind: 'text' },
+      { value: 'created_by', label: 'Created By', kind: 'text' },
+    ],
+  },
+  PO: {
+    primary: [
+      { value: 'material_code', label: 'Part Number', kind: 'text' },
+      { value: 'warehouse', label: 'Warehouse', kind: 'text' },
+      { value: 'created_at', label: 'Created Range', kind: 'date' },
+    ],
+    extra: [
+      { value: 'material_name', label: 'Material Name', kind: 'text' },
+      { value: 'transaction_id', label: 'Transaction ID', kind: 'text' },
+      { value: 'erp_doc_id', label: 'ERP Doc ID', kind: 'text' },
+    ],
+  },
+};
 
-type Draft = Record<TransferGrFilterField, string[]>;
-const emptyDraft = (): Draft => Object.fromEntries(FILTER_FIELDS.map((f) => [f.value, []])) as unknown as Draft;
+type Draft = Partial<Record<TransferGrFilterField, string[]>>;
 function draftFrom(filters: TransferGrFilter[]): Draft {
-  const d = emptyDraft();
+  const d: Draft = {};
   for (const f of filters) d[f.field] = f.values;
   return d;
 }
-const fieldLabel = (f: TransferGrFilterField) => FILTER_FIELDS.find((x) => x.value === f)?.label ?? f;
 
 /** Filters live in the URL so a refresh or a shared link shows the same list. */
-function readFilters(sp: URLSearchParams): TransferGrFilter[] {
+function readFilters(sp: URLSearchParams, fields: FieldDef[]): TransferGrFilter[] {
   const raw = sp.get('filters');
   if (!raw) return [];
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    const known = new Set(FILTER_FIELDS.map((f) => f.value));
+    const known = new Set(fields.map((f) => f.value));
     return parsed.flatMap((f): TransferGrFilter[] => {
       const field = (f as TransferGrFilter)?.field;
       const values = (f as TransferGrFilter)?.values;
@@ -116,22 +131,29 @@ interface Totals {
   remain_qty: number;
 }
 
-/** expand, No, 11 data columns, Actions. */
-const COLS = 14;
-
 /**
- * Goods Receive - TO: every GR of a Transfer IN, each row opening on its
+ * Goods Receive - TO / PO: every GR of the inbound, each row opening on its
  * lines (material info and every qty bucket), filtered the same way as the
- * TO In list.
+ * inbound's Request list.
  */
-export default function TransferGrListPage() {
+export default function TransferGrListPage({ source = TRANSFER_IN }: { source?: InboundSource } = {}) {
   const navigate = useNavigate();
   const { has } = useAuth();
   const toast = useToast();
   const confirm = useConfirm();
+  const isPo = source.code === 'PO';
+  const BASE = source.base;
+  const { primary: PRIMARY_FIELDS, extra: EXTRA_FIELDS } = FIELDS[source.code];
+  const FILTER_FIELDS = [...PRIMARY_FIELDS, ...EXTRA_FIELDS];
+  const fieldLabel = (f: TransferGrFilterField) => FILTER_FIELDS.find((x) => x.value === f)?.label ?? f;
+  // expand, No, data columns (PO has no Origin Warehouse), Actions.
+  const COLS = isPo ? 13 : 14;
 
   const [searchParams, setSearchParams] = useSearchParams();
-  const [initial] = useState(() => ({ filters: readFilters(searchParams), status: searchParams.get('status') ?? '' }));
+  const [initial] = useState(() => ({
+    filters: readFilters(searchParams, FILTER_FIELDS),
+    status: searchParams.get('status') ?? '',
+  }));
 
   const [data, setData] = useState<(Paginated<TransferGrRow> & { totals?: Totals }) | null>(null);
   const [loading, setLoading] = useState(true);
@@ -155,7 +177,7 @@ export default function TransferGrListPage() {
     let cancelled = false;
     setLoading(true);
     api
-      .get<Paginated<TransferGrRow> & { totals?: Totals }>('/transfer-inbound/goods-receive', {
+      .get<Paginated<TransferGrRow> & { totals?: Totals }>(`${source.api}/goods-receive`, {
         params: {
           page,
           limit: pageSize,
@@ -212,7 +234,7 @@ export default function TransferGrListPage() {
     setDraft((d) => ({ ...d, ...Object.fromEntries(EXTRA_FIELDS.map((f) => [f.value, []])) }));
   }
   function clearAll() {
-    setDraft(emptyDraft());
+    setDraft({});
     setApplied([]);
     setStatus('');
     setPage(1);
@@ -255,8 +277,8 @@ export default function TransferGrListPage() {
     <div className="card overflow-hidden">
       <div className="space-y-4 p-5 pb-4">
         <ListHeader
-          title="Goods Receive - TO"
-          subtitle="Validate and receive goods into the system for transfer order"
+          title={`Goods Receive - ${source.code}`}
+          subtitle={`Validate and receive goods into the system for ${source.noun}`}
           menu={[{ label: 'Export', icon: <ExportIcon />, onClick: () => toast.info('Export is not available yet.') }]}
         />
 
@@ -337,13 +359,21 @@ export default function TransferGrListPage() {
                 <SortableTh label="Transaction ID" col="transaction_id" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="GR ID" col="gr_number" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <th className="whitespace-nowrap px-4 py-3 font-medium">ERP Doc ID</th>
+                {isPo && <th className="whitespace-nowrap px-4 py-3 font-medium">Document Type</th>}
                 <th className="whitespace-nowrap px-4 py-3 font-medium">Ownership</th>
-                <th className="whitespace-nowrap px-4 py-3 font-medium">Origin Warehouse</th>
-                <SortableTh label="Destination Warehouse" col="warehouse" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                {!isPo && <th className="whitespace-nowrap px-4 py-3 font-medium">Origin Warehouse</th>}
+                <SortableTh
+                  label={isPo ? 'Warehouse' : 'Destination Warehouse'}
+                  col="warehouse"
+                  sort={sort}
+                  onSort={onSort}
+                  pad="px-4"
+                  className={th}
+                />
                 <SortableTh label="Created By" col="created_by" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="Created At" col="created_at" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="Last Modified At" col="updated_at" sort={sort} onSort={onSort} pad="px-4" className={th} />
-                <th className="whitespace-nowrap px-4 py-3 font-medium">Document Type</th>
+                {!isPo && <th className="whitespace-nowrap px-4 py-3 font-medium">Document Type</th>}
                 <th className="sticky right-0 bg-slate-50 px-4 py-3 text-center font-medium shadow-[-6px_0_8px_-6px_rgba(15,23,42,0.15)]">
                   Actions
                 </th>
@@ -373,13 +403,14 @@ export default function TransferGrListPage() {
                       <td className={`${td} text-slate-800`}>{g.transaction_id ?? '-'}</td>
                       <td className={`${td} text-slate-800`}>{g.gr_number}</td>
                       <td className={td}>{g.erp_doc_id ?? '-'}</td>
+                      {isPo && <td className={td}>{g.document_type}</td>}
                       <td className={td}>{g.ownership ?? '-'}</td>
-                      <td className="px-4 py-3 text-slate-700">{g.origin_warehouse ?? '-'}</td>
+                      {!isPo && <td className="px-4 py-3 text-slate-700">{g.origin_warehouse ?? '-'}</td>}
                       <td className="px-4 py-3 text-slate-700">{g.warehouse ?? '-'}</td>
                       <td className={td}>{g.created_by ?? '-'}</td>
                       <td className={td}>{formatDateTime(g.created_at)}</td>
                       <td className={td}>{formatDateTime(g.updated_at)}</td>
-                      <td className={td}>{g.document_type}</td>
+                      {!isPo && <td className={td}>{g.document_type}</td>}
                       <td className={stickyActionsCellClass(open)} onClick={(e) => e.stopPropagation()}>
                         <RowActionMenu
                           actions={[
@@ -390,13 +421,13 @@ export default function TransferGrListPage() {
                                     label: 'Delete',
                                     icon: <TrashIcon />,
                                     onClick: async () => {
-                                      if (await deleteTransferDoc('gr', g.id, g.gr_number, confirm, toast))
+                                      if (await deleteTransferDoc('gr', g.id, g.gr_number, confirm, toast, source))
                                         setReloadKey((k) => k + 1);
                                     },
                                   },
                                 ]
                               : []),
-                            { label: 'Request Detail', icon: <DetailIcon />, onClick: () => navigate(`${BASE}/to/${g.to_id}`) },
+                            { label: 'Request Detail', icon: <DetailIcon />, onClick: () => navigate(source.requestPath(g.to_id)) },
                           ]}
                         />
                       </td>

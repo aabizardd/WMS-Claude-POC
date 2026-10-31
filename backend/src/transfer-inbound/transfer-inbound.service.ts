@@ -7,6 +7,20 @@ import { PutawayService } from '../putaway/putaway.service';
 import type { GrFilterField, QueryTransferInboundDto } from './dto/query-transfer-inbound.dto';
 import { scopeWhere } from '../common/warehouse-scope';
 
+/** Which inbound the screens serve: Transfer IN (TO) or Local Vendor (PO). */
+export type InboundSource = 'TO' | 'PO';
+
+const DOCUMENT_TYPE: Record<InboundSource, string> = { TO: 'Transfer Order', PO: 'Purchase Order' };
+
+/** What a GR / putaway row shows of its source document. */
+interface SourceDoc {
+  erpDocId: string | null;
+  /** TO: the origin warehouse. */
+  origin: string | null;
+  /** PO: the vendor. */
+  supplier: string | null;
+}
+
 export interface WarehouseScope {
   role: string;
   // Every warehouse the user may see; null = no limit (see common/warehouse-scope).
@@ -63,10 +77,12 @@ const paged = <T>(q: QueryTransferInboundDto, total: number, rows: T[]) => {
 };
 
 /**
- * Transfer IN (Inbound from Transfer Order), read the way WMS dev shows it:
- * the Goods Receive and Putaway lists and details, the line-level History,
- * and deleting an Open GR / an untouched putaway. Receive, Generate Putaway
- * and Putaway confirm stay on the shared goods-receive / putaway endpoints.
+ * Transfer IN (Inbound from Transfer Order) and Local Vendor (Inbound from
+ * Purchase Order), read the way WMS dev shows them — both are GR Lists of
+ * their own lines: the Goods Receive and Putaway lists and details, the
+ * line-level History, and deleting an Open GR / an untouched putaway.
+ * Receive, Generate Putaway and Putaway confirm stay on the shared
+ * goods-receive / putaway endpoints.
  */
 @Injectable()
 export class TransferInboundService {
@@ -81,21 +97,50 @@ export class TransferInboundService {
     return scopeWhere(scope, 'warehouseId');
   }
 
-  /** Transfer Orders by id: their ERP doc id and origin warehouse. */
-  private async transferOrders(ids: string[]) {
-    const tos = ids.length
-      ? await this.prisma.transferOrder.findMany({
-          where: { id: { in: [...new Set(ids)] } },
-          select: {
-            id: true,
-            tranId: true,
-            oracleId: true,
-            fromLocationName: true,
-            warehouse: { select: { name: true } },
+  /** Source documents by id: their ERP doc id and origin (TO) or vendor (PO). */
+  private async sourceDocs(source: InboundSource, ids: string[]): Promise<Map<string, SourceDoc>> {
+    const unique = [...new Set(ids)];
+    if (!unique.length) return new Map();
+    if (source === 'PO') {
+      const pos = await this.prisma.purchaseOrder.findMany({
+        where: { id: { in: unique } },
+        select: { id: true, oracleId: true, vendorId: true, vendorName: true },
+      });
+      const vendorIds = [...new Set(pos.map((p) => p.vendorId).filter((v): v is number => v != null).map(String))];
+      const vendors = vendorIds.length
+        ? await this.prisma.vendor.findMany({ where: { oracleId: { in: vendorIds } }, select: { oracleId: true, companyName: true } })
+        : [];
+      const names = new Map(vendors.map((v) => [v.oracleId, v.companyName]));
+      return new Map(
+        pos.map((p) => [
+          p.id,
+          {
+            erpDocId: p.oracleId,
+            origin: null,
+            supplier:
+              (p.vendorId != null ? names.get(String(p.vendorId)) : null) ??
+              p.vendorName?.replace(/^[^-]+-\s*/, '') ??
+              null,
           },
-        })
-      : [];
-    return new Map(tos.map((t) => [t.id, t]));
+        ]),
+      );
+    }
+    const tos = await this.prisma.transferOrder.findMany({
+      where: { id: { in: unique } },
+      select: { id: true, oracleId: true, fromLocationName: true, warehouse: { select: { name: true } } },
+    });
+    return new Map(
+      tos.map((t) => [t.id, { erpDocId: t.oracleId, origin: t.warehouse?.name ?? t.fromLocationName ?? null, supplier: null }]),
+    );
+  }
+
+  /** The source-document fields every GR / putaway / history row carries. */
+  private sourceFields(source: InboundSource, doc: SourceDoc | undefined) {
+    return {
+      erp_doc_id: doc?.erpDocId ?? null,
+      document_type: DOCUMENT_TYPE[source],
+      ...(source === 'TO' ? { origin_warehouse: doc?.origin ?? null } : { supplier: doc?.supplier ?? null }),
+    };
   }
 
   private async materials(ids: (string | null)[]) {
@@ -124,10 +169,10 @@ export class TransferInboundService {
 
   /**
    * One value of one list filter as a GR condition. Fields living on the
-   * Transfer Order (origin, ERP doc id) or on the material (name) are looked
+   * source document (origin, ERP doc id) or on the material (name) are looked
    * up first — GRs only hold their ids.
    */
-  private async grFilter(field: GrFilterField, v: string): Promise<Prisma.GoodsReceiveWhereInput> {
+  private async grFilter(source: InboundSource, field: GrFilterField, v: string): Promise<Prisma.GoodsReceiveWhereInput> {
     switch (field) {
       case 'material_code':
         return { items: { some: { OR: [{ materialCode: ci(v) }, { itemDisplay: ci(v) }] } } };
@@ -143,9 +188,13 @@ export class TransferInboundService {
         return { sourceDocId: { in: tos.map((t) => t.id) } };
       }
       case 'erp_doc_id': {
-        const tos = await this.prisma.transferOrder.findMany({ where: { oracleId: ci(v) }, select: { id: true } });
-        return { sourceDocId: { in: tos.map((t) => t.id) } };
+        const docs =
+          source === 'PO'
+            ? await this.prisma.purchaseOrder.findMany({ where: { oracleId: ci(v) }, select: { id: true } })
+            : await this.prisma.transferOrder.findMany({ where: { oracleId: ci(v) }, select: { id: true } });
+        return { sourceDocId: { in: docs.map((t) => t.id) } };
       }
+      case 'warehouse':
       case 'destination_warehouse':
         return { warehouse: { name: ci(v) } };
       case 'transaction_id':
@@ -157,8 +206,8 @@ export class TransferInboundService {
     }
   }
 
-  private async grWhere(q: QueryTransferInboundDto, scope: WarehouseScope) {
-    const where: Prisma.GoodsReceiveWhereInput = { sourceType: 'TO', ...this.scope(scope) };
+  private async grWhere(source: InboundSource, q: QueryTransferInboundDto, scope: WarehouseScope) {
+    const where: Prisma.GoodsReceiveWhereInput = { sourceType: source, ...this.scope(scope) };
     if (q.status && q.status !== 'all') where.status = q.status as Prisma.GoodsReceiveWhereInput['status'];
     if (q.search) {
       where.OR = [{ grNumber: ci(q.search) }, { sourceDocNumber: ci(q.search) }];
@@ -167,7 +216,7 @@ export class TransferInboundService {
     const and: Prisma.GoodsReceiveWhereInput[] = [];
     for (const f of q.filters ?? []) {
       const values = (f.values ?? []).map((v) => v.trim()).filter(Boolean);
-      if (values.length) and.push({ OR: await Promise.all(values.map((v) => this.grFilter(f.field, v))) });
+      if (values.length) and.push({ OR: await Promise.all(values.map((v) => this.grFilter(source, f.field, v))) });
     }
     if (and.length) where.AND = and;
     return where;
@@ -183,9 +232,9 @@ export class TransferInboundService {
     };
   }
 
-  async listGoodsReceives(q: QueryTransferInboundDto, scope: WarehouseScope) {
+  async listGoodsReceives(source: InboundSource, q: QueryTransferInboundDto, scope: WarehouseScope) {
     const { page: p, limit } = page(q);
-    const where = await this.grWhere(q, scope);
+    const where = await this.grWhere(source, q, scope);
     const orderBy = buildOrderBy(q.sort_by, q.sort_order, GR_SORTABLE, { createdAt: 'desc' } as GrOrder);
     const withItems = q.include_items === 'true';
     const [total, rows] = await this.prisma.$transaction([
@@ -203,7 +252,7 @@ export class TransferInboundService {
         },
       }),
     ]);
-    const tos = await this.transferOrders(rows.map((r) => r.sourceDocId));
+    const docs = await this.sourceDocs(source, rows.map((r) => r.sourceDocId));
     const lines = rows.flatMap((r) => ('items' in r ? (r.items as Prisma.GoodsReceiveItemGetPayload<object>[]) : []));
     const mats = await this.materials(lines.map((l) => l.materialId));
 
@@ -230,19 +279,17 @@ export class TransferInboundService {
         q,
         total,
         rows.map((g) => {
-          const to = tos.get(g.sourceDocId);
           const received = g.status !== 'Open' && g.status !== 'SyncFailed';
           return {
             id: g.id,
             status: g.status,
+            // The source document's WMS id (TO or PO), for "Request Detail".
             to_id: g.sourceDocId,
-            transaction_id: g.sourceDocNumber ?? to?.tranId ?? null,
+            transaction_id: g.sourceDocNumber,
             gr_number: g.grNumber,
-            erp_doc_id: to?.oracleId ?? null,
-            document_type: 'Transfer Order',
+            ...this.sourceFields(source, docs.get(g.sourceDocId)),
             ownership: g.warehouse?.subsidiaryName ?? null,
             warehouse: g.warehouse?.name ?? null,
-            origin_warehouse: to?.warehouse?.name ?? to?.fromLocationName ?? null,
             item_count: g._count.items,
             created_by: g.createdBy?.name ?? null,
             created_at: g.createdAt,
@@ -271,9 +318,9 @@ export class TransferInboundService {
     };
   }
 
-  async goodsReceive(id: string, scope: WarehouseScope) {
+  async goodsReceive(source: InboundSource, id: string, scope: WarehouseScope) {
     const g = await this.prisma.goodsReceive.findFirst({
-      where: { id, sourceType: 'TO', ...this.scope(scope) },
+      where: { id, sourceType: source, ...this.scope(scope) },
       include: {
         warehouse: { select: { id: true, name: true, subsidiaryName: true } },
         createdBy: { select: { name: true } },
@@ -282,23 +329,20 @@ export class TransferInboundService {
       },
     });
     if (!g) throw new NotFoundException(`Goods Receive ${id} not found`);
-    const [tos, mats] = await Promise.all([
-      this.transferOrders([g.sourceDocId]),
+    const [docs, mats] = await Promise.all([
+      this.sourceDocs(source, [g.sourceDocId]),
       this.materials(g.items.map((it) => it.materialId)),
     ]);
-    const to = tos.get(g.sourceDocId);
     const received = g.status !== 'Open' && g.status !== 'SyncFailed';
     return {
       id: g.id,
       status: g.status,
       to_id: g.sourceDocId,
-      transaction_id: g.sourceDocNumber ?? to?.tranId ?? null,
+      transaction_id: g.sourceDocNumber,
       gr_number: g.grNumber,
-      erp_doc_id: to?.oracleId ?? null,
-      document_type: 'Transfer Order',
+      ...this.sourceFields(source, docs.get(g.sourceDocId)),
       ownership: g.warehouse?.subsidiaryName ?? null,
       warehouse: g.warehouse ? { id: g.warehouse.id, name: g.warehouse.name } : null,
-      origin_warehouse: to?.warehouse?.name ?? to?.fromLocationName ?? null,
       can_receive: !received,
       can_delete: g.status === 'Open' && g._count.putaways === 0,
       created_by: g.createdBy?.name ?? null,
@@ -317,10 +361,10 @@ export class TransferInboundService {
     };
   }
 
-  /** Delete an Open GR List: its planned qty is free again on the TO lines. */
-  async deleteGoodsReceive(id: string, scope: WarehouseScope) {
+  /** Delete an Open GR List: its planned qty is free again on the source lines. */
+  async deleteGoodsReceive(source: InboundSource, id: string, scope: WarehouseScope) {
     const g = await this.prisma.goodsReceive.findFirst({
-      where: { id, sourceType: 'TO', ...this.scope(scope) },
+      where: { id, sourceType: source, ...this.scope(scope) },
       include: { _count: { select: { putaways: true } } },
     });
     if (!g) throw new NotFoundException(`Goods Receive ${id} not found`);
@@ -329,15 +373,15 @@ export class TransferInboundService {
     }
     // Lines cascade; nothing was received, so no stock or Oracle record to undo.
     await this.prisma.goodsReceive.delete({ where: { id } });
-    this.logger.log(`Transfer IN GR ${g.grNumber} deleted`);
+    this.logger.log(`${DOCUMENT_TYPE[source]} GR ${g.grNumber} deleted`);
     return { deleted: true };
   }
 
   // ---------- Putaway ----------
 
-  async listPutaways(q: QueryTransferInboundDto, scope: WarehouseScope) {
+  async listPutaways(source: InboundSource, q: QueryTransferInboundDto, scope: WarehouseScope) {
     const { page: p, limit } = page(q);
-    const where: Prisma.PutawayWhereInput = { goodsReceive: { sourceType: 'TO' }, ...this.scope(scope) };
+    const where: Prisma.PutawayWhereInput = { goodsReceive: { sourceType: source }, ...this.scope(scope) };
     if (q.search) {
       where.OR = [
         { putawayCode: { contains: q.search, mode: 'insensitive' } },
@@ -388,9 +432,9 @@ export class TransferInboundService {
     );
   }
 
-  async putaway(id: string, scope: WarehouseScope) {
+  async putaway(source: InboundSource, id: string, scope: WarehouseScope) {
     const pt = await this.prisma.putaway.findFirst({
-      where: { id, goodsReceive: { sourceType: 'TO' }, ...this.scope(scope) },
+      where: { id, goodsReceive: { sourceType: source }, ...this.scope(scope) },
       include: {
         goodsReceive: { select: { id: true, grNumber: true, sourceDocNumber: true } },
         warehouse: { select: { id: true, name: true, subsidiaryName: true } },
@@ -436,17 +480,19 @@ export class TransferInboundService {
     };
   }
 
-  deletePutaway(id: string, scope: WarehouseScope) {
+  async deletePutaway(source: InboundSource, id: string, scope: WarehouseScope) {
+    // Only this inbound's putaways (a 404 for the other's, like every read here).
+    await this.putaway(source, id, scope);
     return this.putaways.remove(id, scope);
   }
 
   // ---------- History ----------
 
-  /** Every material put away from a Transfer Order, one row per putaway line. */
-  async history(q: QueryTransferInboundDto, scope: WarehouseScope) {
+  /** Every material put away from this inbound, one row per putaway line. */
+  async history(source: InboundSource, q: QueryTransferInboundDto, scope: WarehouseScope) {
     const { page: p, limit } = page(q);
     const where: Prisma.PutawayItemWhereInput = {
-      putaway: { status: 'Closed', goodsReceive: { sourceType: 'TO' }, ...this.scope(scope) },
+      putaway: { status: 'Closed', goodsReceive: { sourceType: source }, ...this.scope(scope) },
     };
     if (q.search) {
       const c = { contains: q.search, mode: 'insensitive' as const };
@@ -479,16 +525,16 @@ export class TransferInboundService {
         },
       }),
     ]);
-    const [mats, tos] = await Promise.all([
+    const [mats, docs] = await Promise.all([
       this.materials(rows.map((r) => r.grItem?.materialId ?? null)),
-      this.transferOrders(rows.map((r) => r.putaway.goodsReceive?.sourceDocId).filter((v): v is string => !!v)),
+      this.sourceDocs(source, rows.map((r) => r.putaway.goodsReceive?.sourceDocId).filter((v): v is string => !!v)),
     ]);
     return paged(
       q,
       total,
       rows.map((r) => {
         const m = this.materialFields(mats.get(r.grItem?.materialId ?? ''), r.materialCode, r.itemName);
-        const to = tos.get(r.putaway.goodsReceive?.sourceDocId ?? '');
+        const doc = docs.get(r.putaway.goodsReceive?.sourceDocId ?? '');
         return {
           id: r.id,
           transaction_id: r.putaway.goodsReceive?.sourceDocNumber ?? null,
@@ -502,7 +548,7 @@ export class TransferInboundService {
           receive_qty: r.actualQty,
           warehouse: r.putaway.warehouse?.name ?? null,
           destination_bin: r.bin?.binLabel ?? null,
-          origin_warehouse: to?.warehouse?.name ?? to?.fromLocationName ?? null,
+          ...(source === 'TO' ? { origin_warehouse: doc?.origin ?? null } : { supplier: doc?.supplier ?? null }),
           ownership: r.putaway.warehouse?.subsidiaryName ?? null,
           created_at: r.putaway.updatedAt,
         };

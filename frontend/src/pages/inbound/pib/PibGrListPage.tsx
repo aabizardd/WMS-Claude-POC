@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../../lib/api';
+import { downloadFile } from '../../../lib/download';
 import type { Paginated, PibGrFilter, PibGrFilterField, PibGrRow, TransferGrListLine } from '../../../types';
 import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
@@ -148,6 +149,7 @@ export default function PibGrListPage() {
   const [pageSize, setPageSize] = useState(10);
   const [status, setStatus] = useState(initial.status);
   const [reloadKey, setReloadKey] = useState(0);
+  const [exporting, setExporting] = useState(false);
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initial.filters));
   const [applied, setApplied] = useState<PibGrFilter[]>(initial.filters);
   const [extraOpen, setExtraOpen] = useState(false);
@@ -159,6 +161,28 @@ export default function PibGrListPage() {
     toggle(col);
   };
   const appliedKey = JSON.stringify(applied);
+
+  /** Every GR the filters match (not only this page), one row per line, in the list's order. */
+  async function exportExcel() {
+    if (exporting) return;
+    setExporting(true);
+    toast.info('Preparing the export…');
+    try {
+      await downloadFile(
+        '/pib-inbound/goods-receive/export',
+        {
+          status: status || undefined,
+          filters: applied.length ? JSON.stringify(applied) : undefined,
+          ...params(),
+        },
+        'pib_goods_receive_export.xlsx',
+      );
+    } catch {
+      toast.error('Export failed. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -268,7 +292,7 @@ export default function PibGrListPage() {
           subtitle="Validate and receive goods into the system for pib"
           menu={[
             ...(has('mrn:sync') ? [{ label: 'Sync from ERP', icon: <SyncIcon />, onClick: () => setSyncOpen(true) }] : []),
-            { label: 'Export', icon: <ExportIcon />, onClick: () => toast.info('Export is not available yet.') },
+            { label: exporting ? 'Exporting…' : 'Export', icon: <ExportIcon />, onClick: exportExcel },
           ]}
         />
 

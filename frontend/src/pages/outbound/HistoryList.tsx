@@ -1,182 +1,148 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import api from '../../lib/api';
-import type { DeliveryRow, Paginated } from '../../types';
-import { useSort } from '../../hooks/useSort';
-import SortableTh from '../../components/SortableTh';
+import type { OutboundHistoryRow, Paginated } from '../../types';
+import TablePager from '../../components/TablePager';
+import { ListHeader } from '../../components/ListView';
+import { formatDateTime } from './deliveryColumns';
+import { fmtQty } from './outboundLines';
 
-const LIMIT = 10;
-
-// Closed deliveries (shipped) — read-only history.
-interface HistoryListProps {
-  source?: 'SALES_ORDER' | 'TRANSFER_ORDER';
-  basePath?: string;
-}
-
-export default function HistoryList({
-  source,
-  basePath = '/admin/outbound/sales-order',
-}: HistoryListProps = {}) {
-  const [data, setData] = useState<Paginated<DeliveryRow> | null>(null);
+/**
+ * Outbound History, as on WMS dev: one row per picked material, following it
+ * through packing and delivery — requested, picked, packed and delivered. A
+ * plain table, no filters.
+ */
+export default function HistoryList({ source }: { source?: 'SALES_ORDER' | 'TRANSFER_ORDER'; basePath?: string } = {}) {
+  const isTransfer = source === 'TRANSFER_ORDER';
+  const [data, setData] = useState<Paginated<OutboundHistoryRow> | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [searchInput, setSearchInput] = useState('');
-  const { sort, toggle, params } = useSort();
-  const onSort = (col: string) => {
-    setPage(1);
-    toggle(col);
-  };
+  const [pageSize, setPageSize] = useState(10);
 
-  async function load() {
-    setLoading(true);
-    const r = await api.get<Paginated<DeliveryRow>>('/delivery', {
-      params: {
-        page,
-        limit: LIMIT,
-        search: search || undefined,
-        history: true,
-        source: source || undefined,
-        ...params(),
-      },
-    });
-    setData(r.data);
-    setLoading(false);
-  }
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, source, sort.sortBy, sort.order]);
+    let active = true;
+    setLoading(true);
+    api
+      .get<Paginated<OutboundHistoryRow>>('/picking/history', {
+        params: {
+          page,
+          limit: pageSize,
+          source: source || undefined,
+        },
+      })
+      .then((r) => active && setData(r.data))
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
+    };
+  }, [page, pageSize, source]);
 
-  function onSearch(e: FormEvent) {
-    e.preventDefault();
-    setPage(1);
-    setSearch(searchInput.trim());
-  }
-
-  const totalPage = data?.total_page ?? 0;
+  const rows = data?.rows ?? [];
+  const head = [
+    'No',
+    isTransfer ? 'TO ID' : 'SDO ID',
+    'Picking ID',
+    'Packing ID',
+    'Delivery ID',
+    'ERP Doc ID',
+    'Doc Type',
+    'Box Number',
+    'Ownership',
+    isTransfer ? 'Origin Warehouse' : 'Warehouse Name',
+    isTransfer ? 'Destination Warehouse' : 'Customer Name',
+    'Material Code',
+    'Material Name',
+    'Material Category',
+    'Material Classification',
+    'UoM',
+    'Req Qty',
+    'Picked Qty',
+    'Packed Qty',
+    'Delivered Qty',
+    'Material Dimension',
+    'Material Weight',
+    'Created By',
+    'Created At',
+  ];
+  const qtyCols = new Set(['Req Qty', 'Picked Qty', 'Packed Qty', 'Delivered Qty', 'Material Weight']);
+  const td = 'whitespace-nowrap px-4 py-3 text-slate-700';
 
   return (
-    <div className="space-y-4">
-      <form onSubmit={onSearch} className="flex gap-2">
-        <input
-          className="input max-w-xs"
-          placeholder="Search Delivery / SDO / Packing / SO…"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-        />
-        <button type="submit" className="btn-secondary">
-          Search
-        </button>
-        {search && (
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => {
-              setSearchInput('');
-              setSearch('');
-              setPage(1);
-            }}
-          >
-            Clear
-          </button>
-        )}
-      </form>
+    <div className="card overflow-hidden">
+      <div className="space-y-4 p-5 pb-4">
+        <ListHeader title="Outbound History" subtitle="Track all outbound delivery activity logs" />
+      </div>
 
-      <div className="card overflow-hidden">
+      <div className="mx-5 overflow-hidden rounded-lg border border-slate-200">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="table-head">
+            <thead className="bg-slate-50 text-left text-sm text-slate-600">
               <tr>
-                <SortableTh label="Delivery ID" col="delivery_code" sort={sort} onSort={onSort} />
-                <SortableTh label="SDO ID" col="sdo_id" sort={sort} onSort={onSort} />
-                <SortableTh label="Packing ID" col="packing_id" sort={sort} onSort={onSort} />
-                <SortableTh
-                  label={source === 'TRANSFER_ORDER' ? 'TO Number' : 'SO Number'}
-                  col="so_number"
-                  sort={sort}
-                  onSort={onSort}
-                />
-                <SortableTh
-                  label={source === 'TRANSFER_ORDER' ? 'Destination' : 'Customer'}
-                  col="customer"
-                  sort={sort}
-                  onSort={onSort}
-                />
-                <SortableTh label="Location" col="location" sort={sort} onSort={onSort} />
-                <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
-                <th className="px-6 py-3 text-right">Action</th>
+                {head.map((h) => (
+                  <th key={h} className={`whitespace-nowrap px-4 py-3 font-medium ${qtyCols.has(h) ? 'text-right' : ''}`}>
+                    {h}
+                  </th>
+                ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              {loading ? (
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {loading && !data ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-10 text-center text-slate-400">
+                  <td colSpan={head.length} className="px-6 py-10 text-center text-slate-400">
                     Loading…
                   </td>
                 </tr>
-              ) : data && data.rows.length > 0 ? (
-                data.rows.map((d) => (
-                  <tr key={d.id} className="hover:bg-slate-50">
-                    <td className="px-6 py-3 font-medium text-slate-800">
-                      {d.delivery_id}
-                    </td>
-                    <td className="px-6 py-3 text-slate-600">{d.sdo_id ?? '—'}</td>
-                    <td className="px-6 py-3 text-slate-600">{d.packing_id ?? '—'}</td>
-                    <td className="px-6 py-3 text-slate-600">{d.source_number ?? '—'}</td>
-                    <td className="px-6 py-3 text-slate-600">{d.customer ?? '—'}</td>
-                    <td className="px-6 py-3 text-slate-600">{d.location ?? '—'}</td>
-                    <td className="px-6 py-3">
-                      <span className="badge bg-emerald-50 text-emerald-700">
-                        {d.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-3">
-                      <div className="flex justify-end">
-                        <Link
-                          to={`${basePath}/history/${d.id}`}
-                          className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
-                        >
-                          Detail
-                        </Link>
-                      </div>
-                    </td>
+              ) : rows.length > 0 ? (
+                rows.map((r, i) => (
+                  <tr key={r.id} className="hover:bg-slate-50">
+                    <td className="px-4 py-3 text-slate-500">{(page - 1) * pageSize + i + 1}</td>
+                    <td className={`${td} text-slate-800`}>{r.outbound_id ?? '-'}</td>
+                    <td className={td}>{r.picking_id}</td>
+                    <td className={td}>{r.packing_id ?? '-'}</td>
+                    <td className={td}>{r.delivery_id ?? '-'}</td>
+                    <td className={td}>{r.erp_doc_id ?? '-'}</td>
+                    <td className={td}>{r.doc_type}</td>
+                    <td className={td}>-</td>
+                    <td className={td}>{r.ownership ?? '-'}</td>
+                    <td className={td}>{r.warehouse ?? '-'}</td>
+                    <td className="px-4 py-3 text-slate-700">{r.customer ?? '-'}</td>
+                    <td className={`${td} text-slate-800`}>{r.material_code ?? '-'}</td>
+                    <td className="px-4 py-3 text-slate-700">{r.material_name ?? '-'}</td>
+                    <td className={td}>{r.material_category ?? '-'}</td>
+                    <td className={td}>{r.material_classification ?? '-'}</td>
+                    <td className={td}>{r.uom ?? '-'}</td>
+                    <td className={`${td} text-right`}>{fmtQty(r.request_qty)}</td>
+                    <td className={`${td} text-right`}>{fmtQty(r.picked_qty)}</td>
+                    <td className={`${td} text-right`}>{fmtQty(r.packed_qty)}</td>
+                    <td className={`${td} text-right`}>{fmtQty(r.delivered_qty)}</td>
+                    <td className={td}>{r.material_dimension ?? '-'}</td>
+                    <td className={`${td} text-right`}>{fmtQty(r.material_weight)}</td>
+                    <td className={td}>{r.created_by ?? '-'}</td>
+                    <td className={td}>{formatDateTime(r.created_at)}</td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={8} className="px-6 py-10 text-center text-slate-400">
-                    No delivery history yet.
+                  <td colSpan={head.length} className="px-6 py-10 text-center text-slate-400">
+                    No outbound activity yet.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+      </div>
 
-        {totalPage > 1 && (
-          <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3 text-sm">
-            <span className="text-slate-500">
-              Page {page} of {totalPage}
-            </span>
-            <div className="flex gap-2">
-              <button
-                className="btn-secondary"
-                disabled={page <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-              >
-                Prev
-              </button>
-              <button
-                className="btn-secondary"
-                disabled={page >= totalPage}
-                onClick={() => setPage((p) => Math.min(totalPage, p + 1))}
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        )}
+      <div className="px-1 pb-1 pt-2">
+        <TablePager
+          page={page}
+          pageSize={pageSize}
+          total={data?.total_data ?? 0}
+          onPage={setPage}
+          onPageSize={(n) => {
+            setPageSize(n);
+            setPage(1);
+          }}
+        />
       </div>
     </div>
   );

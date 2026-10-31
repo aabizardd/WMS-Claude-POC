@@ -6,7 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { paginationMeta } from '../common/pagination';
 import { QueryTransferOrderDto } from './dto/query-transfer-order.dto';
-import { scopeWhere } from '../common/warehouse-scope';
+import { inScope, scopeWhere } from '../common/warehouse-scope';
 
 export interface WarehouseScope {
   role: string;
@@ -71,10 +71,6 @@ const detailInclude = {
   warehouse: { select: { id: true, name: true, subsidiaryName: true } },
   items: {
     orderBy: { lineNumber: 'asc' },
-    include: {
-      // What actually went out: lines of deliveries that were shipped.
-      deliveryItems: { where: { delivery: { status: 'Closed' } }, select: { qty: true } },
-    },
   },
 } satisfies Prisma.TransferOrderInclude;
 
@@ -110,9 +106,14 @@ const stockKey = (warehouseId: string, materialId: string) => `${warehouseId}|${
 export class TransferOrdersService {
   constructor(private prisma: PrismaService) {}
 
-  // Outbound from Transfer Stock is scoped to the FROM location's warehouse.
+  /**
+   * Outbound from Transfer Stock: a user sees a TO when its origin OR its
+   * destination is one of their warehouses. Acting on it (Generate Picking)
+   * stays with the origin — the picking service checks that.
+   */
   private scopeWhere(scope: WarehouseScope): Prisma.TransferOrderWhereInput {
-    return scopeWhere(scope, 'warehouseId');
+    if (!scope.warehouseIds) return {};
+    return { OR: [scopeWhere(scope, 'warehouseId'), scopeWhere(scope, 'toWarehouseId')] };
   }
 
   /** The TO Out / TO In list's where and order, shared by the list and its export. */
@@ -122,7 +123,9 @@ export class TransferOrdersService {
     const where: Prisma.TransferOrderWhereInput =
       query.direction === 'in'
         ? { ...this.inboundScopeWhere(scope), statusName: { notIn: NOT_INBOUND_STATUSES } }
-        : { ...this.scopeWhere(scope) };
+        : {};
+    // AND-ed in, so the search's OR below does not replace it.
+    const and: Prisma.TransferOrderWhereInput[] = query.direction === 'in' ? [] : [this.scopeWhere(scope)];
     if (query.status && query.status !== 'all') {
       where.statusName = query.status;
     }
@@ -132,7 +135,6 @@ export class TransferOrdersService {
         { toLocationName: { contains: query.search, mode: 'insensitive' } },
       ];
     }
-    const and: Prisma.TransferOrderWhereInput[] = [];
     for (const f of query.filters ?? []) {
       const build = TO_FILTERS[f.field];
       const values = (f.values ?? []).map((v) => v.trim()).filter(Boolean);
@@ -327,6 +329,7 @@ export class TransferOrdersService {
       rows: rows.map((r) => ({
         id: r.id,
         oracle_id: r.oracleId,
+        outbound_id: r.outboundId,
         tran_id: r.tranId,
         tran_date: r.tranDate,
         status_code: r.statusCode,
@@ -461,23 +464,18 @@ export class TransferOrdersService {
    */
   private async lineTotals(where: Prisma.TransferOrderWhereInput) {
     const lineWhere = { transferOrder: where };
-    const [lines, delivered] = await this.prisma.$transaction([
-      this.prisma.transferOrderItem.findMany({
-        where: lineWhere,
-        select: { quantity: true, committed: true, remainingQty: true },
-      }),
-      this.prisma.deliveryItem.aggregate({
-        where: { transferOrderItem: lineWhere, delivery: { status: 'Closed' } },
-        _sum: { qty: true },
-      }),
-    ]);
+    const lines = await this.prisma.transferOrderItem.findMany({
+      where: lineWhere,
+      select: { quantity: true, committed: true, remainingQty: true, shipped: true },
+    });
     const totals = { request_qty: 0, given_qty: 0, remaining_qty: 0, actual_delivery: 0 };
     for (const l of lines) {
       totals.request_qty += l.quantity;
       totals.given_qty += Math.max(0, l.committed - l.remainingQty);
       totals.remaining_qty += l.remainingQty;
+      // Shipped as Oracle reports it (re-synced after every shipment).
+      totals.actual_delivery += l.shipped;
     }
-    totals.actual_delivery = delivered._sum.qty ?? 0;
     return totals;
   }
 
@@ -510,6 +508,7 @@ export class TransferOrdersService {
     return {
       id: to.id,
       oracle_id: to.oracleId,
+      outbound_id: to.outboundId,
       tran_id: to.tranId,
       status_name: to.statusName,
       ownership: to.warehouse?.subsidiaryName ?? null,
@@ -573,7 +572,11 @@ export class TransferOrdersService {
     const matById = await this.materialsById(to.items);
     const available = await this.availableStock([to]);
 
-    return this.serializeDetail(to, matById, available);
+    return {
+      ...this.serializeDetail(to, matById, available),
+      // Only the origin warehouse picks; the destination just follows it.
+      can_pick: inScope(scope, to.warehouseId),
+    };
   }
 
   private serializeDetail(
@@ -584,6 +587,7 @@ export class TransferOrdersService {
     return {
       id: to.id,
       oracle_id: to.oracleId,
+      outbound_id: to.outboundId,
       tran_id: to.tranId,
       tran_date: to.tranDate,
       status_code: to.statusCode,
@@ -633,7 +637,8 @@ export class TransferOrdersService {
       // Already sent to picking: committed qty no longer remaining.
       given_qty: Math.max(0, l.committed - l.remainingQty),
       remaining_qty: l.remainingQty,
-      actual_delivery: l.deliveryItems.reduce((sum, d) => sum + d.qty, 0),
+      // Shipped as Oracle reports it (re-synced after every shipment).
+      actual_delivery: l.shipped,
     };
   }
 }

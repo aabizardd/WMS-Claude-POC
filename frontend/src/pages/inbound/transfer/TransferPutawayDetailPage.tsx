@@ -22,8 +22,7 @@ import {
   type DocColumn,
 } from '../../../components/wms/DocKit';
 import { apiError, deleteTransferDoc, exportCsv, materialText } from './transferInbound';
-
-const BASE = '/admin/inbound/transfer';
+import { TRANSFER_IN, type InboundSource } from './inboundSource';
 
 interface Row {
   actual: number;
@@ -33,12 +32,14 @@ interface Row {
 }
 
 /**
- * Putaway Detail (Transfer IN), as on WMS dev. Putaway turns the lines into
- * – qty + steppers (Actual / Quality Issue / Quantity Issue) and a Picker
- * select; the Destination Bin was fixed when the putaway was generated.
+ * Putaway Detail (Transfer IN / Local Vendor), as on WMS dev. Putaway turns
+ * the lines into – qty + steppers (Actual / Quality Issue / Quantity Issue)
+ * and a Picker select; the Destination Bin was fixed when the putaway was
+ * generated.
  * Confirm settles the putaway: whatever is left goes back to the GR.
  */
-export default function TransferPutawayDetailPage() {
+export default function TransferPutawayDetailPage({ source = TRANSFER_IN }: { source?: InboundSource } = {}) {
+  const BASE = source.base;
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { has } = useAuth();
@@ -57,7 +58,7 @@ export default function TransferPutawayDetailPage() {
   async function load() {
     setLoading(true);
     try {
-      const r = await api.get<TransferPutawayDetail>(`/transfer-inbound/putaway/${id}`);
+      const r = await api.get<TransferPutawayDetail>(`${source.api}/putaway/${id}`);
       setPt(r.data);
       setError('');
       return r.data;
@@ -267,7 +268,8 @@ export default function TransferPutawayDetailPage() {
             label: 'Delete',
             icon: icons.trash,
             onClick: async () => {
-              if (await deleteTransferDoc('putaway', pt.id, pt.putaway_code, confirm, toast)) navigate(`${BASE}/putaway`);
+              if (await deleteTransferDoc('putaway', pt.id, pt.putaway_code, confirm, toast, source))
+                navigate(`${BASE}/putaway`);
             },
           },
         ]

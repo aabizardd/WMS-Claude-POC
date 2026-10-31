@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { assignOutboundId } from '../common/outbound-id';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpHttpService } from '../erp/erp-http.service';
 
@@ -204,6 +205,7 @@ export class TransferOrderSyncService {
       update: header,
       create: { oracleId, createdBy: 'ERP Sync', ...header },
     });
+    if (!record.outboundId) await assignOutboundId(this.prisma, 'TO', record.id, record.createdAt);
 
     for (const it of to.items ?? []) {
       if (it.line_number == null) continue;

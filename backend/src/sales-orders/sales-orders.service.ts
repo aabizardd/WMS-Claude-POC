@@ -4,6 +4,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { DeliveryStatus, Prisma } from '@prisma/client';
+import type { Writable } from 'stream';
+import { writeSoDeliveryXlsx } from './so-delivery-export';
 import { PrismaService } from '../prisma/prisma.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { subsidiarySingleFilter } from '../common/subsidiary-filter';
@@ -91,11 +93,6 @@ const detailInclude = {
           primaryUom: { select: { uomCode: true } },
         },
       },
-      // What actually went out: lines of deliveries that were shipped.
-      deliveryItems: {
-        where: { delivery: { status: 'Closed' } },
-        select: { qty: true },
-      },
     },
     orderBy: { lineNumber: 'asc' as const },
   },
@@ -103,6 +100,7 @@ const detailInclude = {
 
 type SoList = Prisma.SalesOrderGetPayload<{ include: typeof listInclude }>;
 type SoDetail = Prisma.SalesOrderGetPayload<{ include: typeof detailInclude }>;
+type SoLine = SoDetail['items'][number];
 
 @Injectable()
 export class SalesOrdersService {
@@ -112,27 +110,11 @@ export class SalesOrdersService {
     return scopeWhere(scope, 'warehouseId');
   }
 
-  async findAll(
-    query: {
-      page?: number;
-      limit?: number;
-      search?: string;
-      status?: string;
-      filters?: SalesOrderFilterDto[];
-      sort_by?: string;
-      sort_order?: string;
-    },
+  /** The list's conditions (status, search, filters) — shared by the list and its export. */
+  listWhere(
+    query: { search?: string; status?: string; filters?: SalesOrderFilterDto[] },
     scope: WarehouseScope,
-  ) {
-    const page = query.page ?? 1;
-    const limit = query.limit ?? 10;
-    const orderBy = buildOrderBy(
-      query.sort_by,
-      query.sort_order,
-      SALES_ORDER_SORTABLE,
-      { lastModified: 'desc' },
-    );
-
+  ): Prisma.SalesOrderWhereInput {
     const where: Prisma.SalesOrderWhereInput = {
       ...this.scopeWhere(scope),
       // Only sales orders within the allowed subsidiary are visible.
@@ -188,7 +170,49 @@ export class SalesOrdersService {
       }
       where.AND = and;
     }
+    return where;
+  }
 
+  /**
+   * Every SO the list's filters match (any status, with or without a delivery
+   * plan), with its lines and delivery plans, as an Excel workbook.
+   */
+  exportXlsx(
+    query: { search?: string; status?: string; filters?: SalesOrderFilterDto[] },
+    scope: WarehouseScope,
+    out: Writable,
+  ) {
+    return writeSoDeliveryXlsx(this.prisma, { soWhere: this.listWhere(query, scope) }, out);
+  }
+
+  async findAll(
+    query: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: string;
+      include_items?: string;
+      filters?: SalesOrderFilterDto[];
+      sort_by?: string;
+      sort_order?: string;
+    },
+    scope: WarehouseScope,
+  ) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const orderBy = buildOrderBy(
+      query.sort_by,
+      query.sort_order,
+      SALES_ORDER_SORTABLE,
+      { lastModified: 'desc' },
+    );
+
+    const where = this.listWhere(query, scope);
+    const filters = (query.filters ?? [])
+      .map((f) => ({ field: f.field, values: (f.values ?? []).map((v) => v.trim()).filter(Boolean) }))
+      .filter((f) => f.values.length);
+
+    const withItems = query.include_items === 'true';
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.salesOrder.count({ where }),
       this.prisma.salesOrder.findMany({
@@ -199,6 +223,23 @@ export class SalesOrdersService {
         take: limit,
       }),
     ]);
+    // The list's accordion reads like the detail's Material List.
+    const lines = withItems
+      ? await this.prisma.salesOrderItem.findMany({
+          where: { salesOrderId: { in: rows.map((r) => r.id) } },
+          include: detailInclude.items.include,
+          orderBy: detailInclude.items.orderBy,
+        })
+      : [];
+    const linesBySo = new Map<string, SoLine[]>();
+    for (const l of lines) {
+      linesBySo.set(l.salesOrderId, [...(linesBySo.get(l.salesOrderId) ?? []), l]);
+    }
+    const available = withItems
+      ? await this.availableStock(
+          rows.map((r) => ({ warehouseId: r.warehouseId, items: linesBySo.get(r.id) ?? [] })),
+        )
+      : null;
 
     return {
       total_page: Math.ceil(total / limit) || 0,
@@ -210,8 +251,82 @@ export class SalesOrdersService {
         sort_order: query.sort_order ?? null,
         filters,
       },
-      rows: rows.map((r) => this.serializeList(r)),
+      totals: await this.lineTotals(where),
+      rows: rows.map((r) => ({
+        ...this.serializeList(r),
+        ...(available
+          ? {
+              items: (linesBySo.get(r.id) ?? []).map((it) =>
+                this.serializeItem(it, available, r.warehouseId),
+              ),
+            }
+          : {}),
+      })),
     };
+  }
+
+  /**
+   * Stock that can still be picked per order warehouse + material (frozen KIT
+   * stock excluded, as on the picking screen), keyed "warehouseId|materialId".
+   */
+  private async availableStock(
+    orders: {
+      warehouseId: string | null;
+      items: { materialId: string | null }[];
+    }[],
+  ) {
+    const pairs = orders.flatMap((o) =>
+      o.warehouseId
+        ? o.items
+            .filter((it) => it.materialId)
+            .map((it) => ({
+              warehouseId: o.warehouseId as string,
+              materialId: it.materialId as string,
+            }))
+        : [],
+    );
+    const available = new Map<string, number>();
+    if (!pairs.length) return available;
+    const invs = await this.prisma.inventoryManagement.findMany({
+      where: { OR: pairs },
+      select: {
+        warehouseId: true,
+        materialId: true,
+        binStocks: { where: usableBinStockWhere(), select: { availQty: true } },
+      },
+    });
+    for (const inv of invs) {
+      if (!inv.materialId || !inv.warehouseId) continue;
+      const key = `${inv.warehouseId}|${inv.materialId}`;
+      available.set(
+        key,
+        (available.get(key) ?? 0) +
+          inv.binStocks.reduce((sum, b) => sum + b.availQty, 0),
+      );
+    }
+    return available;
+  }
+
+  /**
+   * Line quantities summed over every order matching the filters (not only
+   * this page), worked out the same way as the detail's columns. Available
+   * Qty is left out: it is stock per material, not per line.
+   */
+  private async lineTotals(where: Prisma.SalesOrderWhereInput) {
+    const lineWhere = { salesOrder: where };
+    const lines = await this.prisma.salesOrderItem.findMany({
+      where: lineWhere,
+      select: { quantity: true, remainingQty: true, shipped: true },
+    });
+    const totals = { request_qty: 0, given_qty: 0, remaining_qty: 0, actual_delivery: 0 };
+    for (const l of lines) {
+      totals.request_qty += l.quantity;
+      totals.given_qty += Math.max(0, l.quantity - l.remainingQty);
+      totals.remaining_qty += l.remainingQty;
+      // Shipped as Oracle reports it (re-synced after every shipment).
+      totals.actual_delivery += l.shipped;
+    }
+    return totals;
   }
 
   /**
@@ -283,7 +398,9 @@ export class SalesOrdersService {
   }
 
   /** Delivery status is an enum; unrecognised values match nothing. */
-  private parseDeliveryStatus(values: string[]): Prisma.EnumDeliveryStatusFilter {
+  private parseDeliveryStatus(
+    values: string[],
+  ): Prisma.EnumDeliveryStatusFilter {
     const members = Object.values(DeliveryStatus);
     const matched = values
       .map((v) => members.find((m) => m.toLowerCase() === v.toLowerCase()))
@@ -296,34 +413,13 @@ export class SalesOrdersService {
       where: { id },
       include: detailInclude,
     });
-    if (
-      !so ||
-      (scope.role !== 'admin' && !inScope(scope, so.warehouseId))
-    ) {
+    if (!so || (scope.role !== 'admin' && !inScope(scope, so.warehouseId))) {
       throw new NotFoundException(`Sales Order ${id} not found`);
     }
 
     // Stock that can still be picked for each material in the order's
     // warehouse (frozen KIT stock excluded, as on the picking screen).
-    const materialIds = so.items.map((it) => it.materialId).filter((m): m is string => !!m);
-    const available = new Map<string, number>();
-    if (so.warehouseId && materialIds.length) {
-      const invs = await this.prisma.inventoryManagement.findMany({
-        where: { warehouseId: so.warehouseId, materialId: { in: materialIds } },
-        select: {
-          materialId: true,
-          binStocks: { where: usableBinStockWhere(), select: { availQty: true } },
-        },
-      });
-      for (const inv of invs) {
-        if (!inv.materialId) continue;
-        available.set(
-          inv.materialId,
-          (available.get(inv.materialId) ?? 0) +
-            inv.binStocks.reduce((sum, b) => sum + b.availQty, 0),
-        );
-      }
-    }
+    const available = await this.availableStock([so]);
     return this.serializeDetail(so, available);
   }
 
@@ -339,7 +435,9 @@ export class SalesOrdersService {
       select: { statusName: true },
       orderBy: { statusName: 'asc' },
     });
-    return { statuses: rows.map((r) => r.statusName).filter((s): s is string => !!s) };
+    return {
+      statuses: rows.map((r) => r.statusName).filter((s): s is string => !!s),
+    };
   }
 
   async getLastSyncAt() {
@@ -354,6 +452,7 @@ export class SalesOrdersService {
     return {
       id: s.id,
       oracle_id: s.oracleId,
+      outbound_id: s.outboundId,
       tran_id: s.tranId,
       tran_date: s.tranDate,
       status_name: s.statusName,
@@ -378,6 +477,7 @@ export class SalesOrdersService {
     return {
       id: s.id,
       oracle_id: s.oracleId,
+      outbound_id: s.outboundId,
       tran_id: s.tranId,
       tran_date: s.tranDate,
       status_code: s.statusCode,
@@ -395,26 +495,40 @@ export class SalesOrdersService {
       last_modified: s.lastModified,
       date_created: s.dateCreated,
       created_at: s.createdAt,
-      items: s.items.map((it) => ({
-        id: it.id,
-        line_number: it.lineNumber,
-        item_oracle_id: it.itemOracleId,
-        item_name: it.itemName,
-        material_code: it.material?.materialCode ?? null,
-        material_name: it.material?.materialName ?? null,
-        uom: it.material?.primaryUom?.uomCode ?? null,
-        available_qty: it.materialId ? (available.get(it.materialId) ?? 0) : 0,
-        quantity: it.quantity,
-        // Already sent to picking: what is no longer remaining.
-        given_qty: Math.max(0, it.quantity - it.remainingQty),
-        remaining_qty: it.remainingQty,
-        actual_delivery: it.deliveryItems.reduce((sum, d) => sum + d.qty, 0),
-        rate: it.rate,
-        amount: it.amount,
-        shipped: it.shipped,
-        description: it.description,
-        location_id: it.locationId,
-      })),
+      items: s.items.map((it) =>
+        this.serializeItem(it, available, s.warehouseId),
+      ),
+    };
+  }
+
+  /** One order line as the detail's Material List (and the list's accordion) shows it. */
+  private serializeItem(
+    it: SoLine,
+    available: Map<string, number>,
+    warehouseId: string | null,
+  ) {
+    return {
+      id: it.id,
+      line_number: it.lineNumber,
+      item_oracle_id: it.itemOracleId,
+      item_name: it.itemName,
+      material_code: it.material?.materialCode ?? null,
+      material_name: it.material?.materialName ?? null,
+      uom: it.material?.primaryUom?.uomCode ?? null,
+      available_qty: it.materialId
+        ? (available.get(`${warehouseId}|${it.materialId}`) ?? 0)
+        : 0,
+      quantity: it.quantity,
+      // Already sent to picking: what is no longer remaining.
+      given_qty: Math.max(0, it.quantity - it.remainingQty),
+      remaining_qty: it.remainingQty,
+      // Shipped as Oracle reports it (re-synced after every shipment).
+      actual_delivery: it.shipped,
+      rate: it.rate,
+      amount: it.amount,
+      shipped: it.shipped,
+      description: it.description,
+      location_id: it.locationId,
     };
   }
 }

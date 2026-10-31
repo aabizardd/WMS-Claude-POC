@@ -1,309 +1,271 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Link } from 'react-router-dom';
-import axios from 'axios';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import api from '../../lib/api';
-import type { Paginated, PackingRow } from '../../types';
+import type { PackingRow, Paginated } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import { useSort } from '../../hooks/useSort';
 import SortableTh from '../../components/SortableTh';
+import RowActionMenu from '../../components/RowActionMenu';
+import TablePager from '../../components/TablePager';
+import { TrashIcon } from '../../components/icons';
+import { DocStatusPill } from '../../components/wms/DocKit';
+import { DetailIcon, ListHeader } from '../../components/ListView';
+import { apiError } from '../inbound/transfer/transferInbound';
 import { deleteOutboundDoc } from './outboundDelete';
+import { formatDateTime } from './deliveryColumns';
 
-const LIMIT = 10;
+// select, No, 12 data columns, Actions.
+const COLS = 15;
 
-function statusBadge(status: string) {
-  const map: Record<string, string> = {
-    Open: 'bg-amber-50 text-amber-700',
-    Closed: 'bg-emerald-50 text-emerald-700',
-  };
-  return map[status] ?? 'bg-slate-100 text-slate-600';
+/** "PICK-20261027-00059" and "+1" for the other merged pickings. */
+export function PickingIds({ pickings }: { pickings: { picking_id: string }[] }) {
+  if (!pickings.length) return <>-</>;
+  return (
+    <span className="inline-flex items-center gap-1.5" title={pickings.map((p) => p.picking_id).join(', ')}>
+      {pickings[0].picking_id}
+      {pickings.length > 1 && (
+        <span className="rounded-full bg-slate-100 px-1.5 text-[11px] font-medium text-slate-600">+{pickings.length - 1}</span>
+      )}
+    </span>
+  );
 }
 
-// Packing documents generated from Closed pickings. Shared by the Sales Order
-// and Transfer Stock outbound tabs.
-interface PackingListProps {
-  source?: 'SALES_ORDER' | 'TRANSFER_ORDER';
-  basePath?: string;
-  // Generate Delivery is enabled per source (Transfer Stock delivery = phase 2c).
-  canGenerateDelivery?: boolean;
-}
-
+/**
+ * Packing List, as on WMS dev: the packings not on a delivery plan yet, in a
+ * plain table (no filters, no accordion). Ticking Closed packings and "Generate Delivery
+ * Plan" puts them on one delivery plan. Shared by the Sales Order and
+ * Transfer Stock tabs.
+ */
 export default function PackingList({
   source,
   basePath = '/admin/outbound/sales-order',
-  canGenerateDelivery = true,
-}: PackingListProps = {}) {
+}: {
+  source?: 'SALES_ORDER' | 'TRANSFER_ORDER';
+  basePath?: string;
+} = {}) {
+  const navigate = useNavigate();
   const { has } = useAuth();
   const toast = useToast();
   const confirm = useConfirm();
-  const canDeliver = has('delivery:create') && canGenerateDelivery;
+  const isTransfer = source === 'TRANSFER_ORDER';
   const canDelete = has('packing:delete');
+  const canDeliver = has('delivery:create');
 
   const [data, setData] = useState<Paginated<PackingRow> | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [searchInput, setSearchInput] = useState('');
-  const { sort, toggle: toggleSort, params } = useSort();
-  const onSort = (col: string) => {
-    setPage(1);
-    toggleSort(col);
-  };
-
-  // Selection mode (Generate Delivery).
-  const [selectionMode, setSelectionMode] = useState(false);
+  const [pageSize, setPageSize] = useState(10);
+  const [reloadKey, setReloadKey] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [generating, setGenerating] = useState(false);
-
-  async function load() {
-    setLoading(true);
-    const r = await api.get<Paginated<PackingRow>>('/packing', {
-      params: {
-        page,
-        limit: LIMIT,
-        search: search || undefined,
-        source: source || undefined,
-        ...params(),
-      },
-    });
-    setData(r.data);
-    setLoading(false);
-  }
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, source, sort.sortBy, sort.order]);
-
-  function onSearch(e: FormEvent) {
-    e.preventDefault();
+  const { sort, toggle, params } = useSort();
+  const onSort = (col: string) => {
     setPage(1);
-    setSearch(searchInput.trim());
-  }
+    toggle(col);
+  };
 
-  const rows = data?.rows ?? [];
-  // Only Closed packings can be delivered.
-  const selectableRows = rows.filter((r) => r.status === 'Closed');
-  const allSelectedOnPage =
-    selectableRows.length > 0 && selectableRows.every((r) => selected.has(r.id));
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    api
+      .get<Paginated<PackingRow>>('/packing', {
+        params: {
+          page,
+          limit: pageSize,
+          source: source || undefined,
+          ...params(),
+        },
+      })
+      .then((r) => active && setData(r.data))
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, pageSize, source, sort.sortBy, sort.order, reloadKey]);
 
-  function enterSelection() {
-    setSelectionMode(true);
-    setSelected(new Set());
-  }
-  function cancelSelection() {
-    setSelectionMode(false);
-    setSelected(new Set());
-  }
-  function toggle(id: string) {
+  const rows = useMemo(() => data?.rows ?? [], [data]);
+  const deliverable = rows.filter((r) => r.status === 'Closed');
+  const allTicked = deliverable.length > 0 && deliverable.every((r) => selected.has(r.id));
+
+  function tick(id: string) {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }
-  function toggleAllOnPage() {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (allSelectedOnPage) selectableRows.forEach((r) => next.delete(r.id));
-      else selectableRows.forEach((r) => next.add(r.id));
-      return next;
-    });
-  }
 
-  async function handleGenerate() {
+  async function generateDelivery() {
     if (selected.size === 0) {
-      toast.error('Select at least one packing');
+      toast.info('Tick the Closed packings to deliver first.');
       return;
     }
     const ok = await confirm({
-      title: 'Generate Delivery?',
-      description: `${selected.size} packing document(s) will be delivered. Delivered packings move to the Delivery List.`,
+      title: 'Generate Delivery Plan?',
+      description: `${selected.size} packing(s) will be put on a delivery plan and move to the Delivery Plan list.`,
       type: 'info',
       confirmText: 'Generate',
     });
     if (!ok) return;
     setGenerating(true);
     try {
-      const r = await api.post<{ created: number }>('/delivery/generate', {
-        packingIds: [...selected],
-      });
-      toast.success(`${r.data.created} delivery document(s) created`);
-      cancelSelection();
-      setPage(1);
-      await load();
+      const r = await api.post<{ created: number }>('/delivery/generate', { packingIds: [...selected] });
+      toast.success(`${r.data.created} delivery plan(s) created`);
+      setSelected(new Set());
+      setReloadKey((k) => k + 1);
     } catch (err) {
-      if (axios.isAxiosError(err)) {
-        const msg = err.response?.data?.message;
-        toast.error(Array.isArray(msg) ? msg.join(', ') : msg ?? 'Generate failed');
-      } else toast.error('Generate failed');
+      toast.error(apiError(err, 'Generate Delivery Plan failed'));
     } finally {
       setGenerating(false);
     }
   }
 
-  const totalPage = data?.total_page ?? 0;
-  const colCount = selectionMode ? 8 : 7;
-  const shown = useMemo(() => rows, [rows]);
+  const th = 'whitespace-nowrap';
+  const td = 'whitespace-nowrap px-4 py-3 text-slate-700';
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <form onSubmit={onSearch} className="flex gap-2">
-          <input
-            className="input max-w-xs"
-            placeholder="Search Packing / Picking / SO number…"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-          />
-          <button type="submit" className="btn-secondary">
-            Search
-          </button>
-          {search && (
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                setSearchInput('');
-                setSearch('');
-                setPage(1);
-              }}
-            >
-              Clear
-            </button>
-          )}
-        </form>
-
-        {canDeliver &&
-          (selectionMode ? (
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-slate-500">{selected.size} selected</span>
-              <button
-                className="btn-secondary"
-                onClick={cancelSelection}
-                disabled={generating}
-              >
-                Cancel
+    <div className="card overflow-hidden">
+      <div className="space-y-4 p-5 pb-4">
+        <ListHeader
+          title="Packing List"
+          subtitle="Pack and verify items before shipment"
+          actions={
+            canDeliver && (
+              <button className="btn-primary" onClick={generateDelivery} disabled={generating}>
+                {generating ? 'Generating…' : 'Generate Delivery Plan'}
+                {selected.size > 0 && <span className="ml-1 rounded-full bg-white/25 px-1.5 text-xs">{selected.size}</span>}
               </button>
-              <button
-                className="btn-primary"
-                onClick={handleGenerate}
-                disabled={generating || selected.size === 0}
-              >
-                {generating ? 'Generating…' : 'Generate'}
-              </button>
-            </div>
-          ) : (
-            <button className="btn-primary" onClick={enterSelection}>
-              Generate Delivery
-            </button>
-          ))}
+            )
+          }
+        />
       </div>
 
-      {selectionMode && (
-        <div className="rounded-lg border border-brand-200 bg-brand-50 px-4 py-2 text-sm text-brand-700">
-          Selection mode: choose one or more packing documents to deliver.
-        </div>
-      )}
-
-      <div className="card overflow-hidden">
+      <div className="mx-5 overflow-hidden rounded-lg border border-slate-200">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="table-head">
-              <tr>
-                {selectionMode && (
-                  <th className="px-4 py-3">
+            <thead className="bg-slate-50 text-left text-sm text-slate-600">
+              <tr className="[&>th]:font-medium [&_button]:normal-case [&_button]:tracking-normal">
+                <th className="w-10 px-3 py-3">
+                  {canDeliver && (
                     <input
                       type="checkbox"
-                      className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
-                      checked={allSelectedOnPage}
-                      onChange={toggleAllOnPage}
-                      aria-label="Select all on page"
+                      className="h-4 w-4 rounded border-slate-300 accent-brand-600"
+                      checked={allTicked}
+                      disabled={deliverable.length === 0}
+                      onChange={() =>
+                        setSelected((prev) => {
+                          const next = new Set(prev);
+                          deliverable.forEach((r) => (allTicked ? next.delete(r.id) : next.add(r.id)));
+                          return next;
+                        })
+                      }
+                      aria-label="Select every Closed packing on this page"
                     />
-                  </th>
-                )}
-                <SortableTh label="Packing ID" col="packing_code" sort={sort} onSort={onSort} />
-                <SortableTh label="Picking ID" col="picking_id" sort={sort} onSort={onSort} />
+                  )}
+                </th>
+                <th className="px-4 py-3 font-medium">No</th>
+                <SortableTh label="Status" col="status" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <SortableTh label="Transaction ID" col="so_number" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <th className="whitespace-nowrap px-4 py-3 font-medium">{isTransfer ? 'TO ID' : 'SO ID'}</th>
+                <SortableTh label="Picking ID" col="picking_id" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <SortableTh label="Packing ID" col="packing_code" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <th className="whitespace-nowrap px-4 py-3 font-medium">Ownership</th>
                 <SortableTh
-                  label={source === 'TRANSFER_ORDER' ? 'TO Number' : 'SO Number'}
-                  col="so_number"
+                  label={isTransfer ? 'Origin Warehouse' : 'Warehouse Name'}
+                  col="location"
                   sort={sort}
                   onSort={onSort}
+                  pad="px-4"
+                  className={th}
                 />
-                <SortableTh label="Location" col="location" sort={sort} onSort={onSort} />
                 <SortableTh
-                  label={source === 'TRANSFER_ORDER' ? 'Destination' : 'Customer'}
+                  label={isTransfer ? 'Destination Warehouse' : 'Customer Name'}
                   col="customer"
                   sort={sort}
                   onSort={onSort}
+                  pad="px-4"
+                  className={th}
                 />
-                <SortableTh label="Status" col="status" sort={sort} onSort={onSort} />
-                <th className="px-6 py-3 text-right">Action</th>
+                <SortableTh label="Created By" col="created_by" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <SortableTh label="Created At" col="created_at" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <th className="whitespace-nowrap px-4 py-3 font-medium">Last Modified By</th>
+                <SortableTh label="Last Modified At" col="updated_at" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <th className="sticky right-0 bg-slate-50 px-4 py-3 text-center font-medium shadow-[-6px_0_8px_-6px_rgba(15,23,42,0.15)]">
+                  Actions
+                </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              {loading ? (
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {loading && !data ? (
                 <tr>
-                  <td colSpan={colCount} className="px-6 py-10 text-center text-slate-400">
+                  <td colSpan={COLS} className="px-6 py-10 text-center text-slate-400">
                     Loading…
                   </td>
                 </tr>
-              ) : shown.length > 0 ? (
-                shown.map((p) => (
-                  <tr
-                    key={p.id}
-                    className={`hover:bg-slate-50 ${
-                      selectionMode && selected.has(p.id) ? 'bg-brand-50/50' : ''
-                    }`}
-                  >
-                    {selectionMode && (
+              ) : rows.length > 0 ? (
+                rows.map((p, i) => {
+                  const detailPath = `${basePath}/packing/${p.id}`;
+                  return (
+                    <tr key={p.id} className={`hover:bg-slate-50 ${loading ? 'opacity-60' : ''}`}>
+                      <td className="px-3 py-3">
+                        {canDeliver && (
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-slate-300 accent-brand-600"
+                            checked={selected.has(p.id)}
+                            disabled={p.status !== 'Closed'}
+                            title={p.status === 'Closed' ? undefined : 'Only a Closed packing can be delivered'}
+                            onChange={() => tick(p.id)}
+                            aria-label={`Select ${p.packing_id}`}
+                          />
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-slate-500">{(page - 1) * pageSize + i + 1}</td>
                       <td className="px-4 py-3">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 disabled:opacity-40"
-                          checked={selected.has(p.id)}
-                          disabled={p.status !== 'Closed'}
-                          title={p.status !== 'Closed' ? 'Only Closed packings can be delivered' : undefined}
-                          onChange={() => toggle(p.id)}
+                        <DocStatusPill status={p.status} />
+                      </td>
+                      <td className={`${td} text-slate-800`}>{p.source_number ?? '-'}</td>
+                      <td className={td}>{p.outbound_id ?? '-'}</td>
+                      <td className={td}>
+                        <PickingIds pickings={p.pickings} />
+                      </td>
+                      <td className={`${td} text-slate-800`}>{p.packing_id}</td>
+                      <td className={td}>{p.ownership ?? '-'}</td>
+                      <td className={td}>{p.location ?? '-'}</td>
+                      <td className="px-4 py-3 text-slate-700">{p.customer ?? '-'}</td>
+                      <td className={td}>{p.created_by ?? '-'}</td>
+                      <td className={td}>{formatDateTime(p.created_at)}</td>
+                      <td className={td}>{p.updated_by ?? '-'}</td>
+                      <td className={td}>{p.updated_by ? formatDateTime(p.updated_at) : '-'}</td>
+                      <td className="sticky right-0 bg-white px-4 py-3 text-center shadow-[-6px_0_8px_-6px_rgba(15,23,42,0.15)]">
+                        <RowActionMenu
+                          actions={[
+                            { label: 'Detail', icon: <DetailIcon />, onClick: () => navigate(detailPath) },
+                            ...(canDelete && p.status === 'Open'
+                              ? [
+                                  {
+                                    label: 'Delete',
+                                    icon: <TrashIcon />,
+                                    onClick: async () => {
+                                      if (await deleteOutboundDoc('packing', p.id, p.packing_id, confirm, toast))
+                                        setReloadKey((k) => k + 1);
+                                    },
+                                  },
+                                ]
+                              : []),
+                          ]}
                         />
                       </td>
-                    )}
-                    <td className="px-6 py-3 font-medium text-slate-800">
-                      {p.packing_id}
-                    </td>
-                    <td className="px-6 py-3 text-slate-600">{p.picking_id ?? '—'}</td>
-                    <td className="px-6 py-3 text-slate-600">{p.source_number ?? '—'}</td>
-                    <td className="px-6 py-3 text-slate-600">{p.location ?? '—'}</td>
-                    <td className="px-6 py-3 text-slate-600">{p.customer ?? '—'}</td>
-                    <td className="px-6 py-3">
-                      <span className={`badge ${statusBadge(p.status)}`}>{p.status}</span>
-                    </td>
-                    <td className="px-6 py-3">
-                      <div className="flex justify-end gap-2">
-                        <Link
-                          to={`${basePath}/packing/${p.id}`}
-                          className="rounded-md px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"
-                        >
-                          Detail
-                        </Link>
-                        {!selectionMode && canDelete && p.status === 'Open' && (
-                          <button
-                            onClick={async () => {
-                              if (await deleteOutboundDoc('packing', p.id, p.packing_id, confirm, toast))
-                                await load();
-                            }}
-                            className="rounded-md px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
-                          >
-                            Delete
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                    </tr>
+                  );
+                })
               ) : (
                 <tr>
-                  <td colSpan={colCount} className="px-6 py-10 text-center text-slate-400">
+                  <td colSpan={COLS} className="px-6 py-10 text-center text-slate-400">
                     No packing documents yet.
                   </td>
                 </tr>
@@ -311,31 +273,21 @@ export default function PackingList({
             </tbody>
           </table>
         </div>
+      </div>
 
-        {totalPage > 1 && (
-          <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3 text-sm">
-            <span className="text-slate-500">
-              Page {page} of {totalPage}
-            </span>
-            <div className="flex gap-2">
-              <button
-                className="btn-secondary"
-                disabled={page <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-              >
-                Prev
-              </button>
-              <button
-                className="btn-secondary"
-                disabled={page >= totalPage}
-                onClick={() => setPage((p) => Math.min(totalPage, p + 1))}
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        )}
+      <div className="px-1 pb-1 pt-2">
+        <TablePager
+          page={page}
+          pageSize={pageSize}
+          total={data?.total_data ?? 0}
+          onPage={setPage}
+          onPageSize={(n) => {
+            setPageSize(n);
+            setPage(1);
+          }}
+        />
       </div>
     </div>
   );
 }
+

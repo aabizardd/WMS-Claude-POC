@@ -3,7 +3,8 @@ import api from '../../lib/api';
 import type { ConfirmOptions } from '../../context/ConfirmContext';
 
 /**
- * Deleting an Open Delivery Plan or Packing sends the documents it was made
+ * Deleting an Open Picking gives its qty back to the order. Deleting an Open
+ * Delivery Plan or Packing sends the documents it was made
  * from back to Open — they are packed / picked again — and returns any issue
  * stock their closing had set aside to Reserved. The copy says so before the
  * user confirms.
@@ -22,6 +23,12 @@ const COPY = {
     description:
       'Every picking in this packing goes back to Open with its progress cleared, so it has to be picked again. Qty / quality issue stock from picking returns to Reserved and its discrepancies are removed.',
     done: 'Packing deleted — picking reopened',
+  },
+  picking: {
+    path: '/picking',
+    noun: 'picking',
+    description: 'Remaining qty and reserved stock will be rolled back to the source order.',
+    done: 'Picking deleted and rolled back',
   },
 } as const;
 

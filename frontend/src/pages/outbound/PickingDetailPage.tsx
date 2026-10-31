@@ -1,11 +1,27 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import axios from 'axios';
+import { useEffect, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import api from '../../lib/api';
+import { printDoc } from '../../lib/print';
+import type { PickingDetail, PickingItemRow } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
-import type { PickingDetail } from '../../types';
+import { RefreshButton, ToolbarActions, icons } from '../../components/master/MasterKit';
+import {
+  ConfirmButton,
+  DetailCard,
+  DocStatusPill,
+  DocTable,
+  InfoGrid,
+  PrimaryButton,
+  SecondaryButton,
+  Stepper,
+  fmtStamp,
+  qty,
+  type DocColumn,
+} from '../../components/wms/DocKit';
+import { apiError, exportCsv, materialText } from '../inbound/transfer/transferInbound';
+import { lineStatus } from './outboundLines';
 import { progressConfirm } from './progressConfirm';
 
 interface RowInput {
@@ -14,363 +30,265 @@ interface RowInput {
   quality: number;
 }
 
+const handled = (r: RowInput) => r.actual + r.qtyIssue + r.quality;
+
 /**
- * Apply an edit to a row's inputs. Changing Qty Issue or Quality Issue refills
- * Actual with whatever is left of `remaining`; Actual itself can be lowered
- * freely.
+ * Picking List Detail, as on WMS dev. Ticking lines brings up "Pick": the
+ * ticked lines turn into steppers (Actual / Quality Issue / Quantity Issue)
+ * and Confirm records that progress. The picking closes once every line is
+ * done.
  */
-function withActualFilled(row: RowInput, p: Partial<RowInput>, remaining: number): RowInput {
-  const next = { ...row, ...p };
-  if ('qtyIssue' in p || 'quality' in p) {
-    const left = remaining - (Number(next.qtyIssue) || 0) - (Number(next.quality) || 0);
-    next.actual = Math.max(0, Math.round(left * 1e6) / 1e6);
-  }
-  return next;
-}
-
-function statusBadge(status: string) {
-  const map: Record<string, string> = {
-    Open: 'bg-amber-50 text-amber-700',
-    OnProgress: 'bg-blue-50 text-blue-700',
-    Closed: 'bg-emerald-50 text-emerald-700',
-  };
-  return map[status] ?? 'bg-slate-100 text-slate-600';
-}
-function statusLabel(status: string) {
-  return status === 'OnProgress' ? 'On Progress' : status;
-}
-
 export default function PickingDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { has } = useAuth();
   const toast = useToast();
   const confirm = useConfirm();
-  const canUpdate = has('picking:update');
 
   const [pk, setPk] = useState<PickingDetail | null>(null);
+  const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
+  const [ticked, setTicked] = useState<Set<string>>(new Set());
+  const [picking, setPicking] = useState(false);
   const [inputs, setInputs] = useState<Record<string, RowInput>>({});
   const [saving, setSaving] = useState(false);
 
-  // Actual starts at the max (everything still to pick); issues start at 0.
-  function resetInputs(data: PickingDetail) {
-    setInputs(
-      Object.fromEntries(
-        data.items.map((it) => [it.id, { actual: it.remaining_qty, qtyIssue: 0, quality: 0 }]),
-      ),
-    );
-  }
-
-  function load() {
+  async function load() {
     setLoading(true);
-    api
-      .get<PickingDetail>(`/picking/${id}`)
-      .then((r) => {
-        setPk(r.data);
-        resetInputs(r.data);
-      })
-      .catch(() => setLoadError('Failed to load Picking.'))
-      .finally(() => setLoading(false));
+    try {
+      const r = await api.get<PickingDetail>(`/picking/${id}`);
+      setPk(r.data);
+      setError('');
+    } catch (err) {
+      setError(apiError(err, 'Picking not found.'));
+    } finally {
+      setLoading(false);
+    }
   }
   useEffect(() => {
+    setPicking(false);
+    setTicked(new Set());
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const editable = canUpdate && pk?.status !== 'Closed';
-
-  // Entering an issue takes it off Actual, so the row never exceeds remaining.
-  function patch(itemId: string, p: Partial<RowInput>) {
-    const remaining = pk?.items.find((it) => it.id === itemId)?.remaining_qty ?? 0;
-    setInputs((s) => ({ ...s, [itemId]: withActualFilled(s[itemId], p, remaining) }));
+  if (loading && !pk) return <div className="card px-6 py-16 text-center text-slate-400">Loading…</div>;
+  if (error || !pk) {
+    return <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>;
   }
 
-  // Realtime totals = stored totals +/- current inputs.
-  const live = useMemo(() => {
-    if (!pk) return { actual: 0, qtyIssue: 0, quality: 0, remaining: 0 };
-    let a = 0,
-      qi = 0,
-      ql = 0;
-    for (const it of pk.items) {
-      const f = inputs[it.id];
-      if (!f) continue;
-      a += Number(f.actual) || 0;
-      qi += Number(f.qtyIssue) || 0;
-      ql += Number(f.quality) || 0;
-    }
-    return {
-      actual: pk.totals.actual + a,
-      qtyIssue: pk.totals.qty_issue + qi,
-      quality: pk.totals.quality_issue + ql,
-      remaining: pk.totals.remaining - (a + qi + ql),
-    };
-  }, [pk, inputs]);
+  const isTransfer = pk.source_type === 'TRANSFER_ORDER';
+  const base = isTransfer ? '/admin/outbound/transfer-stock' : '/admin/outbound/sales-order';
+  const editable = has('picking:update') && pk.status !== 'Closed';
+  const canTick = (it: PickingItemRow) => editable && it.remaining_qty > 1e-9;
+  const tickable = pk.items.filter(canTick);
+  const allTicked = tickable.length > 0 && tickable.every((it) => ticked.has(it.id));
+  const chosen = pk.items.filter((it) => ticked.has(it.id));
 
-  async function handleSave() {
-    if (!pk) return;
-    const items = pk.items
-      .map((it) => {
-        const f = inputs[it.id] ?? { actual: 0, qtyIssue: 0, quality: 0 };
-        return {
-          id: it.id,
-          actualQty: Number(f.actual) || 0,
-          qtyIssue: Number(f.qtyIssue) || 0,
-          qualityIssue: Number(f.quality) || 0,
-        };
-      })
-      .filter((x) => x.actualQty + x.qtyIssue + x.qualityIssue > 0);
+  function toggle(itemId: string) {
+    setTicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  }
 
-    if (items.length === 0) {
-      toast.error('Enter at least one quantity.');
-      return;
-    }
-    // Client-side guard: per-item input must not exceed its remaining.
-    for (const it of pk.items) {
-      const f = inputs[it.id];
-      if (!f) continue;
-      const sum = (Number(f.actual) || 0) + (Number(f.qtyIssue) || 0) + (Number(f.quality) || 0);
-      if (sum > it.remaining_qty + 1e-9) {
-        toast.error(`Input exceeds remaining for "${it.material_name ?? it.material_code}".`);
+  /** Pick: what is left to pick starts as Actual, the issues at 0. */
+  function startPick() {
+    setInputs(Object.fromEntries(chosen.map((it) => [it.id, { actual: it.remaining_qty, qtyIssue: 0, quality: 0 }])));
+    setPicking(true);
+  }
+
+  async function confirmPick() {
+    for (const it of chosen) {
+      if (handled(inputs[it.id]) > it.remaining_qty + 1e-9) {
+        toast.error(`Actual + issues exceed the remaining qty (${it.remaining_qty}) for ${it.material_code ?? 'a material'}.`);
         return;
       }
     }
-
+    const items = chosen
+      .map((it) => ({
+        id: it.id,
+        actualQty: inputs[it.id].actual,
+        qtyIssue: inputs[it.id].qtyIssue,
+        qualityIssue: inputs[it.id].quality,
+      }))
+      .filter((x) => x.actualQty + x.qtyIssue + x.qualityIssue > 0);
+    if (!items.length) {
+      toast.error('Enter the Actual Qty (or an issue) of at least one material.');
+      return;
+    }
     const ok = await confirm(
       progressConfirm(
         'picking',
-        pk.items
+        pk!.items
           .filter((it) => it.remaining_qty > 0)
           .map((it) => {
             const f = inputs[it.id] ?? { actual: 0, qtyIssue: 0, quality: 0 };
-            return {
-              remaining: it.remaining_qty,
-              actual: Number(f.actual) || 0,
-              qtyIssue: Number(f.qtyIssue) || 0,
-              quality: Number(f.quality) || 0,
-            };
+            return { remaining: it.remaining_qty, actual: f.actual, qtyIssue: f.qtyIssue, quality: f.quality };
           }),
       ),
     );
     if (!ok) return;
-
     setSaving(true);
     try {
-      await api.put(`/picking/${id}/progress`, { items });
-      toast.success('Picking progress saved');
-      load();
+      await api.put(`/picking/${pk!.id}/progress`, { items });
+      toast.success(`Picking ${pk!.picking_id} updated`);
+      setPicking(false);
+      setTicked(new Set());
+      await load();
     } catch (err) {
-      if (axios.isAxiosError(err)) {
-        const msg = err.response?.data?.message;
-        toast.error(Array.isArray(msg) ? msg.join(', ') : msg ?? 'Save failed');
-      } else toast.error('Save failed');
+      toast.error(apiError(err, 'Pick failed'));
     } finally {
       setSaving(false);
     }
   }
 
-  if (loading) {
+  const stepper = (key: keyof RowInput, fallback: (r: PickingItemRow) => number) => (r: PickingItemRow) => {
+    const row = inputs[r.id];
+    if (!picking || !row) return qty(fallback(r));
+    const others = handled(row) - row[key];
     return (
-      <div className="flex h-64 items-center justify-center text-slate-400">Loading…</div>
+      <Stepper
+        value={row[key]}
+        max={Math.max(0, r.remaining_qty - others)}
+        invalid={handled(row) > r.remaining_qty + 1e-9}
+        onChange={(v) => setInputs((s) => ({ ...s, [r.id]: { ...s[r.id], [key]: v } }))}
+      />
     );
-  }
-  if (loadError || !pk) {
-    return (
-      <div className="space-y-4">
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {loadError || 'Picking not found.'}
-        </div>
-        <Link to="/admin/outbound/sales-order/picking" className="btn-secondary">
-          ← Back to Picking
-        </Link>
-      </div>
-    );
-  }
+  };
+
+  const columns: DocColumn<PickingItemRow>[] = [
+    ...(editable && !picking
+      ? [
+          {
+            label: 'Select',
+            header: (
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300 accent-brand-600"
+                checked={allTicked}
+                disabled={tickable.length === 0}
+                onChange={() => setTicked(allTicked ? new Set() : new Set(tickable.map((it) => it.id)))}
+                aria-label="Select every line left to pick"
+              />
+            ),
+            render: (r: PickingItemRow) => (
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300 accent-brand-600"
+                checked={ticked.has(r.id)}
+                disabled={!canTick(r)}
+                onChange={() => toggle(r.id)}
+                aria-label={`Select ${r.material_code ?? 'line'}`}
+              />
+            ),
+          },
+        ]
+      : []),
+    { label: 'No', render: (_r, i) => i + 1 },
+    { label: 'Status', render: (r) => <DocStatusPill status={lineStatus(r)} /> },
+    { label: 'Warehouse Name', render: () => pk.location ?? '-' },
+    { label: 'Material Code', render: (r) => r.material_code ?? '-' },
+    { label: 'Material Name', render: (r) => r.material_name ?? '-' },
+    { label: 'Material Type', render: (r) => r.material_type ?? '-' },
+    { label: 'Material Category', render: (r) => r.material_category ?? '-' },
+    { label: 'Available Qty', align: 'right', render: (r) => qty(r.bin_available_qty) },
+    { label: 'UOM', render: (r) => r.uom ?? '-' },
+    { label: 'Supplier', render: () => '-' },
+    { label: 'Planned Qty', align: 'right', render: (r) => qty(r.request_qty) },
+    { label: 'Actual Qty', align: picking ? 'center' : 'right', render: stepper('actual', (r) => r.actual_qty) },
+    { label: 'Quality Issue', align: picking ? 'center' : 'right', render: stepper('quality', (r) => r.quality_issue) },
+    { label: 'Quantity Issue', align: picking ? 'center' : 'right', render: stepper('qtyIssue', (r) => r.qty_issue) },
+    {
+      label: 'Remaining Qty',
+      align: 'right',
+      render: (r) => qty(picking && inputs[r.id] ? r.remaining_qty - handled(inputs[r.id]) : r.remaining_qty),
+    },
+    { label: 'Picking Progress', render: (r) => `${qty(r.progress.done)}/${qty(r.progress.total)}` },
+    { label: 'Bin Label', render: (r) => r.bin_label ?? '-' },
+    { label: 'Shelf Label', render: (r) => r.shelf_label ?? '-' },
+    { label: 'Aisle Name', render: (r) => r.aisle_name ?? '-' },
+    { label: 'Picker', render: (r) => r.picker?.name ?? '-' },
+    { label: 'Last Modified By', render: (r) => r.updated_by ?? '-' },
+    { label: 'Last Modified At', render: (r) => (r.updated_at ? fmtStamp(r.updated_at) : '-') },
+  ];
+
+  const listColumns = ['No', 'Material Code', 'Material Name', 'UoM', 'Bin Label', 'Planned Qty', 'Actual Qty', 'Quality Issue', 'Quantity Issue', 'Remaining Qty', 'Picker'];
+  const listRows = pk.items.map((it, i) => [
+    i + 1, it.material_code, it.material_name, it.uom, it.bin_label, it.request_qty, it.actual_qty, it.quality_issue, it.qty_issue, it.remaining_qty, it.picker?.name,
+  ]);
+  const meta = [
+    { label: 'Status', value: pk.status },
+    { label: 'Transaction ID', value: pk.source_number },
+    { label: isTransfer ? 'TO ID' : 'SO ID', value: pk.outbound_id },
+    { label: 'Picking ID', value: pk.picking_id },
+    { label: 'Warehouse', value: pk.location },
+    { label: isTransfer ? 'Destination Warehouse' : 'Customer Name', value: pk.customer },
+    { label: 'Created At', value: fmtStamp(pk.created_at) },
+  ];
+  const menu = [
+    {
+      label: 'Print',
+      icon: icons.printer,
+      onClick: () =>
+        printDoc({
+          title: `Picking List — ${pk.picking_id}`,
+          subtitle: `${pk.source_number ?? '-'} · ${pk.location ?? '-'}`,
+          meta,
+          tables: [{ heading: 'Material List', columns: listColumns, rows: listRows }],
+        }),
+    },
+    { label: 'Export', icon: icons.download, onClick: () => exportCsv(`${pk.picking_id}.csv`, listColumns, listRows) },
+  ];
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <Link
-            to={`${pk.source_type === 'TRANSFER_ORDER' ? '/admin/outbound/transfer-stock' : '/admin/outbound/sales-order'}/picking`}
-            className="mt-1 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-            aria-label="Back"
-          >
-            <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-            </svg>
-          </Link>
-          <div>
-            <h1 className="page-title">{pk.picking_id}</h1>
-            <p className="page-subtitle">
-              {pk.customer ?? '—'} · {pk.location ?? 'No location'}
-            </p>
-          </div>
-        </div>
-        <span className={`badge ${statusBadge(pk.status)}`}>{statusLabel(pk.status)}</span>
-      </div>
-
-      <div className="card p-5">
-        <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Picking Document
-        </h3>
-        <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
-          <Meta label="Picking ID" value={pk.picking_id} />
-          {pk.source_type === 'TRANSFER_ORDER' ? (
-            <Meta
-              label="TO Number"
-              value={
-                pk.to_id ? (
-                  <Link
-                    to={`/admin/outbound/transfer-stock/list/${pk.to_id}`}
-                    className="text-brand-700 hover:underline"
-                  >
-                    {pk.to_number ?? '—'}
-                  </Link>
-                ) : (
-                  pk.to_number
-                )
-              }
-            />
-          ) : (
-            <Meta
-              label="SO Number"
-              value={
-                pk.so_id ? (
-                  <Link to={`/admin/outbound/sales-order/list/${pk.so_id}`} className="text-brand-700 hover:underline">
-                    {pk.so_number ?? '—'}
-                  </Link>
-                ) : (
-                  pk.so_number
-                )
-              }
-            />
-          )}
-          <Meta label="Location" value={pk.location} />
-          <Meta
-            label={pk.source_type === 'TRANSFER_ORDER' ? 'Warehouse Destination' : 'Customer'}
-            value={pk.customer}
-          />
-          <Meta label="Status" value={statusLabel(pk.status)} />
-        </dl>
-      </div>
-
-      {/* Realtime summary */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-        <Summary label="Request Qty" value={pk.totals.request} />
-        <Summary label="Total Actual" value={live.actual} accent="text-brand-700" />
-        <Summary label="Total Qty Issue" value={live.qtyIssue} accent="text-amber-700" />
-        <Summary label="Total Quality Issue" value={live.quality} accent="text-rose-700" />
-        <Summary label="Remaining (realtime)" value={live.remaining} accent="text-slate-800" />
-      </div>
-
-      <div className="card overflow-hidden">
-        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-            Material Detail
-          </h3>
-          {editable && (
-            <button className="btn-primary" onClick={handleSave} disabled={saving}>
-              {saving ? 'Saving…' : 'Save Progress'}
-            </button>
-          )}
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="table-head">
-              <tr>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Material</th>
-                <th className="px-4 py-3">Bin</th>
-                <th className="px-4 py-3 text-right">Request</th>
-                <th className="px-4 py-3 text-right">Actual</th>
-                <th className="px-4 py-3 text-right">Qty Issue</th>
-                <th className="px-4 py-3 text-right">Quality Issue</th>
-                <th className="px-4 py-3 text-right">Remaining</th>
-                {editable && <th className="px-4 py-3 text-center">Input (Actual / Qty / Quality)</th>}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {pk.items.map((it) => {
-                const f = inputs[it.id] ?? { actual: 0, qtyIssue: 0, quality: 0 };
-                const rowInput =
-                  (Number(f.actual) || 0) + (Number(f.qtyIssue) || 0) + (Number(f.quality) || 0);
-                const rowRemaining = it.remaining_qty - rowInput;
-                const rowEditable = editable && it.remaining_qty > 0;
-                return (
-                  <tr key={it.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-3">
-                      <span className={`badge ${statusBadge(it.status)}`}>
-                        {statusLabel(it.status)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-slate-800">{it.material_code ?? '—'}</div>
-                      <div className="text-xs text-slate-400">{it.material_name ?? ''}</div>
-                    </td>
-                    <td className="px-4 py-3 text-slate-600">{it.bin_label ?? '—'}</td>
-                    <td className="px-4 py-3 text-right text-slate-600">{it.request_qty}</td>
-                    <td className="px-4 py-3 text-right text-slate-600">{it.actual_qty}</td>
-                    <td className="px-4 py-3 text-right text-slate-600">{it.qty_issue}</td>
-                    <td className="px-4 py-3 text-right text-slate-600">{it.quality_issue}</td>
-                    <td className={`px-4 py-3 text-right font-medium ${rowRemaining < 0 ? 'text-rose-600' : 'text-slate-800'}`}>
-                      {rowRemaining}
-                    </td>
-                    {editable && (
-                      <td className="px-4 py-3">
-                        {rowEditable ? (
-                          <div className="flex items-center justify-center gap-1.5">
-                            <input
-                              type="number" step="any" min={0}
-                              className="input w-16 text-right text-xs"
-                              value={f.actual}
-                              onChange={(e) => patch(it.id, { actual: Number(e.target.value) })}
-                            />
-                            <input
-                              type="number" step="any" min={0}
-                              className="input w-16 text-right text-xs"
-                              value={f.qtyIssue}
-                              onChange={(e) => patch(it.id, { qtyIssue: Number(e.target.value) })}
-                            />
-                            <input
-                              type="number" step="any" min={0}
-                              className="input w-16 text-right text-xs"
-                              value={f.quality}
-                              onChange={(e) => patch(it.id, { quality: Number(e.target.value) })}
-                            />
-                          </div>
-                        ) : (
-                          <div className="text-center text-xs text-slate-300">done</div>
-                        )}
-                      </td>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Summary({ label, value, accent = 'text-slate-800' }: { label: string; value: number; accent?: string }) {
-  return (
-    <div className="card p-4">
-      <div className="text-xs text-slate-400">{label}</div>
-      <div className={`mt-1 text-xl font-semibold ${accent}`}>{value}</div>
-    </div>
-  );
-}
-
-function Meta({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div>
-      <dt className="text-xs text-slate-400">{label}</dt>
-      <dd className="font-medium text-slate-700">
-        {value || <span className="text-slate-300">—</span>}
-      </dd>
-    </div>
+    <DetailCard
+      title="Picking List Detail"
+      backTo={`${base}/picking`}
+      actions={
+        picking ? (
+          <>
+            <SecondaryButton onClick={() => setPicking(false)} disabled={saving}>
+              Cancel
+            </SecondaryButton>
+            <ConfirmButton onClick={confirmPick} disabled={saving}>
+              {saving ? 'Saving…' : 'Confirm'}
+            </ConfirmButton>
+          </>
+        ) : (
+          <>
+            <ToolbarActions actions={menu} />
+            <RefreshButton onClick={load} />
+            {chosen.length > 0 && <PrimaryButton onClick={startPick}>Pick</PrimaryButton>}
+          </>
+        )
+      }
+    >
+      <InfoGrid
+        fields={[
+          { label: 'Status', value: <DocStatusPill status={pk.status} /> },
+          { label: 'Transaction ID', value: pk.source_number },
+          { label: isTransfer ? 'TO ID' : 'SO ID', value: pk.outbound_id },
+          { label: 'Picking ID', value: pk.picking_id },
+          { label: 'Doc Type', value: 'Picking List' },
+          { label: 'Ownership', value: pk.ownership },
+          { label: 'Origin Warehouse', value: pk.location },
+          { label: 'Destination Warehouse', value: isTransfer ? pk.destination : null },
+          { label: 'Customer Name', value: isTransfer ? null : pk.customer },
+          { label: 'Created By', value: pk.created_by },
+          { label: 'Created At', value: fmtStamp(pk.created_at) },
+          { label: 'Last Modified By', value: pk.updated_by },
+          { label: 'Last Modified At', value: pk.updated_by ? fmtStamp(pk.updated_at) : null },
+        ]}
+      />
+      <DocTable
+        rows={picking ? chosen : pk.items}
+        columns={columns}
+        searchText={materialText}
+        searchPlaceholder="Search..."
+        rowClass={(r) => (ticked.has(r.id) && !picking ? 'bg-brand-50/50' : '')}
+      />
+    </DetailCard>
   );
 }

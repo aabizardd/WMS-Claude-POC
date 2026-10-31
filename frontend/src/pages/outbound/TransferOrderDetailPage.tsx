@@ -177,7 +177,8 @@ export default function TransferOrderDetailPage() {
     );
   }
 
-  const showGenerate = canGenerate && TO_PICKABLE_STATUSES.includes(to.status_name ?? '');
+  // A user of the destination warehouse sees the TO but does not pick it.
+  const showGenerate = canGenerate && to.can_pick !== false && TO_PICKABLE_STATUSES.includes(to.status_name ?? '');
   const notYet = () => toast.info('This is not available yet.');
 
   return (
@@ -247,7 +248,7 @@ export default function TransferOrderDetailPage() {
             }
           />
           <Info label="Transaction ID" value={to.tran_id} />
-          <Info label="TO ID" value="-" />
+          <Info label="TO ID" value={to.outbound_id} />
           <Info label="Doc Type" value="Transfer Order" />
           <Info label="Ownership" value={to.ownership} />
           <Info label="Origin Warehouse" value={to.warehouse?.name ?? locationName(to.from_location_name)} />
@@ -358,7 +359,7 @@ export default function TransferOrderDetailPage() {
         pickers={pickers}
         docInfo={[
           { label: 'Transaction ID', value: to.tran_id },
-          { label: 'TO ID', value: '-' },
+          { label: 'TO ID', value: to.outbound_id },
           { label: 'ERP Doc ID', value: to.oracle_id },
           { label: 'Doc Type', value: 'Transfer Order' },
           { label: 'Origin Warehouse', value: to.warehouse?.name ?? locationName(to.from_location_name) },

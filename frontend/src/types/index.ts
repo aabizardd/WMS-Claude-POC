@@ -455,15 +455,23 @@ export interface PurchaseOrderRow {
   oracle_id: string;
   po_number: string | null;
   po_date: string | null;
+  /** Oracle status code (e.g. "pendingReceipt") and its label. */
   po_status: string | null;
   po_status_label: string | null;
+  /** What the Request screens show: "On Progress" while a GR is open, else the Oracle label. */
+  status: string | null;
   vendor_name: string | null;
-  currency_symbol: string | null;
-  subsidiary_display: string | null;
+  ownership: string | null;
+  location_name: string | null;
   warehouse: { id: string; name: string } | null;
-  line_count: number;
-  last_modified: string | null;
+  memo: string | null;
+  created_by: string | null;
   created_at: string;
+  last_modified_by: string | null;
+  last_modified: string | null;
+  line_count: number;
+  /** With include_items: the PO's lines for the list's accordion. */
+  items?: PurchaseOrderLine[];
 }
 
 export interface PurchaseOrderLine {
@@ -471,45 +479,37 @@ export interface PurchaseOrderLine {
   line_id: string;
   // Oracle line number (1..n) — the "line" used for item-receipt.
   line_number: number | null;
-  item_oracle_id: string | null;
   item_display: string | null;
-  item_type: string | null;
-  description: string | null;
-  quantity: number;
-  committed: number;
-  backordered: number;
-  quantity_received: number;
-  quantity_billed: number;
-  qty_remaining_to_receive: number;
-  location_name: string | null;
-  department_display: string | null;
-  class_display: string | null;
-  inbound_shipment_number: string | null;
   material_id: string | null;
+  material_code: string | null;
+  material_name: string | null;
+  material_type: string | null;
+  material_category: string | null;
+  uom: string | null;
+  quantity: number;
+  /** On GR Lists not received yet. */
+  gr_qty: number;
+  /** Received in Oracle. */
+  receive_qty: number;
+  /** Still to put on a GR List. */
+  remain_qty: number;
 }
 
-export interface PurchaseOrderDetail {
-  id: string;
-  oracle_id: string;
-  po_number: string | null;
-  po_date: string | null;
-  po_status: string | null;
-  po_status_label: string | null;
-  memo: string | null;
-  vendor_id: number | null;
-  vendor_name: string | null;
-  currency_symbol: string | null;
-  approval_status_display: string | null;
-  subsidiary_display: string | null;
-  class_display: string | null;
-  department_display: string | null;
-  location_name: string | null;
-  warehouse: { id: string; name: string } | null;
-  created_by_netsuite: string | null;
-  date_created: string | null;
-  last_modified: string | null;
-  created_at: string;
+export interface PurchaseOrderDetail extends Omit<PurchaseOrderRow, 'items' | 'line_count'> {
   lines: PurchaseOrderLine[];
+}
+
+export type PurchaseOrderFilterField =
+  | 'material_code'
+  | 'warehouse'
+  | 'created_at'
+  | 'material_name'
+  | 'transaction_id'
+  | 'erp_doc_id';
+
+export interface PurchaseOrderFilter {
+  field: PurchaseOrderFilterField;
+  values: string[];
 }
 
 export interface PurchaseOrderSyncResult {
@@ -603,6 +603,10 @@ export interface TransferOrderLine {
 }
 
 export interface TransferOrderDetail {
+  /** WMS's outbound number ("TO ID"). */
+  outbound_id?: string | null;
+  /** False when the user's warehouse is only the destination (view only). */
+  can_pick?: boolean;
   id: string;
   oracle_id: string;
   tran_id: string | null;
@@ -1116,6 +1120,8 @@ export interface SalesOrderRow {
   last_modified_by?: string | null;
   last_modified: string | null;
   created_at: string;
+  /** With include_items: the order's lines for the list's accordion. */
+  items?: SalesOrderItemRow[];
 }
 
 export interface SalesOrderItemRow {
@@ -1144,6 +1150,8 @@ export interface SalesOrderItemRow {
 export interface SalesOrderDetail {
   id: string;
   oracle_id: string;
+  /** WMS's outbound number ("SO ID"). */
+  outbound_id?: string | null;
   tran_id: string | null;
   tran_date: string | null;
   status_code: string | null;
@@ -1171,20 +1179,34 @@ export interface SalesOrderSyncResult extends ErpSyncResult {
 
 // ===== Outbound: Picking =====
 
-export interface PickingRow {
+/** Header fields every picking / packing screen shows (as on WMS dev). */
+export interface OutboundDocHeader {
   id: string;
-  picking_id: string;
   source_type: 'SALES_ORDER' | 'TRANSFER_ORDER';
   so_id: string | null;
   so_number: string | null;
   to_id: string | null;
   to_number: string | null;
+  /** The order's Transaction ID (SO or TO). */
   source_number: string | null;
+  /** WMS's outbound number of the order ("SO ID"). */
+  outbound_id: string | null;
   location: string | null;
+  warehouse_id: string | null;
+  ownership: string | null;
+  /** SO: the customer; TO: the destination warehouse. */
   customer: string | null;
   status: string;
-  item_count: number;
+  created_by: string | null;
   created_at: string;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+/** "10/12" — done out of total. */
+export interface Progress {
+  done: number;
+  total: number;
 }
 
 export interface PickingItemRow {
@@ -1192,15 +1214,32 @@ export interface PickingItemRow {
   status: string;
   material_code: string | null;
   material_name: string | null;
+  material_type: string | null;
+  material_category: string | null;
+  uom: string | null;
   bin_available_qty: number;
   request_qty: number;
   actual_qty: number;
   qty_issue: number;
   quality_issue: number;
   remaining_qty: number;
+  progress: Progress;
   bin_id: string | null;
   bin_label: string | null;
+  shelf_label: string | null;
+  aisle_name: string | null;
   picker: { id: number; name: string } | null;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+export interface PickingRow extends OutboundDocHeader {
+  picking_id: string;
+  erp_doc_id: string | null;
+  item_count: number;
+  progress: Progress;
+  /** With include_items: the lines for the list's accordion. */
+  items?: PickingItemRow[];
 }
 
 export interface PickingTotals {
@@ -1211,53 +1250,43 @@ export interface PickingTotals {
   remaining: number;
 }
 
-export interface PickingDetail {
-  id: string;
+export interface PickingDetail extends OutboundDocHeader {
   picking_id: string;
-  source_type: 'SALES_ORDER' | 'TRANSFER_ORDER';
-  so_id: string | null;
-  so_number: string | null;
-  to_id: string | null;
-  to_number: string | null;
-  location: string | null;
-  customer: string | null;
-  status: string;
-  created_at: string;
+  erp_doc_id: string | null;
+  /** TO source: where the stock goes. */
+  destination: string | null;
   totals: PickingTotals;
   items: PickingItemRow[];
 }
 
+/** Fields the Picking / Packing lists and Outbound History filter on. */
+export type OutboundDocFilterField =
+  | 'material_code'
+  | 'material_name'
+  | 'warehouse_name'
+  | 'customer_name'
+  | 'tran_id'
+  | 'outbound_id'
+  | 'picking_code'
+  | 'packing_code'
+  | 'delivery_code'
+  | 'created_by_name';
+
+export interface OutboundDocFilter {
+  field: OutboundDocFilterField;
+  values: string[];
+}
+
 // ===== Outbound: Packing =====
-
-export interface AvailablePickingRow {
-  id: string;
-  picking_id: string;
-  so_number: string | null;
-  customer: string | null;
-  location: string | null;
-  item_count: number;
-  created_at: string;
-}
-
-export interface PackingRow {
-  id: string;
-  packing_id: string;
-  source_type: 'SALES_ORDER' | 'TRANSFER_ORDER';
-  picking_id: string | null;
-  so_number: string | null;
-  to_number: string | null;
-  source_number: string | null;
-  customer: string | null;
-  location: string | null;
-  status: string;
-  item_count: number;
-  created_at: string;
-}
 
 export interface PackingItemRow {
   id: string;
   material_code: string | null;
   material_name: string | null;
+  material_type: string | null;
+  material_category: string | null;
+  material_weight: number | null;
+  uom: string | null;
   qty: number; // base (target to pack)
   actual_qty: number;
   qty_issue: number;
@@ -1265,6 +1294,18 @@ export interface PackingItemRow {
   remaining_qty: number;
   bin_label: string | null;
   picker: { id: number; name: string } | null;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+export interface PackingRow extends OutboundDocHeader {
+  packing_id: string;
+  /** The primary picking. */
+  picking_id: string | null;
+  /** Every picking merged into the packing, primary first. */
+  pickings: { id: string; picking_id: string }[];
+  item_count: number;
+  items?: PackingItemRow[];
 }
 
 export interface PackingTotals {
@@ -1275,21 +1316,39 @@ export interface PackingTotals {
   remaining: number;
 }
 
-export interface PackingDetail {
-  id: string;
-  packing_id: string;
-  source_type: 'SALES_ORDER' | 'TRANSFER_ORDER';
-  picking_id: string | null;
-  so_id: string | null;
-  so_number: string | null;
-  to_id: string | null;
-  to_number: string | null;
-  customer: string | null;
-  location: string | null;
-  status: string;
-  created_at: string;
+export interface PackingDetail extends Omit<PackingRow, 'items' | 'item_count'> {
   totals: PackingTotals;
   items: PackingItemRow[];
+}
+
+// ===== Outbound: History (one row per picked material, as on WMS dev) =====
+
+export interface OutboundHistoryRow {
+  id: string;
+  outbound_id: string | null;
+  source_number: string | null;
+  picking_id: string;
+  packing_id: string | null;
+  delivery_id: string | null;
+  sd_number: string | null;
+  erp_doc_id: string | null;
+  doc_type: string;
+  ownership: string | null;
+  warehouse: string | null;
+  customer: string | null;
+  material_code: string | null;
+  material_name: string | null;
+  material_category: string | null;
+  material_classification: string | null;
+  uom: string | null;
+  request_qty: number;
+  picked_qty: number;
+  packed_qty: number;
+  delivered_qty: number;
+  material_dimension: string | null;
+  material_weight: number | null;
+  created_by: string | null;
+  created_at: string;
 }
 
 // ===== Outbound: Delivery =====
@@ -1687,7 +1746,10 @@ export interface TransferGrRow {
   document_type: string;
   ownership: string | null;
   warehouse: string | null;
-  origin_warehouse: string | null;
+  /** Transfer IN: where the stock comes from. */
+  origin_warehouse?: string | null;
+  /** Local Vendor: the PO's vendor. */
+  supplier?: string | null;
   item_count: number;
   created_by: string | null;
   created_at: string;
@@ -1714,6 +1776,7 @@ export interface TransferGrListLine {
 export type TransferGrFilterField =
   | 'material_code'
   | 'origin_warehouse'
+  | 'warehouse'
   | 'created_at'
   | 'material_name'
   | 'transaction_id'
@@ -1788,7 +1851,8 @@ export interface TransferHistoryRow {
   receive_qty: number;
   warehouse: string | null;
   destination_bin: string | null;
-  origin_warehouse: string | null;
+  origin_warehouse?: string | null;
+  supplier?: string | null;
   ownership: string | null;
   created_at: string;
 }

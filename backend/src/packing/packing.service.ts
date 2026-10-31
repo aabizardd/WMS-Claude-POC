@@ -11,6 +11,9 @@ import { InventoryService } from '../inventory/inventory.service';
 import { reopenPicking } from '../common/outbound-revert';
 import type { GeneratePackingDto } from './dto/generate-packing.dto';
 import type { ProgressPackingDto } from './dto/progress-packing.dto';
+import type { QueryPackingDto } from './dto/query-packing.dto';
+import type { OutboundDocFilterField } from '../picking/dto/query-picking.dto';
+import { outboundBinSelect, outboundMaterialSelect } from '../picking/picking.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { scopeWhere, inScope } from '../common/warehouse-scope';
 
@@ -23,6 +26,29 @@ const PACKING_SORTABLE: Record<string, (d: SortDir) => PackingOrder> = {
   customer: (d) => ({ picking: { salesOrder: { customerName: d } } }),
   status: (d) => ({ status: d }),
   created_at: (d) => ({ createdAt: d }),
+  updated_at: (d) => ({ updatedAt: d }),
+  created_by: (d) => ({ createdBy: { name: d } }),
+};
+
+const ci = (v: string) => ({ contains: v, mode: 'insensitive' as const });
+
+/** A condition on a packing's source order (through its pickings). */
+const viaPickings = (w: Prisma.PickingWhereInput): Prisma.PackingWhereInput => ({ pickings: { some: w } });
+
+/** One value of one list filter as a packing condition (values OR-ed, fields AND-ed). */
+const PACKING_FILTERS: Record<OutboundDocFilterField, (v: string) => Prisma.PackingWhereInput> = {
+  material_code: (v) => ({ items: { some: { OR: [{ materialCode: ci(v) }, { material: { materialCode: ci(v) } }] } } }),
+  material_name: (v) => ({ items: { some: { OR: [{ materialName: ci(v) }, { material: { materialName: ci(v) } }] } } }),
+  warehouse_name: (v) => ({ warehouse: { name: ci(v) } }),
+  customer_name: (v) =>
+    viaPickings({ OR: [{ salesOrder: { customerName: ci(v) } }, { transferOrder: { toLocationName: ci(v) } }] }),
+  tran_id: (v) => viaPickings({ OR: [{ salesOrder: { tranId: ci(v) } }, { transferOrder: { tranId: ci(v) } }] }),
+  outbound_id: (v) =>
+    viaPickings({ OR: [{ salesOrder: { outboundId: ci(v) } }, { transferOrder: { outboundId: ci(v) } }] }),
+  picking_code: (v) => viaPickings({ pickingCode: ci(v) }),
+  packing_code: (v) => ({ packingCode: ci(v) }),
+  delivery_code: (v) => ({ deliveryItems: { some: { delivery: { deliveryCode: ci(v) } } } }),
+  created_by_name: (v) => ({ createdBy: { name: ci(v) } }),
 };
 
 export interface WarehouseScope {
@@ -34,39 +60,46 @@ export interface WarehouseScope {
   warehouseIds: string[] | null;
 }
 
-const listInclude = {
-  warehouse: { select: { id: true, name: true } },
+const headerInclude = {
+  warehouse: { select: { id: true, name: true, subsidiaryName: true } },
   picking: {
     select: {
       pickingCode: true,
-      salesOrder: { select: { id: true, tranId: true, customerName: true } },
-      transferOrder: { select: { id: true, tranId: true, toLocationName: true } },
+      salesOrder: { select: { id: true, tranId: true, outboundId: true, customerName: true } },
+      transferOrder: { select: { id: true, tranId: true, outboundId: true, toLocationName: true } },
     },
   },
+  // Every picking merged into this packing ("PICK-… +1").
+  pickings: { select: { id: true, pickingCode: true }, orderBy: { pickingCode: 'asc' as const } },
+  createdBy: { select: { name: true } },
+  updatedBy: { select: { name: true } },
+} satisfies Prisma.PackingInclude;
+
+const itemsInclude = {
+  include: {
+    material: { select: outboundMaterialSelect },
+    bin: { select: outboundBinSelect },
+    picker: { select: { id: true, name: true } },
+    // The Picking Bin the line came from.
+    pickingItem: { select: { bin: { select: { binLabel: true } } } },
+  },
+  orderBy: { createdAt: 'asc' as const },
+} satisfies Prisma.Packing$itemsArgs;
+
+const listInclude = {
+  ...headerInclude,
   _count: { select: { items: true } },
 } satisfies Prisma.PackingInclude;
 
 const detailInclude = {
-  warehouse: { select: { id: true, name: true } },
-  picking: {
-    select: {
-      pickingCode: true,
-      salesOrder: { select: { id: true, tranId: true, customerName: true } },
-      transferOrder: { select: { id: true, tranId: true, toLocationName: true } },
-    },
-  },
-  items: {
-    include: {
-      material: { select: { materialCode: true, materialName: true } },
-      bin: { select: { id: true, binLabel: true } },
-      picker: { select: { id: true, name: true } },
-    },
-    orderBy: { createdAt: 'asc' as const },
-  },
+  ...headerInclude,
+  items: itemsInclude,
 } satisfies Prisma.PackingInclude;
 
+type PackingHeader = Prisma.PackingGetPayload<{ include: typeof headerInclude }>;
 type PackingList = Prisma.PackingGetPayload<{ include: typeof listInclude }>;
 type PackingDetail = Prisma.PackingGetPayload<{ include: typeof detailInclude }>;
+type PackingLine = Prisma.PackingItemGetPayload<typeof itemsInclude>;
 
 @Injectable()
 export class PackingService {
@@ -83,17 +116,7 @@ export class PackingService {
 
   // ---------- read ----------
 
-  async findAll(
-    query: {
-      page?: number;
-      limit?: number;
-      search?: string;
-      source?: string;
-      sort_by?: string;
-      sort_order?: string;
-    },
-    scope: WarehouseScope,
-  ) {
+  async findAll(query: QueryPackingDto, scope: WarehouseScope) {
     const page = Number(query.page) || 1;
     const limit = Number(query.limit) || 10;
     const orderBy = buildOrderBy(query.sort_by, query.sort_order, PACKING_SORTABLE, {
@@ -128,11 +151,21 @@ export class PackingService {
       ];
     }
 
+    // Packings have no On Progress: they are Open until every line is packed.
+    if (query.status === 'Open' || query.status === 'Closed') where.status = query.status;
+    const and: Prisma.PackingWhereInput[] = [];
+    for (const f of query.filters ?? []) {
+      const values = (f.values ?? []).map((v) => v.trim()).filter(Boolean);
+      if (values.length) and.push({ OR: values.map(PACKING_FILTERS[f.field]) });
+    }
+    if (and.length) where.AND = and;
+
+    const withItems = query.include_items === 'true';
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.packing.count({ where }),
       this.prisma.packing.findMany({
         where,
-        include: listInclude,
+        include: withItems ? { ...listInclude, items: itemsInclude } : listInclude,
         orderBy,
         skip: (page - 1) * limit,
         take: limit,
@@ -148,7 +181,10 @@ export class PackingService {
         sort_by: query.sort_by ?? null,
         sort_order: query.sort_order ?? null,
       },
-      rows: rows.map((r) => this.serializeList(r)),
+      rows: rows.map((r) => ({
+        ...this.serializeList(r),
+        ...(withItems ? { items: ((r as unknown as { items: PackingLine[] }).items).map((it) => this.serializeLine(it, r)) } : {}),
+      })),
     };
   }
 
@@ -282,6 +318,7 @@ export class PackingService {
           pickingId: first.id, // primary picking (first selected)
           warehouseId: first.warehouseId,
           status: 'Open',
+          createdById: scope.userId ?? null,
           items: { create: items },
         },
       });
@@ -410,6 +447,9 @@ export class PackingService {
         it.remainingQty = remaining;
       }
 
+      // Who recorded this progress (also bumps Last Modified At).
+      await tx.packing.update({ where: { id }, data: { updatedById: scope.userId ?? null } });
+
       const all = [...itemById.values()];
       const allClosed = all.every((it) => it.remainingQty <= 1e-9);
       if (!allClosed) return false;
@@ -525,26 +565,62 @@ export class PackingService {
 
   // ---------- serializers ----------
 
-  private serializeList(p: PackingList) {
+  /** The header fields the list, the detail and the accordion share. */
+  private serializeHeader(p: PackingHeader) {
+    const so = p.picking?.salesOrder;
+    const to = p.picking?.transferOrder;
     return {
       id: p.id,
       packing_id: p.packingCode,
       source_type: p.sourceType,
       picking_id: p.picking?.pickingCode ?? null,
-      so_number: p.picking?.salesOrder?.tranId ?? null,
-      to_number: p.picking?.transferOrder?.tranId ?? null,
-      source_number:
-        p.picking?.salesOrder?.tranId ??
-        p.picking?.transferOrder?.tranId ??
-        null,
-      customer:
-        p.picking?.salesOrder?.customerName ??
-        p.picking?.transferOrder?.toLocationName ??
-        null,
+      // Every merged picking, primary first.
+      pickings: p.pickings
+        .map((pk) => ({ id: pk.id, picking_id: pk.pickingCode }))
+        .sort((a, b) => Number(b.picking_id === p.picking?.pickingCode) - Number(a.picking_id === p.picking?.pickingCode)),
+      so_id: so?.id ?? null,
+      so_number: so?.tranId ?? null,
+      to_id: to?.id ?? null,
+      to_number: to?.tranId ?? null,
+      source_number: so?.tranId ?? to?.tranId ?? null,
+      // WMS's outbound number of the order ("SO ID" on WMS dev).
+      outbound_id: so?.outboundId ?? to?.outboundId ?? null,
+      customer: so?.customerName ?? to?.toLocationName ?? null,
       location: p.warehouse?.name ?? null,
+      warehouse_id: p.warehouse?.id ?? null,
+      ownership: p.warehouse?.subsidiaryName ?? null,
       status: p.status,
-      item_count: p._count.items,
+      created_by: p.createdBy?.name ?? null,
       created_at: p.createdAt,
+      updated_by: p.updatedBy?.name ?? null,
+      updated_at: p.updatedAt,
+    };
+  }
+
+  private serializeList(p: PackingList) {
+    return { ...this.serializeHeader(p), item_count: p._count.items };
+  }
+
+  private serializeLine(it: PackingLine, p: { updatedAt: Date; updatedBy?: { name: string } | null }) {
+    const handled = it.actualQty + it.qtyIssue + it.qualityIssue;
+    return {
+      id: it.id,
+      material_code: it.materialCode ?? it.material?.materialCode ?? null,
+      material_name: it.materialName ?? it.material?.materialName ?? null,
+      material_type: it.material?.materialType?.materialTypeName ?? null,
+      material_category: it.material?.materialCategory?.materialCategoryName ?? null,
+      material_weight: it.material?.materialWeight ?? null,
+      uom: it.material?.primaryUom?.uomCode ?? null,
+      qty: it.qty, // base (target to pack)
+      actual_qty: it.actualQty,
+      qty_issue: it.qtyIssue,
+      quality_issue: it.qualityIssue,
+      remaining_qty: it.remainingQty,
+      bin_label: it.bin?.binLabel ?? it.pickingItem?.bin?.binLabel ?? null,
+      picker: it.picker ? { id: it.picker.id, name: it.picker.name } : null,
+      // Lines carry no audit of their own: a packed line shows the packing's last change.
+      updated_by: handled > 0 ? (p.updatedBy?.name ?? null) : null,
+      updated_at: handled > 0 ? p.updatedAt : null,
     };
   }
 
@@ -560,38 +636,9 @@ export class PackingService {
       { request: 0, actual: 0, qty_issue: 0, quality_issue: 0, remaining: 0 },
     );
     return {
-      id: p.id,
-      packing_id: p.packingCode,
-      source_type: p.sourceType,
-      picking_id: p.picking?.pickingCode ?? null,
-      so_id: p.picking?.salesOrder?.id ?? null,
-      so_number: p.picking?.salesOrder?.tranId ?? null,
-      to_id: p.picking?.transferOrder?.id ?? null,
-      to_number: p.picking?.transferOrder?.tranId ?? null,
-      source_number:
-        p.picking?.salesOrder?.tranId ??
-        p.picking?.transferOrder?.tranId ??
-        null,
-      customer:
-        p.picking?.salesOrder?.customerName ??
-        p.picking?.transferOrder?.toLocationName ??
-        null,
-      location: p.warehouse?.name ?? null,
-      status: p.status,
-      created_at: p.createdAt,
+      ...this.serializeHeader(p),
       totals,
-      items: p.items.map((it) => ({
-        id: it.id,
-        material_code: it.materialCode ?? it.material?.materialCode ?? null,
-        material_name: it.materialName ?? it.material?.materialName ?? null,
-        qty: it.qty, // base (target to pack)
-        actual_qty: it.actualQty,
-        qty_issue: it.qtyIssue,
-        quality_issue: it.qualityIssue,
-        remaining_qty: it.remainingQty,
-        bin_label: it.bin?.binLabel ?? null,
-        picker: it.picker ? { id: it.picker.id, name: it.picker.name } : null,
-      })),
+      items: p.items.map((it) => this.serializeLine(it, p)),
     };
   }
 }

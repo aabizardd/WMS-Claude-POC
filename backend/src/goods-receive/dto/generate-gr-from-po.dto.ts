@@ -8,24 +8,25 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-export class GenerateGrFromPoItemDto {
+export class GenerateGrListFromPoItemDto {
   // WMS PurchaseOrderLine.id of the selected line.
   @IsString()
   lineId!: string;
 
-  // Actual received qty — sent to Oracle as the item-receipt quantity.
+  // Planned qty for this GR — at most what is still to be put on a GR.
   @IsNumber()
   @Min(0.0001)
-  qtyActual!: number;
+  plannedQty!: number;
 }
 
-export class GenerateGrFromPoDto {
+/** Generate GR List: an Open GR with planned quantities (no Oracle yet). */
+export class GenerateGrListFromPoDto {
   @IsString()
   purchaseOrderId!: string;
 
   @IsArray()
   @ArrayNotEmpty()
   @ValidateNested({ each: true })
-  @Type(() => GenerateGrFromPoItemDto)
-  items!: GenerateGrFromPoItemDto[];
+  @Type(() => GenerateGrListFromPoItemDto)
+  items!: GenerateGrListFromPoItemDto[];
 }

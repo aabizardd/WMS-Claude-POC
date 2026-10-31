@@ -78,6 +78,35 @@ const paged = <T>(q: QueryPibInboundDto, total: number, rows: T[]) => {
   };
 };
 
+/** One row of the PIB Goods Receive export: a GR line with its shipment header. */
+export interface PibGrExportRow {
+  status: string;
+  transaction_id: string | null;
+  gr_number: string;
+  erp_doc_id: string | null;
+  aju_number: string | null;
+  supplier: string | null;
+  ownership: string | null;
+  warehouse: string | null;
+  expected_shipping_date: string | null;
+  actual_shipping_date: string | null;
+  expected_delivery_date: string | null;
+  actual_delivery_date: string | null;
+  vessel_number: string | null;
+  bill_of_lading: string | null;
+  port: string | null;
+  created_by: string | null;
+  created_at: Date;
+  updated_at: Date;
+  material_code: string | null;
+  material_name: string | null;
+  uom: string | null;
+  po_number: string | null;
+  planned_qty: number;
+  actual_qty: number;
+  putaway_qty: number;
+}
+
 /** A GR is received once it leaves Open / Sync Failed. */
 const isReceived = (status: string) => status !== 'Open' && status !== 'SyncFailed';
 
@@ -307,6 +336,89 @@ export class PibInboundService {
       ),
       totals,
     };
+  }
+
+  /**
+   * The Goods Receive - PIB export (WMS dev's "PIB" sheet): one row per GR
+   * line, for every GR the list's filters match — not only one page — in the
+   * list's order; a Part Number / Material Name filter keeps only the matching
+   * lines. Yielded in batches so a large export streams.
+   */
+  async *exportRows(q: QueryPibInboundDto, scope: WarehouseScope): AsyncGenerator<PibGrExportRow[]> {
+    const where = await this.grWhere(q, scope);
+    const orderBy = buildOrderBy(q.sort_by, q.sort_order, GR_SORTABLE, { createdAt: 'desc' } as GrOrder);
+    // Part Number / Material Name filters keep only the matching lines, as the
+    // list's accordion does (values OR-ed, fields AND-ed).
+    const lineFilters = (q.filters ?? [])
+      .filter((f) => f.field === 'material_code' || f.field === 'material_name')
+      .map((f) => ({ field: f.field, values: (f.values ?? []).map((v) => v.trim().toLowerCase()).filter(Boolean) }))
+      .filter((f) => f.values.length);
+    const lineMatches = (code: string | null, name: string | null) =>
+      lineFilters.every((f) =>
+        f.values.some((v) => ((f.field === 'material_code' ? code : name) ?? '').toLowerCase().includes(v)),
+      );
+    const BATCH = 200;
+    for (let skip = 0; ; skip += BATCH) {
+      const grs = await this.prisma.goodsReceive.findMany({
+        where,
+        // The id keeps paging stable when the sort column has ties.
+        orderBy: [orderBy, { id: 'asc' }],
+        skip,
+        take: BATCH,
+        include: {
+          warehouse: { select: { name: true, subsidiaryName: true } },
+          createdBy: { select: { name: true } },
+        },
+      });
+      const mrns = await this.mrns(grs.map((g) => g.sourceDocId));
+      const lines = await this.prisma.mrnItem.findMany({
+        where: { mrnId: { in: [...mrns.keys()] } },
+        orderBy: [{ lineId: 'asc' }, { id: 'asc' }],
+      });
+      const mats = await this.materials(lines.map((l) => l.itemId));
+      const linesByMrn = new Map<string, MrnLine[]>();
+      for (const l of lines) linesByMrn.set(l.mrnId, [...(linesByMrn.get(l.mrnId) ?? []), l]);
+
+      const rows: PibGrExportRow[] = [];
+      for (const g of grs) {
+        const m = mrns.get(g.sourceDocId);
+        const received = isReceived(g.status);
+        for (const it of linesByMrn.get(g.sourceDocId) ?? []) {
+          const mat = this.materialFields(this.materialOf(mats, it.itemId), it);
+          if (!lineMatches(mat.material_code, mat.material_name)) continue;
+          const qv = this.lineQty(it, received);
+          rows.push({
+            status: g.status,
+            transaction_id: g.sourceDocNumber ?? m?.shipmentNumber ?? null,
+            gr_number: g.grNumber,
+            erp_doc_id: m?.oracleId ?? null,
+            aju_number: m?.ajuNumber ?? null,
+            supplier: it.vendorName,
+            ownership: g.warehouse?.subsidiaryName ?? null,
+            warehouse: g.warehouse?.name ?? null,
+            expected_shipping_date: m?.expectedShippingDate ?? null,
+            actual_shipping_date: m?.actualShippingDate ?? null,
+            expected_delivery_date: m?.expectedDeliveryDate ?? null,
+            actual_delivery_date: m?.actualDeliveryDate ?? null,
+            vessel_number: m?.vesselNumber ?? null,
+            bill_of_lading: m?.billOfLading ?? null,
+            port: m?.port ?? null,
+            created_by: g.createdBy?.name ?? SYSTEM_ACTOR,
+            created_at: g.createdAt,
+            updated_at: g.updatedAt,
+            material_code: mat.material_code,
+            material_name: mat.material_name,
+            uom: mat.uom,
+            po_number: it.poNumber,
+            planned_qty: qv.planned_qty,
+            actual_qty: qv.actual_qty,
+            putaway_qty: qv.putaway_qty,
+          });
+        }
+      }
+      if (rows.length) yield rows;
+      if (grs.length < BATCH) return;
+    }
   }
 
   async goodsReceive(id: string, scope: WarehouseScope) {

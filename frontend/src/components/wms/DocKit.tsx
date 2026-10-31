@@ -93,6 +93,10 @@ const STATUS_STYLE: Record<string, string> = {
   'On Progress': 'bg-[#FEF3C7] text-[#B45309] ring-[#B45309]',
   Closed: 'bg-[#EFFAF4] text-[#2E8F5C] ring-[#2E8F5C]',
   'Sync Failed': 'bg-[#FEF2F2] text-[#B91C1C] ring-[#B91C1C]',
+  // Picking / packing lines.
+  'Not Started': 'bg-neutral-100 text-neutral-600 ring-neutral-300',
+  'In Progress': 'bg-[#FEF3C7] text-[#B45309] ring-[#B45309]',
+  Completed: 'bg-[#EFFAF4] text-[#2E8F5C] ring-[#2E8F5C]',
 };
 
 /** "OnProgress" → "On Progress", "SyncFailed" → "Sync Failed". */
@@ -202,7 +206,10 @@ export function Stepper({
 }
 
 export interface DocColumn<T> {
+  /** Unique per table; shown as the header unless `header` is given. */
   label: string;
+  /** A header that is more than text (e.g. a select-all checkbox). */
+  header?: ReactNode;
   render: (row: T, index: number) => ReactNode;
   align?: 'left' | 'right' | 'center';
   width?: number;
@@ -264,7 +271,7 @@ export function DocTable<T extends { id: string }>({
               <tr>
                 {columns.map((c) => (
                   <th key={c.label} className={`${th} ${alignCls(c.align)}`} style={c.width ? { minWidth: c.width } : undefined}>
-                    {c.label}
+                    {c.header ?? c.label}
                   </th>
                 ))}
               </tr>

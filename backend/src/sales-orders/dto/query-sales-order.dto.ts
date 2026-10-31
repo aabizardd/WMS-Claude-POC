@@ -100,6 +100,11 @@ export class QuerySalesOrderDto extends SortableQueryDto {
   @IsString()
   status?: string;
 
+  /** "true" adds each order's lines (with their quantities), for the list's accordion. */
+  @IsOptional()
+  @IsString()
+  include_items?: string;
+
   /**
    * Up to five per-column filters, combined with AND. Sent as a JSON string so
    * one query param carries the whole set regardless of how the HTTP client

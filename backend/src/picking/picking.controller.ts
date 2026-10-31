@@ -28,6 +28,14 @@ export class PickingController {
     return this.service.findAll(query, user);
   }
 
+  // Outbound History: one row per picked material through packing and delivery.
+  // Declared before ':id'.
+  @Get('history')
+  @RequirePermissions('delivery:read')
+  history(@Query() query: QueryPickingDto, @CurrentUser() user: AuthUser) {
+    return this.service.history(query, user);
+  }
+
   // Data for the Generate Picking form (items with remaining + source bins).
   @Get('pickable/:salesOrderId')
   @RequirePermissions('picking:create')

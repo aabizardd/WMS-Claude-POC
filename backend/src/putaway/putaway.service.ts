@@ -415,9 +415,10 @@ export class PutawayService {
     }
 
     let hasRemaining = false;
-    // Transfer IN: one confirm settles the putaway — what was not handled has
-    // gone back to the GR to be put away on a new putaway.
-    const isTransfer = putaway.goodsReceive?.sourceType === 'TO';
+    // Transfer IN / Local Vendor (GR-line putaways): one confirm settles the
+    // putaway — what was not handled has gone back to the GR to be put away on
+    // a new putaway.
+    const isTransfer = putaway.goodsReceive?.sourceType === 'TO' || putaway.goodsReceive?.sourceType === 'PO';
     if (isTransfer && putaway.status === 'Closed') {
       throw new BadRequestException(`Putaway ${putaway.putawayCode} is already Closed`);
     }

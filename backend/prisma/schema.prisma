@@ -89,6 +89,10 @@ model User {
   goodsReceivesCreated GoodsReceive[]             @relation("GoodsReceiveCreator")
   deliveriesCreated    Delivery[]                 @relation("DeliveryCreator")
   deliveriesUpdated    Delivery[]                 @relation("DeliveryUpdater")
+  pickingsCreated      Picking[]                  @relation("PickingCreator")
+  pickingsUpdated      Picking[]                  @relation("PickingUpdater")
+  packingsCreated      Packing[]                  @relation("PackingCreator")
+  packingsUpdated      Packing[]                  @relation("PackingUpdater")
   adjustmentEvents     InventoryAdjustmentEvent[]
   stockMovements       StockMovement[]
 
@@ -621,6 +625,10 @@ model GoodsReceiveItem {
   materialCode        String?            @map("material_code")
   transferOrderItemId String?            @map("transfer_order_item_id")
   transferOrderItem   TransferOrderItem? @relation(fields: [transferOrderItemId], references: [id])
+  // PO source: the Purchase Order line it receives (planned on an Open GR
+  // List, received in Oracle on Receive).
+  purchaseOrderLineId String?            @map("purchase_order_line_id")
+  purchaseOrderLine   PurchaseOrderLine? @relation(fields: [purchaseOrderLineId], references: [id], onDelete: SetNull)
 
   putawayItems PutawayItem[]
 
@@ -629,6 +637,7 @@ model GoodsReceiveItem {
   @@index([goodsReceiveId])
   @@index([binId])
   @@index([transferOrderItemId])
+  @@index([purchaseOrderLineId])
   @@map("goods_receive_items")
 }
 
@@ -715,6 +724,8 @@ model PurchaseOrderLine {
   binId         String?   @map("bin_id")
   inventoriedAt DateTime? @map("inventoried_at")
 
+  goodsReceiveItems GoodsReceiveItem[]
+
   @@unique([purchaseOrderId, lineId])
   @@index([purchaseOrderId])
   @@map("purchase_order_lines")
@@ -730,6 +741,8 @@ model TransferOrder {
   id       String  @id @default(uuid())
   oracleId String  @unique @map("oracle_id") // Oracle transfer order id
   tranId   String? @map("tran_id")
+  // WMS's own outbound number, as on SalesOrder.outboundId.
+  outboundId String? @unique @map("outbound_id")
   tranDate String? @map("tran_date")
 
   statusCode String? @map("status_code")
@@ -1340,6 +1353,9 @@ model SalesOrder {
   id       String  @id @default(uuid())
   oracleId String  @unique @map("oracle_id") // Oracle sales order id
   tranId   String? @map("tran_id")
+  // WMS's own outbound number ("SO ID" on WMS dev): OUT<yyyymmdd>-<nnn>, one
+  // daily sequence shared with Transfer Orders.
+  outboundId String? @unique @map("outbound_id")
   tranDate String? @map("tran_date")
 
   statusCode String? @map("status_code")
@@ -1454,6 +1470,13 @@ model Picking {
 
   status PickingStatus @default(Open)
 
+  // Who generated the picking and who last recorded progress on it. Null on
+  // pickings created before these were recorded.
+  createdById Int?  @map("created_by_id")
+  createdBy   User? @relation("PickingCreator", fields: [createdById], references: [id])
+  updatedById Int?  @map("updated_by_id")
+  updatedBy   User? @relation("PickingUpdater", fields: [updatedById], references: [id])
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -1551,6 +1574,12 @@ model Packing {
   warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
 
   status PackingStatus @default(Open)
+
+  // Who generated the packing and who last recorded progress on it.
+  createdById Int?  @map("created_by_id")
+  createdBy   User? @relation("PackingCreator", fields: [createdById], references: [id])
+  updatedById Int?  @map("updated_by_id")
+  updatedBy   User? @relation("PackingUpdater", fields: [updatedById], references: [id])
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

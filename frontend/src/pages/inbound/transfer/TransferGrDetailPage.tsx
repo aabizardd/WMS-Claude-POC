@@ -21,15 +21,17 @@ import {
 } from '../../../components/wms/DocKit';
 import GeneratePutawayModal, { type PutawayLine } from '../../../components/GeneratePutawayModal';
 import { apiError, deleteTransferDoc, exportCsv, materialText } from './transferInbound';
-
-const BASE = '/admin/inbound/transfer';
+import { TRANSFER_IN, type InboundSource } from './inboundSource';
 
 /**
- * Goods Receive Detail (Transfer IN), as on WMS dev. An Open GR is received
- * in place: Receive turns Actual Qty into inputs (with Max), Confirm submits
- * the Item Receipt to Oracle. A received GR then generates its putaways.
+ * Goods Receive Detail (Transfer IN / Local Vendor), as on WMS dev. An Open
+ * GR is received in place: Receive turns Actual Qty into inputs (with Max),
+ * Confirm submits the Item Receipt to Oracle. A received GR then generates
+ * its putaways.
  */
-export default function TransferGrDetailPage() {
+export default function TransferGrDetailPage({ source = TRANSFER_IN }: { source?: InboundSource } = {}) {
+  const BASE = source.base;
+  const isPo = source.code === 'PO';
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { has } = useAuth();
@@ -56,7 +58,7 @@ export default function TransferGrDetailPage() {
   async function load() {
     setLoading(true);
     try {
-      const r = await api.get<TransferGrDetail>(`/transfer-inbound/goods-receive/${id}`);
+      const r = await api.get<TransferGrDetail>(`${source.api}/goods-receive/${id}`);
       setGr(r.data);
       setError('');
     } catch (err) {
@@ -168,7 +170,7 @@ export default function TransferGrDetailPage() {
         { label: 'ERP Doc ID', value: gr!.erp_doc_id },
         { label: 'Ownership', value: gr!.ownership },
         { label: 'Warehouse', value: gr!.warehouse?.name },
-        { label: 'Origin Warehouse', value: gr!.origin_warehouse },
+        ...(isPo ? [] : [{ label: 'Origin Warehouse', value: gr!.origin_warehouse }]),
         { label: 'Created At', value: fmtStamp(gr!.created_at) },
       ],
       tables: [
@@ -246,7 +248,8 @@ export default function TransferGrDetailPage() {
             label: 'Delete',
             icon: icons.trash,
             onClick: async () => {
-              if (await deleteTransferDoc('gr', gr.id, gr.gr_number, confirm, toast)) navigate(`${BASE}/goods-receive`);
+              if (await deleteTransferDoc('gr', gr.id, gr.gr_number, confirm, toast, source))
+                navigate(`${BASE}/goods-receive`);
             },
           },
         ]
@@ -258,7 +261,7 @@ export default function TransferGrDetailPage() {
     id: it.id,
     item_name: it.material_code,
     po_number: gr.transaction_id,
-    vendor_name: gr.origin_warehouse,
+    vendor_name: (isPo ? gr.supplier : gr.origin_warehouse) ?? null,
     item_description: it.material_name,
     qty_expected: it.planned_qty,
     qty_actual: it.actual_qty,
@@ -303,8 +306,9 @@ export default function TransferGrDetailPage() {
             { label: 'ERP Doc ID', value: gr.erp_doc_id },
             { label: 'Ownership', value: gr.ownership },
             { label: 'Warehouse', value: gr.warehouse?.name },
-            { label: 'Origin Warehouse', value: gr.origin_warehouse },
+            ...(isPo ? [] : [{ label: 'Origin Warehouse', value: gr.origin_warehouse }]),
             { label: 'Document Type', value: gr.document_type },
+            { label: 'Created By', value: gr.created_by },
             { label: 'Created At', value: fmtStamp(gr.created_at) },
             { label: 'Last Modified At', value: fmtStamp(gr.updated_at) },
           ]}

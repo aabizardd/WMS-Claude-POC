@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../lib/api';
+import { downloadFile } from '../../lib/download';
 import type {
   DeliveryFilter,
   DeliveryFilterField,
@@ -192,6 +193,28 @@ export default function DeliveryList({
   };
 
   const appliedKey = JSON.stringify(applied);
+  const [exporting, setExporting] = useState(false);
+
+  /**
+   * Sales Order plans only: the shipped plans the filters match with their SO
+   * lines — what each SO asked for and what was delivered on which SD.
+   */
+  async function exportExcel() {
+    if (exporting) return;
+    setExporting(true);
+    toast.info('Preparing the export…');
+    try {
+      await downloadFile(
+        '/delivery/export',
+        { source: 'SALES_ORDER', status: 'all', filters: applied.length ? appliedKey : undefined },
+        'delivery_plan_sales_order_export.xlsx',
+      );
+    } catch {
+      toast.error('Export failed. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -312,9 +335,10 @@ export default function DeliveryList({
           subtitle="Schedule and assign deliveries to drivers"
           menu={[
             {
-              label: 'Export',
+              label: exporting ? 'Exporting…' : 'Export',
               icon: <ExportIcon />,
-              onClick: () => toast.info('Export is not available yet.'),
+              // The SO × delivery export; Transfer Order plans have none yet.
+              onClick: isTransfer ? () => toast.info('Export is not available yet.') : exportExcel,
             },
           ]}
         />

@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { highestSeq } from '../common/doc-sequence';
 import { InventoryService } from '../inventory/inventory.service';
 import type { GeneratePickingDto } from './dto/generate-picking.dto';
+import type { OutboundDocFilterField, QueryPickingDto } from './dto/query-picking.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { usableBinStockWhere } from '../common/frozen-bins';
 import { scopeWhere, inScope } from '../common/warehouse-scope';
@@ -21,7 +22,59 @@ const PICKING_SORTABLE: Record<string, (d: SortDir) => PickingOrder> = {
   customer: (d) => ({ salesOrder: { customerName: d } }),
   status: (d) => ({ status: d }),
   created_at: (d) => ({ createdAt: d }),
+  updated_at: (d) => ({ updatedAt: d }),
+  created_by: (d) => ({ createdBy: { name: d } }),
 };
+
+const ci = (v: string) => ({ contains: v, mode: 'insensitive' as const });
+
+/** One value of one list filter as a picking condition (values OR-ed, fields AND-ed). */
+const PICKING_FILTERS: Record<OutboundDocFilterField, (v: string) => Prisma.PickingWhereInput> = {
+  material_code: (v) => ({ items: { some: { OR: [{ materialCode: ci(v) }, { material: { materialCode: ci(v) } }] } } }),
+  material_name: (v) => ({ items: { some: { OR: [{ materialName: ci(v) }, { material: { materialName: ci(v) } }] } } }),
+  warehouse_name: (v) => ({ warehouse: { name: ci(v) } }),
+  customer_name: (v) => ({
+    OR: [{ salesOrder: { customerName: ci(v) } }, { transferOrder: { toLocationName: ci(v) } }],
+  }),
+  tran_id: (v) => ({ OR: [{ salesOrder: { tranId: ci(v) } }, { transferOrder: { tranId: ci(v) } }] }),
+  outbound_id: (v) => ({ OR: [{ salesOrder: { outboundId: ci(v) } }, { transferOrder: { outboundId: ci(v) } }] }),
+  picking_code: (v) => ({ pickingCode: ci(v) }),
+  packing_code: (v) => ({ packingDoc: { packingCode: ci(v) } }),
+  delivery_code: (v) => ({ items: { some: { deliveryItems: { some: { delivery: { deliveryCode: ci(v) } } } } } }),
+  created_by_name: (v) => ({ createdBy: { name: ci(v) } }),
+};
+
+/** The Outbound History's filters, on one picking line. */
+const HISTORY_FILTERS: Record<OutboundDocFilterField, (v: string) => Prisma.PickingItemWhereInput> = {
+  material_code: (v) => ({ OR: [{ materialCode: ci(v) }, { material: { materialCode: ci(v) } }] }),
+  material_name: (v) => ({ OR: [{ materialName: ci(v) }, { material: { materialName: ci(v) } }] }),
+  warehouse_name: (v) => ({ picking: PICKING_FILTERS.warehouse_name(v) }),
+  customer_name: (v) => ({ picking: PICKING_FILTERS.customer_name(v) }),
+  tran_id: (v) => ({ picking: PICKING_FILTERS.tran_id(v) }),
+  outbound_id: (v) => ({ picking: PICKING_FILTERS.outbound_id(v) }),
+  picking_code: (v) => ({ picking: PICKING_FILTERS.picking_code(v) }),
+  packing_code: (v) => ({ packingItems: { some: { packing: { packingCode: ci(v) } } } }),
+  delivery_code: (v) => ({ deliveryItems: { some: { delivery: { deliveryCode: ci(v) } } } }),
+  created_by_name: (v) => ({ picking: PICKING_FILTERS.created_by_name(v) }),
+};
+
+/** A picking / packing line's material, as WMS dev's Material List shows it. */
+export const outboundMaterialSelect = {
+  materialCode: true,
+  materialName: true,
+  materialWeight: true,
+  materialType: { select: { materialTypeName: true } },
+  materialCategory: { select: { materialCategoryName: true } },
+  primaryUom: { select: { uomCode: true } },
+} satisfies Prisma.MaterialSelect;
+
+/** A line's bin with the shelf and aisle it sits on. */
+export const outboundBinSelect = {
+  id: true,
+  binLabel: true,
+  shelf: { select: { shelfLabel: true } },
+  aisle: { select: { aisleName: true } },
+} satisfies Prisma.BinSelect;
 
 export interface WarehouseScope {
   // Controllers pass the full AuthUser, so the acting user is available for the
@@ -32,28 +85,37 @@ export interface WarehouseScope {
   warehouseIds: string[] | null;
 }
 
+const headerInclude = {
+  salesOrder: { select: { id: true, tranId: true, oracleId: true, outboundId: true, customerName: true } },
+  transferOrder: { select: { id: true, tranId: true, oracleId: true, outboundId: true, toLocationName: true } },
+  warehouse: { select: { id: true, name: true, subsidiaryName: true } },
+  createdBy: { select: { name: true } },
+  updatedBy: { select: { name: true } },
+} satisfies Prisma.PickingInclude;
+
+const itemsInclude = {
+  include: {
+    material: { select: outboundMaterialSelect },
+    bin: { select: outboundBinSelect },
+    picker: { select: { id: true, name: true } },
+  },
+  orderBy: { createdAt: 'asc' as const },
+} satisfies Prisma.Picking$itemsArgs;
+
 const listInclude = {
-  salesOrder: { select: { id: true, tranId: true, customerName: true } },
-  transferOrder: { select: { id: true, tranId: true, toLocationName: true } },
-  warehouse: { select: { id: true, name: true } },
+  ...headerInclude,
   _count: { select: { items: true } },
+  // Lines are what the list's Picking Progress counts.
+  items: { select: { remainingQty: true } },
 } satisfies Prisma.PickingInclude;
 
 const detailInclude = {
-  salesOrder: { select: { id: true, tranId: true, customerName: true } },
-  transferOrder: { select: { id: true, tranId: true, toLocationName: true } },
-  warehouse: { select: { id: true, name: true } },
-  items: {
-    include: {
-      material: { select: { materialCode: true, materialName: true } },
-      bin: { select: { id: true, binLabel: true } },
-      picker: { select: { id: true, name: true } },
-    },
-    orderBy: { createdAt: 'asc' as const },
-  },
+  ...headerInclude,
+  items: itemsInclude,
 } satisfies Prisma.PickingInclude;
 
 type PickingList = Prisma.PickingGetPayload<{ include: typeof listInclude }>;
+type PickingLine = Prisma.PickingItemGetPayload<typeof itemsInclude>;
 type PickingDetail = Prisma.PickingGetPayload<{ include: typeof detailInclude }>;
 
 // SO statuses that still allow generating a picking (remaining = qty - shipped).
@@ -84,17 +146,7 @@ export class PickingService {
 
   // ---------- read ----------
 
-  async findAll(
-    query: {
-      page?: number;
-      limit?: number;
-      search?: string;
-      source?: string;
-      sort_by?: string;
-      sort_order?: string;
-    },
-    scope: WarehouseScope,
-  ) {
+  async findAll(query: QueryPickingDto, scope: WarehouseScope) {
     const page = Number(query.page) || 1;
     const limit = Number(query.limit) || 10;
     const orderBy = buildOrderBy(query.sort_by, query.sort_order, PICKING_SORTABLE, {
@@ -120,17 +172,28 @@ export class PickingService {
         { transferOrder: { tranId: { contains: query.search, mode: 'insensitive' } } },
       ];
     }
+    if (query.status) where.status = query.status;
+    const and: Prisma.PickingWhereInput[] = [];
+    for (const f of query.filters ?? []) {
+      const values = (f.values ?? []).map((v) => v.trim()).filter(Boolean);
+      if (values.length) and.push({ OR: values.map(PICKING_FILTERS[f.field]) });
+    }
+    if (and.length) where.AND = and;
 
+    const withItems = query.include_items === 'true';
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.picking.count({ where }),
       this.prisma.picking.findMany({
         where,
-        include: listInclude,
+        include: withItems ? { ...listInclude, items: itemsInclude } : listInclude,
         orderBy,
         skip: (page - 1) * limit,
         take: limit,
       }),
     ]);
+    const avail = withItems
+      ? await this.availabilityFor(rows as unknown as { warehouseId: string | null; items: PickingLine[] }[])
+      : new Map<string, number>();
 
     return {
       total_page: Math.ceil(total / limit) || 0,
@@ -141,7 +204,107 @@ export class PickingService {
         sort_by: query.sort_by ?? null,
         sort_order: query.sort_order ?? null,
       },
-      rows: rows.map((r) => this.serializeList(r)),
+      rows: rows.map((r) => ({
+        ...this.serializeList(r),
+        ...(withItems ? { items: (r.items as unknown as PickingLine[]).map((it) => this.serializeLine(it, r, avail)) } : {}),
+      })),
+    };
+  }
+
+  /** Bin availability for every line of these pickings, keyed "warehouse|material|bin". */
+  private async availabilityFor(pickings: { warehouseId: string | null; items: PickingLine[] }[]) {
+    const map = new Map<string, number>();
+    const byWarehouse = new Map<string | null, Set<string>>();
+    for (const p of pickings) {
+      const set = byWarehouse.get(p.warehouseId) ?? new Set<string>();
+      for (const it of p.items) if (it.materialCode) set.add(it.materialCode);
+      byWarehouse.set(p.warehouseId, set);
+    }
+    for (const [wh, codes] of byWarehouse) {
+      const m = await this.binAvailability(wh, [...codes]);
+      for (const [k, v] of m) map.set(`${wh ?? ''}|${k}`, v);
+    }
+    return map;
+  }
+
+  /**
+   * Outbound History, as WMS dev lays it out: one row per picked material,
+   * following it through packing and delivery (what was requested, picked,
+   * packed and delivered).
+   */
+  async history(query: QueryPickingDto, scope: WarehouseScope) {
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 10;
+    const pickingWhere: Prisma.PickingWhereInput = { ...this.scopeWhere(scope) };
+    if (query.source === 'SALES_ORDER' || query.source === 'TRANSFER_ORDER') {
+      pickingWhere.sourceType = query.source;
+    }
+    const where: Prisma.PickingItemWhereInput = { picking: pickingWhere };
+    const and: Prisma.PickingItemWhereInput[] = [];
+    for (const f of query.filters ?? []) {
+      const values = (f.values ?? []).map((v) => v.trim()).filter(Boolean);
+      if (values.length) and.push({ OR: values.map(HISTORY_FILTERS[f.field]) });
+    }
+    if (and.length) where.AND = and;
+
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.pickingItem.count({ where }),
+      this.prisma.pickingItem.findMany({
+        where,
+        orderBy: [{ picking: { createdAt: 'desc' } }, { createdAt: 'asc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+        include: {
+          material: {
+            select: { ...outboundMaterialSelect, materialLength: true, materialWidth: true, materialHeight: true },
+          },
+          picking: { include: headerInclude },
+          packingItems: { select: { actualQty: true, packing: { select: { packingCode: true } } } },
+          deliveryItems: {
+            select: { qty: true, delivery: { select: { deliveryCode: true, status: true, sdoId: true } } },
+          },
+        },
+      }),
+    ]);
+
+    const uniq = (xs: (string | null | undefined)[]) => [...new Set(xs.filter((x): x is string => !!x))].join(', ') || null;
+    return {
+      total_page: Math.ceil(total / limit) || 0,
+      total_data: total,
+      attributes: { page, limit, sort_by: null, sort_order: null },
+      rows: rows.map((it) => {
+        const p = it.picking;
+        const m = it.material;
+        return {
+          id: it.id,
+          // WMS dev's "SDO ID": the order's WMS outbound number.
+          outbound_id: p.salesOrder?.outboundId ?? p.transferOrder?.outboundId ?? null,
+          source_number: p.salesOrder?.tranId ?? p.transferOrder?.tranId ?? null,
+          picking_id: p.pickingCode,
+          packing_id: uniq(it.packingItems.map((x) => x.packing?.packingCode)),
+          delivery_id: uniq(it.deliveryItems.map((x) => x.delivery.deliveryCode)),
+          sd_number: uniq(it.deliveryItems.map((x) => x.delivery.sdoId)),
+          erp_doc_id: p.salesOrder?.oracleId ?? p.transferOrder?.oracleId ?? null,
+          doc_type: p.sourceType === 'TRANSFER_ORDER' ? 'Transfer Order' : 'Sales Order',
+          ownership: p.warehouse?.subsidiaryName ?? null,
+          warehouse: p.warehouse?.name ?? null,
+          customer: p.salesOrder?.customerName ?? p.transferOrder?.toLocationName ?? null,
+          material_code: it.materialCode ?? m?.materialCode ?? null,
+          material_name: it.materialName ?? m?.materialName ?? null,
+          material_category: m?.materialCategory?.materialCategoryName ?? null,
+          material_classification: m?.materialType?.materialTypeName ?? null,
+          uom: m?.primaryUom?.uomCode ?? null,
+          request_qty: it.requestQty,
+          picked_qty: it.actualQty,
+          packed_qty: it.packingItems.reduce((s, x) => s + x.actualQty, 0),
+          // Shipped: on deliveries Oracle has fulfilled.
+          delivered_qty: it.deliveryItems.filter((x) => x.delivery.status === 'Closed').reduce((s, x) => s + x.qty, 0),
+          material_dimension: m ? `${m.materialLength} x ${m.materialWidth} x ${m.materialHeight}` : null,
+          material_weight: m?.materialWeight ?? null,
+          created_by: p.createdBy?.name ?? null,
+          created_at: p.createdAt,
+        };
+      }),
     };
   }
 
@@ -156,11 +319,7 @@ export class PickingService {
     ) {
       throw new NotFoundException(`Picking ${id} not found`);
     }
-    const availByMatBin = await this.binAvailability(
-      pk.warehouseId,
-      pk.items.map((it) => it.materialCode).filter((c): c is string => !!c),
-    );
-    return this.serializeDetail(pk, availByMatBin);
+    return this.serializeDetail(pk, await this.availabilityFor([pk]));
   }
 
   // Sales Order + items with remaining qty + candidate source bins per material.
@@ -341,6 +500,7 @@ export class PickingService {
           salesOrderId: so.id,
           warehouseId: so.warehouseId,
           status: 'Open',
+          createdById: scope.userId ?? null,
           items: {
             create: dto.items.map((row) => {
               const soItem = itemById.get(row.salesOrderItemId ?? '')!;
@@ -592,6 +752,7 @@ export class PickingService {
           transferOrderId: to.id,
           warehouseId: to.warehouseId,
           status: 'Open',
+          createdById: scope.userId ?? null,
           items: {
             create: dto.items.map((row) => {
               const toItem = itemById.get(row.transferOrderItemId!)!;
@@ -794,7 +955,7 @@ export class PickingService {
         (it) => it.actualQty + it.qtyIssue + it.qualityIssue > 0,
       );
       const headerStatus = allClosed ? 'Closed' : anyProcessed ? 'OnProgress' : 'Open';
-      await tx.picking.update({ where: { id }, data: { status: headerStatus } });
+      await tx.picking.update({ where: { id }, data: { status: headerStatus, updatedById: scope.userId ?? null } });
 
       // On close: settle inventory in each item's bin. Only the gap that could
       // NOT be picked (qtyIssue + qualityIssue) is released from reserved — the
@@ -995,7 +1156,8 @@ export class PickingService {
 
   // ---------- serializers ----------
 
-  private serializeList(p: PickingList) {
+  /** The header fields the list, the detail and the accordion share. */
+  private serializeHeader(p: Prisma.PickingGetPayload<{ include: typeof headerInclude }>) {
     return {
       id: p.id,
       picking_id: p.pickingCode,
@@ -1007,16 +1169,66 @@ export class PickingService {
       to_number: p.transferOrder?.tranId ?? null,
       // Unified "reference number" (SO or TO) for shared list rendering.
       source_number: p.salesOrder?.tranId ?? p.transferOrder?.tranId ?? null,
+      // WMS's outbound number of the order ("SO ID" on WMS dev).
+      outbound_id: p.salesOrder?.outboundId ?? p.transferOrder?.outboundId ?? null,
+      erp_doc_id: p.salesOrder?.oracleId ?? p.transferOrder?.oracleId ?? null,
       location: p.warehouse?.name ?? null,
+      warehouse_id: p.warehouse?.id ?? null,
+      ownership: p.warehouse?.subsidiaryName ?? null,
       customer:
         p.salesOrder?.customerName ?? p.transferOrder?.toLocationName ?? null,
       status: p.status,
-      item_count: p._count.items,
+      created_by: p.createdBy?.name ?? null,
       created_at: p.createdAt,
+      updated_by: p.updatedBy?.name ?? null,
+      updated_at: p.updatedAt,
     };
   }
 
-  private serializeDetail(p: PickingDetail, availByMatBin: Map<string, number>) {
+  private serializeList(p: PickingList) {
+    const lines = p.items as { remainingQty: number }[];
+    return {
+      ...this.serializeHeader(p),
+      item_count: p._count.items,
+      // "10/12": lines with nothing left to pick out of all lines.
+      progress: { done: lines.filter((it) => it.remainingQty <= 1e-9).length, total: p._count.items },
+    };
+  }
+
+  private serializeLine(
+    it: PickingLine,
+    p: { warehouseId: string | null; updatedAt: Date; updatedBy?: { name: string } | null },
+    avail: Map<string, number>,
+  ) {
+    const handled = it.actualQty + it.qtyIssue + it.qualityIssue;
+    return {
+      id: it.id,
+      status: it.status,
+      material_code: it.materialCode ?? it.material?.materialCode ?? null,
+      material_name: it.materialName ?? it.material?.materialName ?? null,
+      material_type: it.material?.materialType?.materialTypeName ?? null,
+      material_category: it.material?.materialCategory?.materialCategoryName ?? null,
+      uom: it.material?.primaryUom?.uomCode ?? null,
+      bin_available_qty: avail.get(`${p.warehouseId ?? ''}|${it.materialCode ?? ''}|${it.binId ?? ''}`) ?? 0,
+      request_qty: it.requestQty,
+      actual_qty: it.actualQty,
+      qty_issue: it.qtyIssue,
+      quality_issue: it.qualityIssue,
+      remaining_qty: it.remainingQty,
+      progress: { done: handled, total: it.requestQty },
+      bin_id: it.binId,
+      bin_label: it.bin?.binLabel ?? null,
+      shelf_label: it.bin?.shelf?.shelfLabel ?? null,
+      aisle_name: it.bin?.aisle?.aisleName ?? null,
+      picker: it.picker ? { id: it.picker.id, name: it.picker.name } : null,
+      // Lines carry no audit of their own: a line someone picked shows the
+      // picking's last change.
+      updated_by: handled > 0 ? (p.updatedBy?.name ?? null) : null,
+      updated_at: handled > 0 ? p.updatedAt : null,
+    };
+  }
+
+  private serializeDetail(p: PickingDetail, avail: Map<string, number>) {
     const totals = p.items.reduce(
       (a, it) => ({
         request: a.request + it.requestQty,
@@ -1028,36 +1240,11 @@ export class PickingService {
       { request: 0, actual: 0, qty_issue: 0, quality_issue: 0, remaining: 0 },
     );
     return {
-      id: p.id,
-      picking_id: p.pickingCode,
-      source_type: p.sourceType,
-      so_id: p.salesOrder?.id ?? null,
-      so_number: p.salesOrder?.tranId ?? null,
-      to_id: p.transferOrder?.id ?? null,
-      to_number: p.transferOrder?.tranId ?? null,
-      source_number: p.salesOrder?.tranId ?? p.transferOrder?.tranId ?? null,
-      location: p.warehouse?.name ?? null,
-      customer:
-        p.salesOrder?.customerName ?? p.transferOrder?.toLocationName ?? null,
-      status: p.status,
-      created_at: p.createdAt,
+      ...this.serializeHeader(p),
+      // TO source: where the stock goes.
+      destination: p.transferOrder?.toLocationName ?? null,
       totals,
-      items: p.items.map((it) => ({
-        id: it.id,
-        status: it.status,
-        material_code: it.materialCode,
-        material_name: it.materialName,
-        bin_available_qty:
-          availByMatBin.get(`${it.materialCode ?? ''}|${it.binId ?? ''}`) ?? 0,
-        request_qty: it.requestQty,
-        actual_qty: it.actualQty,
-        qty_issue: it.qtyIssue,
-        quality_issue: it.qualityIssue,
-        remaining_qty: it.remainingQty,
-        bin_id: it.binId,
-        bin_label: it.bin?.binLabel ?? null,
-        picker: it.picker ? { id: it.picker.id, name: it.picker.name } : null,
-      })),
+      items: p.items.map((it) => this.serializeLine(it, p, avail)),
     };
   }
 }

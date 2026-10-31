@@ -242,7 +242,7 @@ export default function SalesOrderDetailPage() {
             }
           />
           <Info label="Transaction ID" value={so.tran_id} />
-          <Info label="SO ID" value="-" />
+          <Info label="SO ID" value={so.outbound_id} />
           <Info label="Doc Type" value="Sales Order" />
           <Info label="Ownership" value={so.ownership ?? so.subsidiary_name} />
           <Info label="Warehouse Name" value={so.warehouse?.name ?? so.location_name} />
@@ -353,7 +353,7 @@ export default function SalesOrderDetailPage() {
         pickers={pickers}
         docInfo={[
           { label: 'Transaction ID', value: so.tran_id },
-          { label: 'SO ID', value: '-' },
+          { label: 'SO ID', value: so.outbound_id },
           { label: 'ERP Doc ID', value: so.oracle_id },
           { label: 'Doc Type', value: 'Sales Order' },
           { label: 'Warehouse Name', value: so.warehouse?.name ?? so.location_name },

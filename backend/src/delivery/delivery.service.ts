@@ -7,9 +7,13 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
+import type { Writable } from 'stream';
+import { writeSoDeliveryXlsx } from '../sales-orders/so-delivery-export';
 import { PrismaService } from '../prisma/prisma.service';
 import { highestSeq } from '../common/doc-sequence';
 import { InventoryService } from '../inventory/inventory.service';
+import { SalesOrderSyncService } from '../sales-orders/sales-order-sync.service';
+import { TransferOrderSyncService } from '../transfer-orders/transfer-order-sync.service';
 import { reopenPacking } from '../common/outbound-revert';
 import type { GenerateDeliveryDto } from './dto/generate-delivery.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
@@ -186,6 +190,8 @@ export class DeliveryService {
     private prisma: PrismaService,
     private inventory: InventoryService,
     private config: ConfigService,
+    private soSync: SalesOrderSyncService,
+    private toSync: TransferOrderSyncService,
   ) {}
 
   // ---------- Oracle Item Fulfillment bridge ----------
@@ -281,29 +287,11 @@ export class DeliveryService {
     return scopeWhere(scope, 'warehouseId');
   }
 
-  async findAll(
-    query: {
-      page?: number;
-      limit?: number;
-      search?: string;
-      history?: string | boolean;
-      /** "all" lists every status (Delivery Plan, SD Tracking). */
-      status?: string;
-      source?: string;
-      filters?: { field: string; values: string[] }[];
-      sort_by?: string;
-      sort_order?: string;
-      /** 'true' adds each delivery's lines to its row (the list's accordion). */
-      include_items?: string;
-    },
+  /** The list's conditions (source, status, search, filters) — shared by the list and its export. */
+  listWhere(
+    query: { search?: string; history?: string | boolean; status?: string; source?: string; filters?: { field: string; values: string[] }[] },
     scope: WarehouseScope,
-  ) {
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 10;
-    const orderBy = buildOrderBy(query.sort_by, query.sort_order, DELIVERY_SORTABLE, {
-      createdAt: 'desc',
-    });
-
+  ): Prisma.DeliveryWhereInput {
     // History tab = Closed (shipped) deliveries; Delivery List = active (Open).
     const isHistory = query.history === true || query.history === 'true';
     const where: Prisma.DeliveryWhereInput = {
@@ -353,6 +341,44 @@ export class DeliveryService {
       if (build && values.length) and.push({ OR: values.map(build) });
     }
     if (and.length) where.AND = and;
+    return where;
+  }
+
+  /**
+   * The Delivery Plan list's export: only SOs with delivered qty — the shipped
+   * (Closed) Sales Order plans the list's filters match, with their SO lines.
+   */
+  exportXlsx(query: Parameters<DeliveryService['listWhere']>[0], scope: WarehouseScope, out: Writable) {
+    const deliveryWhere: Prisma.DeliveryWhereInput = {
+      AND: [this.listWhere({ ...query, status: 'all' }, scope), { sourceType: 'SALES_ORDER', status: 'Closed' }],
+    };
+    return writeSoDeliveryXlsx(this.prisma, { soWhere: {}, deliveryWhere }, out);
+  }
+
+  async findAll(
+    query: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      history?: string | boolean;
+      /** "all" lists every status (Delivery Plan, SD Tracking). */
+      status?: string;
+      source?: string;
+      filters?: { field: string; values: string[] }[];
+      sort_by?: string;
+      sort_order?: string;
+      /** 'true' adds each delivery's lines to its row (the list's accordion). */
+      include_items?: string;
+    },
+    scope: WarehouseScope,
+  ) {
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 10;
+    const orderBy = buildOrderBy(query.sort_by, query.sort_order, DELIVERY_SORTABLE, {
+      createdAt: 'desc',
+    });
+
+    const where = this.listWhere(query, scope);
 
     const withItems = query.include_items === 'true';
     const [total, rows, qtySum] = await this.prisma.$transaction([
@@ -585,8 +611,8 @@ export class DeliveryService {
           select: {
             picking: {
               select: {
-                salesOrder: { select: { oracleId: true } },
-                transferOrder: { select: { oracleId: true } },
+                salesOrder: { select: { oracleId: true, tranId: true } },
+                transferOrder: { select: { oracleId: true, tranId: true } },
               },
             },
           },
@@ -638,6 +664,7 @@ export class DeliveryService {
 
     // Hit Oracle first — if this fails, nothing below runs (delivery stays Open
     // and the user can retry).
+    const startedAt = new Date();
     const fulfillment = await this.submitItemFulfillment(
       transactionType,
       sourceOracleId,
@@ -705,6 +732,8 @@ export class DeliveryService {
     this.logger.log(
       `Shipment generated for delivery ${d.deliveryCode}: ${sdoId} (Oracle fulfillment ${fulfillment?.fulfillment_id ?? '-'})`,
     );
+    const source = isTransfer ? d.packing?.picking?.transferOrder : d.packing?.picking?.salesOrder;
+    await this.refreshSource(isTransfer ? 'TO' : 'SO', source?.tranId ?? null, startedAt);
     const detail = await this.findOne(id, scope);
     return {
       ...detail,
@@ -714,6 +743,26 @@ export class DeliveryService {
         local_id: fulfillment?.local_id ?? null,
       },
     };
+  }
+
+  /**
+   * Pull the shipped SO / TO back from Oracle so its status and its lines'
+   * `shipped` qty (the Actual Delivery) match the fulfillment just created.
+   * By tranid first; if the bridge does not return it, an incremental sync
+   * from just before the shipment (the fulfillment bumps its last modified)
+   * runs in the background. Non-fatal — the shipment is already saved.
+   */
+  private async refreshSource(kind: 'SO' | 'TO', tranId: string | null, since: Date) {
+    const sync = kind === 'SO' ? this.soSync : this.toSync;
+    try {
+      if (tranId && (await sync.syncOne(tranId))) return;
+    } catch (e) {
+      this.logger.warn(`${kind} ${tranId ?? '-'} refresh after shipment failed: ${(e as Error).message}`);
+    }
+    const lastModified = new Date(since.getTime() - 10 * 60_000).toISOString();
+    void sync
+      .sync({ lastModified })
+      .catch((e: Error) => this.logger.warn(`${kind} incremental sync after shipment failed: ${e.message}`));
   }
 
   // ---------- serializers ----------
