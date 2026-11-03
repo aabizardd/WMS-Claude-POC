@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -7,15 +8,26 @@ import {
   Post,
   Query,
   Res,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { TransferOrdersService } from './transfer-orders.service';
 import { TransferOrderSyncService } from './transfer-order-sync.service';
+import { TransferOrderCreateService } from './transfer-order-create.service';
+import { CreateTransferOrderDto } from './dto/create-transfer-order.dto';
+import { ResolveToItemsDto } from './dto/resolve-to-items.dto';
+import { QueryToStockItemsDto } from './dto/query-to-stock-items.dto';
 import { QueryTransferOrderDto } from './dto/query-transfer-order.dto';
 import { SyncTransferOrderDto } from './dto/sync-transfer-order.dto';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { transferOrderExportFileName, writeTransferOrderXlsx } from './transfer-order-export';
 import { xlsxHeaders } from '../common/xlsx-export';
+import { parseToImport, writeToImportTemplate } from './to-import';
+
+/** The largest workbook Import Excel accepts. */
+const IMPORT_MAX_BYTES = 5 * 1024 * 1024;
 import {
   CurrentUser,
   type AuthUser,
@@ -26,7 +38,67 @@ export class TransferOrdersController {
   constructor(
     private readonly service: TransferOrdersService,
     private readonly sync: TransferOrderSyncService,
+    private readonly creator: TransferOrderCreateService,
   ) {}
+
+  /** Create TO form: class, department, both warehouse lists and their defaults. */
+  @Get('create/form-options')
+  @RequirePermissions('transfer-orders:create')
+  createFormOptions(@CurrentUser() user: AuthUser) {
+    return this.creator.formOptions(user);
+  }
+
+  /** Create TO form: one page of what the sending warehouse can transfer. */
+  @Get('create/items')
+  @RequirePermissions('transfer-orders:create')
+  createItems(@Query() query: QueryToStockItemsDto) {
+    return this.creator.stockItems(query);
+  }
+
+  /** Create TO form, Import Excel: the template to fill in. */
+  @Get('create/import-template')
+  @RequirePermissions('transfer-orders:create')
+  async importTemplate(@Res() res: Response) {
+    res.set(xlsxHeaders('template_import_TO.xlsx'));
+    await writeToImportTemplate(res);
+  }
+
+  /**
+   * Create TO form, Import Excel: read an uploaded workbook's rows (the file is
+   * not stored). The form then checks them like a Quick Add paste.
+   */
+  @Post('create/import-parse')
+  @HttpCode(200)
+  @RequirePermissions('transfer-orders:create')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: IMPORT_MAX_BYTES } }))
+  importParse(@UploadedFile() file: { buffer: Buffer; originalname: string } | undefined, @Query('sheet') sheet?: string) {
+    if (!file?.buffer?.length) throw new BadRequestException('Choose an .xlsx file to import');
+    if (!/\.xlsx$/i.test(file.originalname)) throw new BadRequestException('Only .xlsx files can be imported');
+    return parseToImport(file.buffer, sheet || undefined);
+  }
+
+  /** Create TO form, Quick Add: match pasted Part Numbers to the sending warehouse's stock. */
+  @Post('create/resolve-items')
+  @HttpCode(200)
+  @RequirePermissions('transfer-orders:create')
+  resolveCreateItems(@Body() dto: ResolveToItemsDto) {
+    return this.creator.resolveItems(dto);
+  }
+
+  /** Save a Transfer Order as Syncing; it is sent to Oracle in the background. */
+  @Post()
+  @RequirePermissions('transfer-orders:create')
+  create(@Body() dto: CreateTransferOrderDto, @CurrentUser() user: AuthUser) {
+    return this.creator.create(dto, user);
+  }
+
+  /** Send a Failed (WMS-created) Transfer Order to Oracle again. */
+  @Post(':id/retry-sync')
+  @HttpCode(200)
+  @RequirePermissions('transfer-orders:create')
+  retrySync(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.creator.retry(id, user);
+  }
 
   // Pull transfer orders from Oracle into WMS (all statuses).
   @Post('sync-erp')

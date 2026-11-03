@@ -7,10 +7,14 @@ import { PutawayService } from '../putaway/putaway.service';
 import type { GrFilterField, QueryTransferInboundDto } from './dto/query-transfer-inbound.dto';
 import { scopeWhere } from '../common/warehouse-scope';
 
-/** Which inbound the screens serve: Transfer IN (TO) or Local Vendor (PO). */
-export type InboundSource = 'TO' | 'PO';
+/** Which inbound the screens serve: Transfer IN (TO), Local Vendor (PO) or Customer Return. */
+export type InboundSource = 'TO' | 'PO' | 'CUSTOMER_RETURN';
 
-const DOCUMENT_TYPE: Record<InboundSource, string> = { TO: 'Transfer Order', PO: 'Purchase Order' };
+const DOCUMENT_TYPE: Record<InboundSource, string> = {
+  TO: 'Transfer Order',
+  PO: 'Purchase Order',
+  CUSTOMER_RETURN: 'Customer Return',
+};
 
 /** One row of the Goods Receive export: a GR and one of its lines. */
 export interface GrExportRow {
@@ -21,6 +25,7 @@ export interface GrExportRow {
   document_type: string;
   origin_warehouse?: string | null;
   supplier?: string | null;
+  customer?: string | null;
   ownership: string | null;
   warehouse: string | null;
   created_by: string | null;
@@ -49,6 +54,8 @@ interface SourceDoc {
   origin: string | null;
   /** PO: the vendor. */
   supplier: string | null;
+  /** Customer Return: the customer. */
+  customer?: string | null;
 }
 
 export interface WarehouseScope {
@@ -107,8 +114,8 @@ const paged = <T>(q: QueryTransferInboundDto, total: number, rows: T[]) => {
 };
 
 /**
- * Transfer IN (Inbound from Transfer Order) and Local Vendor (Inbound from
- * Purchase Order), read the way WMS dev shows them — both are GR Lists of
+ * Transfer IN (Inbound from Transfer Order), Local Vendor (Inbound from
+ * Purchase Order) and Customer Return, read the way WMS dev shows them — both are GR Lists of
  * their own lines: the Goods Receive and Putaway lists and details, the
  * line-level History, and deleting an Open GR / an untouched putaway.
  * Receive, Generate Putaway and Putaway confirm stay on the shared
@@ -131,6 +138,28 @@ export class TransferInboundService {
   private async sourceDocs(source: InboundSource, ids: string[]): Promise<Map<string, SourceDoc>> {
     const unique = [...new Set(ids)];
     if (!unique.length) return new Map();
+    if (source === 'CUSTOMER_RETURN') {
+      const crs = await this.prisma.customerReturn.findMany({
+        where: { id: { in: unique } },
+        select: { id: true, oracleId: true, customerId: true, customerName: true },
+      });
+      const customerIds = [...new Set(crs.map((c) => c.customerId).filter((v): v is string => !!v))];
+      const customers = customerIds.length
+        ? await this.prisma.customer.findMany({ where: { oracleId: { in: customerIds } }, select: { oracleId: true, companyName: true } })
+        : [];
+      const names = new Map(customers.map((c) => [c.oracleId, c.companyName]));
+      return new Map(
+        crs.map((c) => [
+          c.id,
+          {
+            erpDocId: c.oracleId,
+            origin: null,
+            supplier: null,
+            customer: (c.customerId ? names.get(c.customerId) : null) ?? c.customerName?.replace(/^[^-]+-\s*/, '') ?? null,
+          },
+        ]),
+      );
+    }
     if (source === 'PO') {
       const pos = await this.prisma.purchaseOrder.findMany({
         where: { id: { in: unique } },
@@ -164,12 +193,19 @@ export class TransferInboundService {
     );
   }
 
+  /** Who the goods come from: the origin warehouse (TO), vendor (PO) or customer (CR). */
+  private partyField(source: InboundSource, doc: SourceDoc | undefined) {
+    if (source === 'TO') return { origin_warehouse: doc?.origin ?? null };
+    if (source === 'CUSTOMER_RETURN') return { customer: doc?.customer ?? null };
+    return { supplier: doc?.supplier ?? null };
+  }
+
   /** The source-document fields every GR / putaway / history row carries. */
   private sourceFields(source: InboundSource, doc: SourceDoc | undefined) {
     return {
       erp_doc_id: doc?.erpDocId ?? null,
       document_type: DOCUMENT_TYPE[source],
-      ...(source === 'TO' ? { origin_warehouse: doc?.origin ?? null } : { supplier: doc?.supplier ?? null }),
+      ...this.partyField(source, doc),
     };
   }
 
@@ -221,7 +257,9 @@ export class TransferInboundService {
         const docs =
           source === 'PO'
             ? await this.prisma.purchaseOrder.findMany({ where: { oracleId: ci(v) }, select: { id: true } })
-            : await this.prisma.transferOrder.findMany({ where: { oracleId: ci(v) }, select: { id: true } });
+            : source === 'CUSTOMER_RETURN'
+              ? await this.prisma.customerReturn.findMany({ where: { oracleId: ci(v) }, select: { id: true } })
+              : await this.prisma.transferOrder.findMany({ where: { oracleId: ci(v) }, select: { id: true } });
         return { sourceDocId: { in: docs.map((t) => t.id) } };
       }
       case 'warehouse':
@@ -653,7 +691,7 @@ export class TransferInboundService {
           receive_qty: r.actualQty,
           warehouse: r.putaway.warehouse?.name ?? null,
           destination_bin: r.bin?.binLabel ?? null,
-          ...(source === 'TO' ? { origin_warehouse: doc?.origin ?? null } : { supplier: doc?.supplier ?? null }),
+          ...this.partyField(source, doc),
           ownership: r.putaway.warehouse?.subsidiaryName ?? null,
           created_at: r.putaway.updatedAt,
         };

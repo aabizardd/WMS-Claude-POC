@@ -82,6 +82,15 @@ export const MODULES: Module[] = [
       { to: '/admin/inbound/local/history', label: 'History', permission: 'putaway:read' },
     ],
   },
+  {
+    match: ['/admin/inbound/customer-return'],
+    tabs: [
+      { to: '/admin/inbound/customer-return/requests', label: 'Request', permission: 'customer-returns:read' },
+      { to: '/admin/inbound/customer-return/goods-receive', label: 'Goods Receive', permission: 'goods-receive:read' },
+      { to: '/admin/inbound/customer-return/putaway', label: 'Putaway', permission: 'putaway:read' },
+      { to: '/admin/inbound/customer-return/history', label: 'History', permission: 'putaway:read' },
+    ],
+  },
   { match: ['/admin/inbound'], exact: true, tabs: [{ to: '/admin/inbound', label: 'Inbound Management', exact: true }] },
 
   // Outbound

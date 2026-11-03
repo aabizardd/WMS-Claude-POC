@@ -1,11 +1,12 @@
 /**
  * The inbounds whose screens are GR Lists of their source's own lines: Transfer
- * IN (from a Transfer Order) and Local Vendor (from a Purchase Order). They
+ * IN (from a Transfer Order), Local Vendor (from a Purchase Order) and
+ * Customer Return (from a Return Authorization). They
  * share the Goods Receive / Putaway / History pages; this tells the pages
  * which one they show.
  */
 export interface InboundSource {
-  code: 'TO' | 'PO';
+  code: 'TO' | 'PO' | 'CR';
   /** Route prefix of the module's pages. */
   base: string;
   /** API prefix of its Goods Receive / Putaway / History endpoints. */
@@ -34,4 +35,13 @@ export const LOCAL_VENDOR: InboundSource = {
   noun: 'local vendor',
   requestPath: (id) => `/admin/inbound/local/po/${id}`,
   sourceName: 'Purchase Order',
+};
+
+export const CUSTOMER_RETURN: InboundSource = {
+  code: 'CR',
+  base: '/admin/inbound/customer-return',
+  api: '/cr-inbound',
+  noun: 'customer return',
+  requestPath: (id) => `/admin/inbound/customer-return/requests/${id}`,
+  sourceName: 'Customer Return',
 };

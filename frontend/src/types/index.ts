@@ -524,9 +524,107 @@ export interface PurchaseOrderSyncResult {
   durationMs: number;
 }
 
+// ===== Customer Return (Customer Return inbound) =====
+
+export interface CustomerReturnRow {
+  id: string;
+  oracle_id: string;
+  tran_id: string | null;
+  tran_date: string | null;
+  /** Oracle status code (e.g. "pendingReceipt") and its label. */
+  status_code: string | null;
+  status_name: string | null;
+  /** What the Request screens show: "On Progress" while a GR is open, else the Oracle label. */
+  status: string | null;
+  /** What the return was created from ("Sales Order #SO-IEL-2026-000179"). */
+  so_return_number: string | null;
+  customer_name: string | null;
+  ownership: string | null;
+  location_name: string | null;
+  warehouse: { id: string; name: string } | null;
+  memo: string | null;
+  created_by: string | null;
+  created_at: string;
+  last_modified_by: string | null;
+  last_modified: string | null;
+  line_count: number;
+  /** With include_items: the return's lines for the list's accordion. */
+  items?: CustomerReturnLine[];
+}
+
+/** Same columns as a PO line: requested, on GR Lists, received, remaining. */
+export type CustomerReturnLine = PurchaseOrderLine;
+
+export interface CustomerReturnDetail extends Omit<CustomerReturnRow, 'items' | 'line_count'> {
+  class_display: string | null;
+  department_display: string | null;
+  lines: CustomerReturnLine[];
+}
+
+export type CustomerReturnFilterField =
+  | 'material_code'
+  | 'warehouse'
+  | 'created_at'
+  | 'material_name'
+  | 'transaction_id'
+  | 'erp_doc_id'
+  | 'customer'
+  | 'so_return_number';
+
+export interface CustomerReturnFilter {
+  field: CustomerReturnFilterField;
+  values: string[];
+}
+
 // ===== Transfer Order (Outbound from Transfer Stock) =====
 
-export interface TransferOrderRow {
+/** Create TO form: dropdowns and defaults (GET /transfer-orders/create/form-options). */
+export interface CreateToOption {
+  id: string;
+  name: string | null;
+  oracleId: string;
+}
+export interface CreateToFormOptions {
+  created_by_name: string;
+  classes: CreateToOption[];
+  departments: CreateToOption[];
+  from_warehouses: CreateToOption[];
+  /** The signed-in user's own warehouses (the receiving side). */
+  to_warehouses: CreateToOption[];
+  default_class_id: string | null;
+  default_department_id: string | null;
+  default_to_warehouse_id: string | null;
+}
+
+/** A material the sending warehouse can transfer (GET /transfer-orders/create/items). */
+export interface CreateToStockItem {
+  material_id: string;
+  material_code: string;
+  material_name: string | null;
+  erp_item_id: string | null;
+  uom_code: string | null;
+  allows_decimal: boolean;
+  qty_available: number;
+}
+
+/** The TO is saved in WMS as Syncing; Oracle is called in the background. */
+export interface CreateToResult {
+  id: string;
+  status_name: string;
+}
+
+/** How far a TO created in WMS got on its way to Oracle. */
+export interface TransferOrderSyncFields {
+  /** "WMS" when created in WMS, "ORACLE" when pulled in by the sync. */
+  source?: 'WMS' | 'ORACLE';
+  sync_status?: 'Syncing' | 'Failed' | 'Synced' | null;
+  sync_error?: string | null;
+  /** The last failure may still have created it in Oracle. */
+  sync_uncertain?: boolean;
+  sync_attempts?: number;
+}
+
+export interface TransferOrderRow extends TransferOrderSyncFields {
   id: string;
   oracle_id: string;
   tran_id: string | null;
@@ -602,13 +700,14 @@ export interface TransferOrderLine {
   remain_qty?: number;
 }
 
-export interface TransferOrderDetail {
+export interface TransferOrderDetail extends TransferOrderSyncFields {
   /** WMS's outbound number ("TO ID"). */
   outbound_id?: string | null;
   /** False when the user's warehouse is only the destination (view only). */
   can_pick?: boolean;
   id: string;
-  oracle_id: string;
+  /** Null on a TO created in WMS until Oracle has it. */
+  oracle_id: string | null;
   tran_id: string | null;
   tran_date: string | null;
   status_code: string | null;
@@ -975,7 +1074,10 @@ export interface InventoryAdjustmentDetail {
   approved_at: string | null;
   approval_reason: string | null;
   total_qty: number;
-  items: InventoryAdjustmentItemRow[];
+  /** How many lines the document has; the lines are paged by GET :id/items. */
+  item_count: number;
+  /** The warehouses the lines span, for the lines' warehouse filter. */
+  line_warehouses: { id: string | null; name: string | null }[];
   discrepancies: { id: string; discrepancy_id: string; type: string; from: string }[];
   events: InventoryAdjustmentEvent[];
   integration_logs: InventoryAdjustmentIntegrationLog[];
@@ -1750,6 +1852,8 @@ export interface TransferGrRow {
   origin_warehouse?: string | null;
   /** Local Vendor: the PO's vendor. */
   supplier?: string | null;
+  /** Customer Return: the returning customer. */
+  customer?: string | null;
   item_count: number;
   created_by: string | null;
   created_at: string;
@@ -1853,6 +1957,7 @@ export interface TransferHistoryRow {
   destination_bin: string | null;
   origin_warehouse?: string | null;
   supplier?: string | null;
+  customer?: string | null;
   ownership: string | null;
   created_at: string;
 }

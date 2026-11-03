@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import api from '../../lib/api';
 import { downloadFile } from '../../lib/download';
@@ -21,7 +21,7 @@ import DateRangeInput, { formatRangeValue } from '../../components/DateRangeInpu
 import RowActionMenu from '../../components/RowActionMenu';
 import TablePager from '../../components/TablePager';
 import { ExportIcon } from '../../components/ToolbarMenu';
-import { TO_STATUSES, soStatusBadgeClass } from '../../lib/salesOrderStatus';
+import { TO_STATUSES, TO_SYNC_STATUSES, soStatusBadgeClass } from '../../lib/salesOrderStatus';
 import TransferOrderLinesTable from './TransferOrderLinesTable';
 import TransferInLinesTable from '../inbound/TransferInLinesTable';
 import {
@@ -42,10 +42,12 @@ import {
 const DEFAULT_STATUS = 'Pending Fulfillment';
 
 /** Inbound (TO In) leaves out TOs that have not been fulfilled yet. */
-const NOT_INBOUND_STATUSES = ['Pending Approval', 'Pending Fulfillment'];
+const NOT_INBOUND_STATUSES = ['Pending Approval', 'Pending Fulfillment', ...TO_SYNC_STATUSES];
 const INBOUND_STATUSES = TO_STATUSES.filter((s) => !NOT_INBOUND_STATUSES.includes(s));
 /** TO In opens on what is waiting to be received. */
 const DEFAULT_INBOUND_STATUS = 'Pending Receipt';
+/** How often a list or detail with a Syncing TO looks again. */
+const SYNC_POLL_MS = 4000;
 /** Server-side cap on values within one filter. */
 const MAX_VALUES = 10;
 /**
@@ -169,6 +171,7 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
   const toast = useToast();
   const navigate = useNavigate();
   const canSync = has('transfer-orders:sync');
+  const canCreate = has('transfer-orders:create');
 
   const [searchParams, setSearchParams] = useSearchParams();
   const [initial] = useState(() => ({
@@ -255,6 +258,15 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, pageSize, status, appliedKey, sort.sortBy, sort.order, reloadKey]);
+
+  // A TO created in WMS is sent to Oracle in the background: while one on
+  // this page is Syncing, look again shortly so its status updates itself.
+  const anySyncing = !!data?.rows.some((r) => r.sync_status === 'Syncing');
+  useEffect(() => {
+    if (!anySyncing) return;
+    const t = setTimeout(() => setReloadKey((k) => k + 1), SYNC_POLL_MS);
+    return () => clearTimeout(t);
+  }, [anySyncing, data]);
 
   // Keep the status and filters in the URL.
   useEffect(() => {
@@ -406,6 +418,16 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
               onClick: exportExcel,
             },
           ]}
+          actions={
+            canCreate && (
+              <Link
+                to={isIn ? '/admin/inbound/transfer/to/create' : '/admin/outbound/transfer-stock/list/create'}
+                className="btn-primary"
+              >
+                + Create TO
+              </Link>
+            )
+          }
         />
 
         <ListFilterPanel
@@ -534,9 +556,14 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
                         >
                           {t.status_name ?? '-'}
                         </span>
+                        {t.sync_status === 'Failed' && t.sync_error && (
+                          <p className="mt-1 max-w-[220px] truncate text-xs text-rose-600" title={t.sync_error}>
+                            {t.sync_error}
+                          </p>
+                        )}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-800">{t.tran_id ?? '-'}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.oracle_id}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.oracle_id ?? '-'}</td>
                       {!isIn && <td className="whitespace-nowrap px-4 py-3 text-slate-700">Transfer Order</td>}
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.ownership ?? '-'}</td>
                       <td className="px-4 py-3 text-slate-700">{t.warehouse?.name ?? locationName(t.from_location_name)}</td>

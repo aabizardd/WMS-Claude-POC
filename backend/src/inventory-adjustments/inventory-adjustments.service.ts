@@ -15,6 +15,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ErpHttpService } from '../erp/erp-http.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
+import { paginationMeta } from '../common/pagination';
 import { isFrozenBinLabel, usableBinStockWhere } from '../common/frozen-bins';
 import { parseDateRange } from '../common/date-range.util';
 import { subsidiarySingleFilter } from '../common/subsidiary-filter';
@@ -26,6 +27,7 @@ import {
 } from './ia-rules';
 import type { CreateInventoryAdjustmentDto } from './dto/create-inventory-adjustment.dto';
 import type { ApproveInventoryAdjustmentDto } from './dto/approve-inventory-adjustment.dto';
+import type { QueryAdjustmentItemsDto } from './dto/query-adjustment-items.dto';
 import { scopeWhere, inScope } from '../common/warehouse-scope';
 
 export interface WarehouseScope {
@@ -1872,6 +1874,84 @@ export class InventoryAdjustmentsService {
     return this.serializeDetail(a);
   }
 
+  /**
+   * One page of an adjustment's lines for the detail's Adjustment Bins tab:
+   * searched, filtered, sorted and paged in the database, so a document with
+   * hundreds of lines never travels whole.
+   */
+  async findItems(id: string, query: QueryAdjustmentItemsDto, scope: WarehouseScope) {
+    const a = await this.prisma.inventoryAdjustment.findUnique({
+      where: { id },
+      select: { adjustmentType: true, warehouseId: true, items: { select: { warehouseId: true } } },
+    });
+    if (!a || !this.canSee(a, scope)) {
+      throw new NotFoundException(`Inventory adjustment ${id} not found`);
+    }
+    const type = a.adjustmentType;
+    const passedMode = ruleFor(type).qtyMode === 'passed_non_passed';
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+
+    const where: Prisma.InventoryAdjustmentItemWhereInput = { adjustmentId: id };
+    const and: Prisma.InventoryAdjustmentItemWhereInput[] = [];
+    const q = query.search?.trim();
+    if (q) {
+      const c = { contains: q, mode: 'insensitive' as const };
+      and.push({
+        OR: [{ materialCode: c }, { materialName: c }, { binLabel: c }, { bin: { binCode: c } }, { bin: { binLabel: c } }],
+      });
+    }
+    // A line without its own warehouse belongs to the header's.
+    if (query.warehouse_id) {
+      and.push(
+        query.warehouse_id === a.warehouseId
+          ? { OR: [{ warehouseId: query.warehouse_id }, { warehouseId: null }] }
+          : { warehouseId: query.warehouse_id },
+      );
+    }
+    // Quality Adjustment adds Qty Passed; every other type has one signed qty.
+    if (query.qty_sign) {
+      const field = passedMode ? 'qtyPassed' : 'qtyAdjustment';
+      and.push({ [field]: query.qty_sign === 'positive' ? { gt: 0 } : { lt: 0 } });
+    }
+    if (and.length) where.AND = and;
+
+    const bucket = ruleFor(type).filterBucket;
+    const beforeField =
+      bucket === 'qty_issue' ? 'qtyIssueAtCreate' : bucket === 'quality_issue' ? 'qualityIssueAtCreate' : 'availAtCreate';
+    type ItemOrder = Prisma.InventoryAdjustmentItemOrderByWithRelationInput;
+    const sortable: Record<string, (d: SortDir) => ItemOrder> = {
+      material_code: (d) => ({ materialCode: d }),
+      material_name: (d) => ({ materialName: d }),
+      warehouse: (d) => ({ warehouse: { name: d } }),
+      bin: (d) => ({ binLabel: d }),
+      before_qty: (d) => ({ [beforeField]: d }),
+      qty_adjustment: (d) => ({ qtyAdjustment: d }),
+      qty_passed: (d) => ({ qtyPassed: d }),
+      qty_non_passed: (d) => ({ qtyNonPassed: d }),
+    };
+    // Entry order by default (as the document was written); id keeps pages stable.
+    const orderBy: ItemOrder[] = [
+      buildOrderBy(query.sort_by, query.sort_order, sortable, { createdAt: 'asc' }),
+      { id: 'asc' },
+    ];
+
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.inventoryAdjustmentItem.count({ where }),
+      this.prisma.inventoryAdjustmentItem.findMany({
+        where,
+        include: itemInclude.include,
+        orderBy,
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+    return {
+      ...paginationMeta(total, page, limit, query),
+      rows: rows.map((it) => this.serializeLine(type, it)),
+    };
+  }
+
   /** The behaviour matrix, so the UI does not have to duplicate the rules. */
   types() {
     return IA_TYPES.map((t) => {
@@ -2007,7 +2087,16 @@ export class InventoryAdjustmentsService {
       approved_at: a.approvedAt,
       approval_reason: a.approvalReason,
       total_qty: a.items.reduce((s, it) => s + this.lineQty(a.adjustmentType, it), 0),
-      items: a.items.map((it) => this.serializeLine(a.adjustmentType, it)),
+      // The lines themselves are paged by GET :id/items.
+      item_count: a.items.length,
+      line_warehouses: [
+        ...new Map(
+          a.items.map((it) => {
+            const wh = it.warehouse ?? a.warehouse;
+            return [wh?.id ?? '', { id: wh?.id ?? null, name: wh?.name ?? null }] as const;
+          }),
+        ).values(),
+      ].sort((x, y) => (x.name ?? '').localeCompare(y.name ?? '')),
       discrepancies: a.discrepancies.map((d) => ({
         id: d.discrepancy.id,
         discrepancy_id: d.discrepancy.discrepancyId,

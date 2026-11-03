@@ -69,7 +69,7 @@ const SECTIONS: NavSection[] = [
           { to: '/admin/inbound/transfer', label: 'Transfer Order', anyPermission: ['transfer-orders:read', 'goods-receive:read'] },
           { to: '/admin/inbound/pib', label: 'PIB', anyPermission: ['mrn:read', 'goods-receive:read'] },
           { to: '/admin/inbound/local', label: 'Local Vendor (PO)', anyPermission: ['purchase-orders:read', 'goods-receive:read'] },
-          { to: '/admin/inbound/customer-return', label: 'Customer Return', disabled: true },
+          { to: '/admin/inbound/customer-return', label: 'Customer Return', anyPermission: ['customer-returns:read', 'goods-receive:read'] },
         ],
       },
       {

@@ -5,6 +5,8 @@ import type { GrExportRow, InboundSource } from './transfer-inbound.service';
 type Row = GrExportRow;
 const at = (d: Date) => wibDateTimeMinutes(d);
 const words = (v: string) => v.replace(/([a-z])([A-Z])/g, '$1 $2');
+/** The short code the module goes by in file and sheet names. */
+const CODE: Record<InboundSource, string> = { TO: 'TO', PO: 'PO', CUSTOMER_RETURN: 'CR' };
 
 /**
  * The Goods Receive list's columns followed by its accordion's, flat on one
@@ -45,12 +47,12 @@ function columns(source: InboundSource): ExportColumn<Row>[] {
 /** "to_goods_receive_export_20261103_101502.xlsx" (WIB). */
 export function grExportFileName(source: InboundSource, now = new Date()) {
   const t = wibParts(now);
-  return `${source.toLowerCase()}_goods_receive_export_${t.y}${t.m}${t.d}_${t.hh}${t.mm}${t.ss}.xlsx`;
+  return `${CODE[source].toLowerCase()}_goods_receive_export_${t.y}${t.m}${t.d}_${t.hh}${t.mm}${t.ss}.xlsx`;
 }
 
 /** Streams the one-sheet workbook to `out`: white headers on indigo, frozen. */
 export function writeGrXlsx(source: InboundSource, rows: AsyncIterable<Row[]>, out: Writable) {
-  return writeXlsx(out, [{ name: source, columns: columns(source), rows }], {
+  return writeXlsx(out, [{ name: CODE[source], columns: columns(source), rows }], {
     fill: 'FF5166AE',
     font: 'FFFFFFFF',
     freeze: true,

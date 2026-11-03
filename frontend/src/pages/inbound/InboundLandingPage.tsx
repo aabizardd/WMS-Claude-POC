@@ -39,12 +39,13 @@ const INBOUND_TYPES: InboundType[] = [
   {
     key: 'customer-return',
     title: 'Inbound from Customer Return',
-    description: 'Handle returns coming back from customers.',
+    description: 'Returns coming back from customers: CR → Goods Receive → Putaway.',
     accent: 'bg-amber-500',
     icon: (
       <path d="M9 14l-4-4 4-4M5 10h10a4 4 0 014 4v3" />
     ),
-    enabled: false,
+    to: '/admin/inbound/customer-return',
+    enabled: true,
   },
   {
     key: 'stock-transfer',

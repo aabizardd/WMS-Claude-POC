@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { GoodsReceiveService } from './goods-receive.service';
 import { GoodsReceiveReceiveService } from './goods-receive-receive.service';
 import { GoodsReceiveFromPoService } from './goods-receive-from-po.service';
+import { GoodsReceiveFromCrService } from './goods-receive-from-cr.service';
+import { CustomerReturnsModule } from '../customer-returns/customer-returns.module';
 import { GoodsReceiveFromToService } from './goods-receive-from-to.service';
 import { GoodsReceiveController } from './goods-receive.controller';
 import { InventoryModule } from '../inventory/inventory.module';
@@ -11,12 +13,13 @@ import { TransferOrdersModule } from '../transfer-orders/transfer-orders.module'
 import { MrnModule } from '../mrn/mrn.module';
 
 @Module({
-  imports: [InventoryModule, DiscrepancyModule, PurchaseOrdersModule, TransferOrdersModule, MrnModule],
+  imports: [InventoryModule, DiscrepancyModule, PurchaseOrdersModule, CustomerReturnsModule, TransferOrdersModule, MrnModule],
   controllers: [GoodsReceiveController],
   providers: [
     GoodsReceiveService,
     GoodsReceiveReceiveService,
     GoodsReceiveFromPoService,
+    GoodsReceiveFromCrService,
     GoodsReceiveFromToService,
   ],
 })

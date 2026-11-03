@@ -6,7 +6,8 @@ import type { AdjustmentOracleCheckResult, InventoryAdjustmentDetail } from '../
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { DetailCard, InfoGrid, PrimaryButton } from '../../components/wms/DocKit';
-import { AdjLinesTable, AdjStatusPill, SignedQty, adjTypeLabel } from './iaShared';
+import { AdjStatusPill, SignedQty, adjTypeLabel } from './iaShared';
+import AdjBinsPanel from './AdjBinsPanel';
 
 type PendingAction = 'approve' | 'reject' | 'send' | null;
 type Tab = 'bins' | 'history' | 'discrepancies' | 'oracle';
@@ -61,6 +62,8 @@ export default function InventoryAdjustmentDetailPage() {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
+  // Bumped whenever the document reloads, so the lines' open page reloads too.
+  const [linesKey, setLinesKey] = useState(0);
 
   const load = useCallback(
     (quiet = false) => {
@@ -71,6 +74,7 @@ export default function InventoryAdjustmentDetailPage() {
         .then((r) => {
           setA(r.data);
           setError('');
+          setLinesKey((k) => k + 1);
         })
         .catch(() => setError('Failed to load adjustment.'))
         .finally(() => {
@@ -174,7 +178,7 @@ export default function InventoryAdjustmentDetailPage() {
   }
 
   const tabs: { key: Tab; label: string; count: number }[] = [
-    { key: 'bins', label: 'Adjustment Bins', count: a.items.length },
+    { key: 'bins', label: 'Adjustment Bins', count: a.item_count },
     { key: 'history', label: 'History', count: a.events.length },
     ...(a.discrepancies.length ? [{ key: 'discrepancies' as Tab, label: 'Discrepancy References', count: a.discrepancies.length }] : []),
     ...(a.integration_logs.length ? [{ key: 'oracle' as Tab, label: 'Oracle Log', count: a.integration_logs.length }] : []),
@@ -297,7 +301,9 @@ export default function InventoryAdjustmentDetailPage() {
 
       <div className="overflow-hidden rounded-lg border border-neutral-200 dark:border-slate-700">
         <div className="overflow-x-auto">
-          {tab === 'bins' && <AdjLinesTable lines={a.items} qualityMode={isQuality} />}
+          {tab === 'bins' && (
+            <AdjBinsPanel adjustmentId={a.id} qualityMode={isQuality} warehouses={a.line_warehouses} reloadKey={linesKey} />
+          )}
 
           {tab === 'history' && (
             <table className="w-full text-left text-sm">

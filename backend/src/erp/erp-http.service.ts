@@ -182,10 +182,16 @@ export class ErpHttpService {
    * Like post(), but returns the parsed body together with the HTTP status even
    * for non-2xx business errors (4xx) — so the caller can read a bridge
    * `message`. Still throttled/authenticated and retries 401/429/5xx.
+   *
+   * Pass `idempotent: false` for a request that CREATES something in Oracle:
+   * a network failure or a 5xx is then not retried, as the first attempt may
+   * already have created the record (401 and 429 are still retried — those
+   * are refused before anything is processed).
    */
   async postRaw<T>(
     path: string,
     body: unknown,
+    { idempotent = true }: { idempotent?: boolean } = {},
   ): Promise<{ ok: boolean; status: number; body: T | null }> {
     const maxRetries = this.maxRetries();
     const url = `${this.baseUrl()}${path.startsWith('/') ? path : `/${path}`}`;
@@ -205,7 +211,7 @@ export class ErpHttpService {
           }),
         );
       } catch (e) {
-        if (attempt < maxRetries) {
+        if (idempotent && attempt < maxRetries) {
           await this.delay(this.backoffMs(attempt));
           continue;
         }
@@ -217,7 +223,7 @@ export class ErpHttpService {
         this.tokenExpiresAt = 0;
         continue;
       }
-      if ((res.status === 429 || res.status >= 500) && attempt < maxRetries) {
+      if ((res.status === 429 || (idempotent && res.status >= 500)) && attempt < maxRetries) {
         const retryAfter = Number(res.headers.get('retry-after'));
         const wait =
           Number.isFinite(retryAfter) && retryAfter > 0

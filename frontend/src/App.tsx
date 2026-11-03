@@ -40,7 +40,9 @@ import PibHistoryPage from './pages/inbound/pib/PibHistoryPage';
 import LocalInboundLayout from './pages/inbound/LocalInboundLayout';
 import PoRequestListPage from './pages/inbound/local/PoRequestListPage';
 import PoDetailPage from './pages/inbound/local/PoDetailPage';
-import { LOCAL_VENDOR } from './pages/inbound/transfer/inboundSource';
+import { CUSTOMER_RETURN, LOCAL_VENDOR } from './pages/inbound/transfer/inboundSource';
+import CrRequestListPage from './pages/inbound/customer-return/CrRequestListPage';
+import CrDetailPage from './pages/inbound/customer-return/CrDetailPage';
 import TransferInboundLayout from './pages/inbound/TransferInboundLayout';
 import TransferInDetailPage from './pages/inbound/TransferInDetailPage';
 import TransferGrListPage from './pages/inbound/transfer/TransferGrListPage';
@@ -48,6 +50,7 @@ import TransferGrDetailPage from './pages/inbound/transfer/TransferGrDetailPage'
 import TransferPutawayListPage from './pages/inbound/transfer/TransferPutawayListPage';
 import TransferPutawayDetailPage from './pages/inbound/transfer/TransferPutawayDetailPage';
 import TransferHistoryPage from './pages/inbound/transfer/TransferHistoryPage';
+import TransferOrderCreatePage from './pages/outbound/TransferOrderCreatePage';
 import InventoryLandingPage from './pages/inventory/InventoryLandingPage';
 import InventoryPage from './pages/inventory/InventoryPage';
 import InventoryQtySourcePage from './pages/inventory/InventoryQtySourcePage';
@@ -426,6 +429,68 @@ export default function App() {
               </RequirePermission>
             }
           />
+          {/* Inbound from Customer Return (tabbed) — as on WMS preprod: Request
+              (CR), Goods Receive, Putaway, History; the GR/Putaway/History
+              pages are Transfer IN's, fed with the CR source. */}
+          <Route path="inbound/customer-return">
+            <Route index element={<Navigate to="requests" replace />} />
+            <Route
+              path="requests"
+              element={
+                <RequirePermission permission="customer-returns:read">
+                  <CrRequestListPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="requests/:id"
+              element={
+                <RequirePermission permission="customer-returns:read">
+                  <CrDetailPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="goods-receive"
+              element={
+                <RequirePermission permission="goods-receive:read">
+                  <TransferGrListPage source={CUSTOMER_RETURN} />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="goods-receive/:id"
+              element={
+                <RequirePermission permission="goods-receive:read">
+                  <TransferGrDetailPage source={CUSTOMER_RETURN} />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="putaway"
+              element={
+                <RequirePermission permission="putaway:read">
+                  <TransferPutawayListPage source={CUSTOMER_RETURN} />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="putaway/:id"
+              element={
+                <RequirePermission permission="putaway:read">
+                  <TransferPutawayDetailPage source={CUSTOMER_RETURN} />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="history"
+              element={
+                <RequirePermission permission="putaway:read">
+                  <TransferHistoryPage source={CUSTOMER_RETURN} />
+                </RequirePermission>
+              }
+            />
+          </Route>
           {/* Inbound from Transfer Stock (tabbed) — source is a Transfer Order coming in. */}
           <Route path="inbound/transfer" element={<TransferInboundLayout />}>
             <Route index element={<Navigate to="to" replace />} />
@@ -462,6 +527,14 @@ export default function App() {
               }
             />
           </Route>
+          <Route
+            path="inbound/transfer/to/create"
+            element={
+              <RequirePermission permission="transfer-orders:create">
+                <TransferOrderCreatePage backPath="/admin/inbound/transfer/to" />
+              </RequirePermission>
+            }
+          />
           <Route
             path="inbound/transfer/to/:id"
             element={
@@ -766,6 +839,14 @@ export default function App() {
               }
             />
           </Route>
+          <Route
+            path="outbound/transfer-stock/list/create"
+            element={
+              <RequirePermission permission="transfer-orders:create">
+                <TransferOrderCreatePage backPath="/admin/outbound/transfer-stock/list" />
+              </RequirePermission>
+            }
+          />
           <Route
             path="outbound/transfer-stock/list/:id"
             element={

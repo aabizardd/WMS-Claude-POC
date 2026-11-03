@@ -34,7 +34,7 @@ interface OrderFields {
   transaction_id: string | null;
   /** WMS's outbound number (SO ID / TO ID). */
   order_id: string | null;
-  erp_doc_id: string;
+  erp_doc_id: string | null;
   order_date: string | null;
   ownership: string | null;
   /** SO: its warehouse; TO: the origin warehouse. */

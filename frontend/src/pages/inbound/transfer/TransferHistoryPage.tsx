@@ -17,14 +17,16 @@ const columns = (source: InboundSource): MasterColumn<TransferHistoryRow>[] => [
   { label: 'Receive Quantity', render: (r) => <Cell>{qty(r.receive_qty)}</Cell> },
   { label: 'Warehouse', render: (r) => <Cell>{r.warehouse}</Cell> },
   { label: 'Destination Bin', render: (r) => <Cell>{r.destination_bin}</Cell> },
-  source.code === 'PO'
-    ? { label: 'Supplier', render: (r) => <Cell>{r.supplier}</Cell> }
-    : { label: 'Origin Warehouse', render: (r) => <Cell>{r.origin_warehouse}</Cell> },
+  source.code === 'TO'
+    ? { label: 'Origin Warehouse', render: (r) => <Cell>{r.origin_warehouse}</Cell> }
+    : source.code === 'CR'
+      ? { label: 'Customer Name', render: (r) => <Cell>{r.customer}</Cell> }
+      : { label: 'Supplier', render: (r) => <Cell>{r.supplier}</Cell> },
   { label: 'Ownership', render: (r) => <Cell>{r.ownership}</Cell> },
   { label: 'Created At', render: (r) => <Cell>{fmtDateTime(r.created_at)}</Cell> },
 ];
 
-/** History - TO / PO, as on WMS dev. */
+/** History - TO / PO / CR, as on WMS dev. */
 export default function TransferHistoryPage({ source = TRANSFER_IN }: { source?: InboundSource } = {}) {
   return (
     <PageCard title={`History - ${source.code}`} description={`Track all inbound activity logs for ${source.noun}`}>

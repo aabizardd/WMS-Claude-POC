@@ -4,6 +4,7 @@ import { InventoryAdjustmentsService } from './inventory-adjustments.service';
 import { CreateInventoryAdjustmentDto } from './dto/create-inventory-adjustment.dto';
 import { ApproveInventoryAdjustmentDto } from './dto/approve-inventory-adjustment.dto';
 import { QueryInventoryAdjustmentDto } from './dto/query-inventory-adjustment.dto';
+import { QueryAdjustmentItemsDto } from './dto/query-adjustment-items.dto';
 import { iaExportFileName, writeIaXlsx } from './ia-export';
 import { xlsxHeaders } from '../common/xlsx-export';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
@@ -94,6 +95,17 @@ export class InventoryAdjustmentsController {
   ) {
     res.set(xlsxHeaders(iaExportFileName()));
     await writeIaXlsx(this.service.exportRows(query, user), res);
+  }
+
+  /** One page of the document's lines: searched, filtered, sorted and paged server-side. */
+  @Get(':id/items')
+  @RequirePermissions('inventory-adjustments:read')
+  findItems(
+    @Param('id') id: string,
+    @Query() query: QueryAdjustmentItemsDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.service.findItems(id, query, user);
   }
 
   @Get(':id')

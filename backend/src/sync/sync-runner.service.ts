@@ -16,6 +16,7 @@ import { SubsidiarySyncService } from '../subsidiaries/subsidiary-sync.service';
 import { MrnSyncService } from '../mrn/mrn-sync.service';
 import { SalesOrderSyncService } from '../sales-orders/sales-order-sync.service';
 import { PurchaseOrderSyncService } from '../purchase-orders/purchase-order-sync.service';
+import { CustomerReturnSyncService } from '../customer-returns/customer-return-sync.service';
 import { TransferOrderSyncService } from '../transfer-orders/transfer-order-sync.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 
@@ -72,6 +73,7 @@ export class SyncRunnerService {
     salesOrders: SalesOrderSyncService,
     purchaseOrders: PurchaseOrderSyncService,
     transferOrders: TransferOrderSyncService,
+    customerReturns: CustomerReturnSyncService,
   ) {
     const latestCreatedAt = async (
       model: {
@@ -136,8 +138,13 @@ export class SyncRunnerService {
         run: (lm) => purchaseOrders.sync({ lastModified: lm }),
       },
       'transfer-orders': {
-        watermark: () => latestCreatedAt(this.prisma.transferOrder as never),
+        // TOs created in WMS are not pulled in: they must not move the mark.
+        watermark: () => latestCreatedAt(this.prisma.transferOrder as never, { source: 'ORACLE' }),
         run: (lm) => transferOrders.sync({ lastModified: lm }),
+      },
+      'customer-returns': {
+        watermark: () => latestCreatedAt(this.prisma.customerReturn as never),
+        run: (lm) => customerReturns.sync({ lastModified: lm }),
       },
     };
   }

@@ -168,7 +168,7 @@ export class GoodsReceiveService {
   async updateActuals(id: string, dto: UpdateActualsDto, scope: WarehouseScope) {
     const gr = await this.getScoped(id, scope);
     // TO / PO source: the lines are the GR's own items (planned qty in `qty`).
-    if (gr.sourceType === 'TO' || gr.sourceType === 'PO') {
+    if (gr.sourceType === 'TO' || gr.sourceType === 'PO' || gr.sourceType === 'CUSTOMER_RETURN') {
       if (gr.status !== 'Open' && gr.status !== 'SyncFailed') {
         throw new BadRequestException(`Cannot edit a Goods Receive that is ${gr.status}`);
       }

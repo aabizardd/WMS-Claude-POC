@@ -20,6 +20,8 @@ const TO_PICKABLE_STATUSES = [
 ];
 
 const fmt = (n: number | undefined) => (n ?? 0).toLocaleString();
+/** How often a Syncing TO looks again. */
+const SYNC_POLL_MS = 4000;
 
 /** Strip Oracle's "REGION : " prefix from a location name ("JAWA : Jakarta - IEL"). */
 const locationName = (v: string | null | undefined) => (v ? v.replace(/^[^:]+:\s*/, '') : null);
@@ -29,6 +31,8 @@ export default function TransferOrderDetailPage() {
   const { has } = useAuth();
   const toast = useToast();
   const canGenerate = has('picking:create');
+  const canRetrySync = has('transfer-orders:create');
+  const [retrying, setRetrying] = useState(false);
 
   const [to, setTo] = useState<TransferOrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -71,6 +75,34 @@ export default function TransferOrderDetailPage() {
       active = false;
     };
   }, [id]);
+
+  // Created in WMS and on its way to Oracle: follow it until Oracle answers.
+  const syncing = to?.sync_status === 'Syncing';
+  useEffect(() => {
+    if (!syncing) return;
+    const t = setTimeout(() => {
+      api
+        .get<TransferOrderDetail>(`/transfer-orders/${id}`)
+        .then((r) => setTo(r.data))
+        .catch(() => undefined);
+    }, SYNC_POLL_MS);
+    return () => clearTimeout(t);
+  }, [syncing, to, id]);
+
+  async function retrySync() {
+    setRetrying(true);
+    try {
+      const r = await api.post<{ status_name: string }>(`/transfer-orders/${id}/retry-sync`);
+      setTo((cur) => (cur ? { ...cur, status_name: r.data.status_name, sync_status: 'Syncing', sync_error: null } : cur));
+      toast.success('Sending the Transfer Order to Oracle again.');
+    } catch (err) {
+      const m = axios.isAxiosError(err) ? err.response?.data?.message : null;
+      toast.error(typeof m === 'string' ? m : 'Retry failed');
+      loadTo();
+    } finally {
+      setRetrying(false);
+    }
+  }
 
   const items = useMemo(() => to?.items ?? [], [to]);
   const filtered = useMemo(() => {
@@ -232,6 +264,22 @@ export default function TransferOrderDetailPage() {
         </div>
       )}
 
+      {to.source === 'WMS' && to.sync_status && to.sync_status !== 'Synced' && (
+        <SyncBanner
+          status={to.sync_status}
+          error={to.sync_error ?? null}
+          uncertain={!!to.sync_uncertain}
+          canRetry={canRetrySync}
+          retrying={retrying}
+          onRetry={retrySync}
+        />
+      )}
+      {to.source === 'WMS' && to.sync_status === 'Synced' && to.sync_error && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
+          {to.sync_error}
+        </div>
+      )}
+
       {/* Info */}
       <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-5">
         <dl className="grid grid-cols-2 gap-x-6 gap-y-5 text-sm lg:grid-cols-4">
@@ -253,7 +301,7 @@ export default function TransferOrderDetailPage() {
           <Info label="Ownership" value={to.ownership} />
           <Info label="Origin Warehouse" value={to.warehouse?.name ?? locationName(to.from_location_name)} />
           <Info label="Destination Warehouse" value={locationName(to.to_location_name)} />
-          <Info label="ERP Doc ID" value={to.oracle_id} />
+          <Info label="ERP Doc ID" value={to.oracle_id ?? '-'} />
         </dl>
       </div>
 
@@ -383,6 +431,52 @@ function Info({ label, value }: { label: string; value: ReactNode }) {
       <dd className="mt-1 text-slate-700">
         {value === null || value === undefined || value === '' ? '-' : value}
       </dd>
+    </div>
+  );
+}
+
+/** Where a TO created in WMS stands with Oracle: Syncing, or Failed with Retry. */
+function SyncBanner({
+  status,
+  error,
+  uncertain,
+  canRetry,
+  retrying,
+  onRetry,
+}: {
+  status: 'Syncing' | 'Failed';
+  error: string | null;
+  uncertain: boolean;
+  canRetry: boolean;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  if (status === 'Syncing') {
+    return (
+      <div className="mb-4 flex items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm text-sky-800">
+        <svg className="h-4 w-4 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h5M20 20v-5h-5M5 19a9 9 0 0014.13-3M19 5A9 9 0 004.87 8" />
+        </svg>
+        Sending to Oracle… The status updates by itself when Oracle answers.
+      </div>
+    );
+  }
+  return (
+    <div className="mb-4 flex flex-wrap items-start justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+      <div className="min-w-0">
+        <p className="font-medium">Oracle did not create this Transfer Order.</p>
+        {error && <p className="mt-0.5 break-words">{error}</p>}
+        {uncertain && (
+          <p className="mt-0.5 text-rose-700">
+            Oracle did not answer clearly, so Retry first checks whether it was created after all.
+          </p>
+        )}
+      </div>
+      {canRetry && (
+        <button type="button" className="btn-primary shrink-0" onClick={onRetry} disabled={retrying}>
+          {retrying ? 'Retrying…' : 'Retry'}
+        </button>
+      )}
     </div>
   );
 }

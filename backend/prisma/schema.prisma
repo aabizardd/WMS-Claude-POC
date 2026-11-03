@@ -256,6 +256,7 @@ model Warehouse {
   inventoryAdjustments     InventoryAdjustment[]
   inventoryAdjustmentItems InventoryAdjustmentItem[] @relation("AdjustmentItemWarehouse")
   purchaseOrders           PurchaseOrder[]
+  customerReturns          CustomerReturn[]
   transferOrders           TransferOrder[]           @relation("TransferOrderFrom")
   salesDeliveriesFrom      SalesDelivery[]           @relation("SalesDeliveryFrom")
   salesDeliveriesTo        SalesDelivery[]           @relation("SalesDeliveryTo")
@@ -616,19 +617,22 @@ model GoodsReceiveItem {
 
   // TO source: the bin the received qty lands in, what is left to put away,
   // and the Transfer Order line it receives.
-  binId               String?            @map("bin_id")
-  bin                 Bin?               @relation(fields: [binId], references: [id])
+  binId                String?             @map("bin_id")
+  bin                  Bin?                @relation(fields: [binId], references: [id])
   // TO source: `qty` is the planned qty of the GR List; this is what was
   // actually received (sent to Oracle on Receive).
-  qtyActual           Float              @default(0) @map("qty_actual")
-  qtyRemaining        Float              @default(0) @map("qty_remaining")
-  materialCode        String?            @map("material_code")
-  transferOrderItemId String?            @map("transfer_order_item_id")
-  transferOrderItem   TransferOrderItem? @relation(fields: [transferOrderItemId], references: [id])
+  qtyActual            Float               @default(0) @map("qty_actual")
+  qtyRemaining         Float               @default(0) @map("qty_remaining")
+  materialCode         String?             @map("material_code")
+  transferOrderItemId  String?             @map("transfer_order_item_id")
+  transferOrderItem    TransferOrderItem?  @relation(fields: [transferOrderItemId], references: [id])
   // PO source: the Purchase Order line it receives (planned on an Open GR
   // List, received in Oracle on Receive).
-  purchaseOrderLineId String?            @map("purchase_order_line_id")
-  purchaseOrderLine   PurchaseOrderLine? @relation(fields: [purchaseOrderLineId], references: [id], onDelete: SetNull)
+  purchaseOrderLineId  String?             @map("purchase_order_line_id")
+  purchaseOrderLine    PurchaseOrderLine?  @relation(fields: [purchaseOrderLineId], references: [id], onDelete: SetNull)
+  // CR source: the Customer Return line it receives.
+  customerReturnLineId String?             @map("customer_return_line_id")
+  customerReturnLine   CustomerReturnLine? @relation(fields: [customerReturnLineId], references: [id], onDelete: SetNull)
 
   putawayItems PutawayItem[]
 
@@ -638,6 +642,7 @@ model GoodsReceiveItem {
   @@index([binId])
   @@index([transferOrderItemId])
   @@index([purchaseOrderLineId])
+  @@index([customerReturnLineId])
   @@map("goods_receive_items")
 }
 
@@ -731,6 +736,82 @@ model PurchaseOrderLine {
   @@map("purchase_order_lines")
 }
 
+// ===================== Customer Return (Inbound from Customer Return) =====================
+
+// Synced from Oracle "customers/returns" (Return Authorization). Source doc for
+// Inbound from Customer Return: received through a GR List like a PO.
+model CustomerReturn {
+  id         String  @id @default(uuid())
+  oracleId   String  @unique @map("oracle_id") // Oracle id
+  tranId     String? @map("tran_id") // RA-IEL-2026-000051
+  tranDate   String? @map("tran_date")
+  statusCode String? @map("status_code") // e.g. pendingReceipt
+  statusName String? @map("status_name")
+  memo       String?
+
+  customerId         String? @map("customer_id") // Oracle customer id
+  customerName       String? @map("customer_name")
+  // What the return was created from ("Sales Order #SO-IEL-2026-000268").
+  createdFromId      String? @map("created_from_id")
+  createdFromDisplay String? @map("created_from_display")
+  otherRefNum        String? @map("other_ref_num")
+
+  subsidiaryId      String? @map("subsidiary_id")
+  subsidiaryDisplay String? @map("subsidiary_display")
+  classDisplay      String? @map("class_display")
+  departmentDisplay String? @map("department_display")
+
+  locationOracleId String?    @map("location_oracle_id")
+  locationName     String?    @map("location_name")
+  warehouseId      String?    @map("warehouse_id")
+  warehouse        Warehouse? @relation(fields: [warehouseId], references: [id])
+
+  dateCreated  String?   @map("date_created")
+  lastModified DateTime? @map("last_modified")
+
+  createdBy String?  @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  lines CustomerReturnLine[]
+
+  @@index([warehouseId])
+  @@index([statusCode])
+  @@index([subsidiaryId])
+  @@map("customer_returns")
+}
+
+model CustomerReturnLine {
+  id               String         @id @default(uuid())
+  customerReturnId String         @map("customer_return_id")
+  customerReturn   CustomerReturn @relation(fields: [customerReturnId], references: [id], onDelete: Cascade)
+
+  lineId       String  @map("line_id") // Oracle line_id
+  lineNumber   Int?    @map("line_number") // Oracle "line" (1..n) — sent as "line" in item-receipt
+  itemOracleId String? @map("item_oracle_id") // Oracle item id (-> materials.erp_doc_id)
+  itemDisplay  String? @map("item_display")
+  description  String?
+  units        String?
+
+  quantity Float   @default(0)
+  received Float   @default(0) // value from Oracle
+  closed   Boolean @default(false)
+
+  locationOracleId  String? @map("location_oracle_id")
+  locationName      String? @map("location_name")
+  departmentDisplay String? @map("department_display")
+  classDisplay      String? @map("class_display")
+
+  // Resolved WMS material (item_oracle_id -> materials.erp_doc_id). Optional.
+  materialId String? @map("material_id")
+
+  goodsReceiveItems GoodsReceiveItem[]
+
+  @@unique([customerReturnId, lineId])
+  @@index([customerReturnId])
+  @@map("customer_return_lines")
+}
+
 // ===================== Transfer Order (Outbound from Transfer Stock) =====================
 
 // Synced from Oracle "transfer-orders/get". Source doc for Outbound from
@@ -738,12 +819,13 @@ model PurchaseOrderLine {
 // FROM location (outbound source) used for scoping; toWarehouseId is resolved
 // for the destination.
 model TransferOrder {
-  id       String  @id @default(uuid())
-  oracleId String  @unique @map("oracle_id") // Oracle transfer order id
-  tranId   String? @map("tran_id")
+  id         String  @id @default(uuid())
+  // Oracle transfer order id. Null on a TO created in WMS until Oracle accepts it.
+  oracleId   String? @unique @map("oracle_id")
+  tranId     String? @map("tran_id")
   // WMS's own outbound number, as on SalesOrder.outboundId.
   outboundId String? @unique @map("outbound_id")
-  tranDate String? @map("tran_date")
+  tranDate   String? @map("tran_date")
 
   statusCode String? @map("status_code")
   statusName String? @map("status_name")
@@ -765,11 +847,29 @@ model TransferOrder {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  // Create TO: "ORACLE" = pulled in by the sync, "WMS" = created in WMS and
+  // sent to Oracle in the background (statusName shows Syncing / Failed
+  // until Oracle accepts it, then Oracle's own status).
+  source        String    @default("ORACLE")
+  syncStatus    String?   @map("sync_status") // Syncing | Failed | Synced
+  syncError     String?   @map("sync_error")
+  // The last failure may still have created it in Oracle (timeout, 5xx,
+  // restart): a retry looks for it in Oracle before sending again.
+  syncUncertain Boolean   @default(false) @map("sync_uncertain")
+  syncAttempts  Int       @default(0) @map("sync_attempts")
+  syncStartedAt DateTime? @map("sync_started_at")
+  // Held by the worker sending it, so one TO is never sent twice at once.
+  syncLock      String?   @map("sync_lock")
+  // The Oracle request body (trandate is set on each attempt).
+  createPayload Json?     @map("create_payload")
+  createdById   Int?      @map("created_by_id")
+
   items    TransferOrderItem[]
   pickings Picking[]
 
   @@index([warehouseId])
   @@index([statusName])
+  @@index([syncStatus])
   @@map("transfer_orders")
 }
 
@@ -1350,13 +1450,13 @@ model PutawayItem {
 // Synced from the Oracle "sales-orders" endpoint (status = Pending Fulfillment).
 // Read-only mirror in WMS. Header/detail; upserted by oracle_id / (so, line).
 model SalesOrder {
-  id       String  @id @default(uuid())
-  oracleId String  @unique @map("oracle_id") // Oracle sales order id
-  tranId   String? @map("tran_id")
+  id         String  @id @default(uuid())
+  oracleId   String  @unique @map("oracle_id") // Oracle sales order id
+  tranId     String? @map("tran_id")
   // WMS's own outbound number ("SO ID" on WMS dev): OUT<yyyymmdd>-<nnn>, one
   // daily sequence shared with Transfer Orders.
   outboundId String? @unique @map("outbound_id")
-  tranDate String? @map("tran_date")
+  tranDate   String? @map("tran_date")
 
   statusCode String? @map("status_code")
   statusName String? @map("status_name")

@@ -82,6 +82,19 @@ const FIELDS: Record<InboundSource['code'], { primary: FieldDef[]; extra: FieldD
       { value: 'erp_doc_id', label: 'ERP Doc ID', kind: 'text' },
     ],
   },
+  CR: {
+    primary: [
+      { value: 'material_code', label: 'Part Number', kind: 'text' },
+      { value: 'warehouse', label: 'Warehouse', kind: 'text' },
+      { value: 'created_at', label: 'Created Range', kind: 'date' },
+    ],
+    extra: [
+      { value: 'material_name', label: 'Material Name', kind: 'text' },
+      { value: 'transaction_id', label: 'Transaction ID', kind: 'text' },
+      { value: 'erp_doc_id', label: 'ERP Doc ID', kind: 'text' },
+      { value: 'created_by', label: 'Created By', kind: 'text' },
+    ],
+  },
 };
 
 type Draft = Partial<Record<TransferGrFilterField, string[]>>;
@@ -142,13 +155,14 @@ export default function TransferGrListPage({ source = TRANSFER_IN }: { source?: 
   const { has } = useAuth();
   const toast = useToast();
   const confirm = useConfirm();
-  const isPo = source.code === 'PO';
+  // Only Transfer IN comes from another warehouse; PO and CR show none.
+  const isTo = source.code === 'TO';
   const BASE = source.base;
   const { primary: PRIMARY_FIELDS, extra: EXTRA_FIELDS } = FIELDS[source.code];
   const FILTER_FIELDS = [...PRIMARY_FIELDS, ...EXTRA_FIELDS];
   const fieldLabel = (f: TransferGrFilterField) => FILTER_FIELDS.find((x) => x.value === f)?.label ?? f;
   // expand, No, data columns (PO has no Origin Warehouse), Actions.
-  const COLS = isPo ? 13 : 14;
+  const COLS = isTo ? 14 : 13;
 
   const [searchParams, setSearchParams] = useSearchParams();
   const [initial] = useState(() => ({
@@ -385,11 +399,11 @@ export default function TransferGrListPage({ source = TRANSFER_IN }: { source?: 
                 <SortableTh label="Transaction ID" col="transaction_id" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="GR ID" col="gr_number" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <th className="whitespace-nowrap px-4 py-3 font-medium">ERP Doc ID</th>
-                {isPo && <th className="whitespace-nowrap px-4 py-3 font-medium">Document Type</th>}
+                {!isTo && <th className="whitespace-nowrap px-4 py-3 font-medium">Document Type</th>}
                 <th className="whitespace-nowrap px-4 py-3 font-medium">Ownership</th>
-                {!isPo && <th className="whitespace-nowrap px-4 py-3 font-medium">Origin Warehouse</th>}
+                {isTo && <th className="whitespace-nowrap px-4 py-3 font-medium">Origin Warehouse</th>}
                 <SortableTh
-                  label={isPo ? 'Warehouse' : 'Destination Warehouse'}
+                  label={isTo ? 'Destination Warehouse' : 'Warehouse'}
                   col="warehouse"
                   sort={sort}
                   onSort={onSort}
@@ -399,7 +413,7 @@ export default function TransferGrListPage({ source = TRANSFER_IN }: { source?: 
                 <SortableTh label="Created By" col="created_by" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="Created At" col="created_at" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="Last Modified At" col="updated_at" sort={sort} onSort={onSort} pad="px-4" className={th} />
-                {!isPo && <th className="whitespace-nowrap px-4 py-3 font-medium">Document Type</th>}
+                {isTo && <th className="whitespace-nowrap px-4 py-3 font-medium">Document Type</th>}
                 <th className="sticky right-0 bg-slate-50 px-4 py-3 text-center font-medium shadow-[-6px_0_8px_-6px_rgba(15,23,42,0.15)]">
                   Actions
                 </th>
@@ -429,14 +443,14 @@ export default function TransferGrListPage({ source = TRANSFER_IN }: { source?: 
                       <td className={`${td} text-slate-800`}>{g.transaction_id ?? '-'}</td>
                       <td className={`${td} text-slate-800`}>{g.gr_number}</td>
                       <td className={td}>{g.erp_doc_id ?? '-'}</td>
-                      {isPo && <td className={td}>{g.document_type}</td>}
+                      {!isTo && <td className={td}>{g.document_type}</td>}
                       <td className={td}>{g.ownership ?? '-'}</td>
-                      {!isPo && <td className="px-4 py-3 text-slate-700">{g.origin_warehouse ?? '-'}</td>}
+                      {isTo && <td className="px-4 py-3 text-slate-700">{g.origin_warehouse ?? '-'}</td>}
                       <td className="px-4 py-3 text-slate-700">{g.warehouse ?? '-'}</td>
                       <td className={td}>{g.created_by ?? '-'}</td>
                       <td className={td}>{formatDateTime(g.created_at)}</td>
                       <td className={td}>{formatDateTime(g.updated_at)}</td>
-                      {!isPo && <td className={td}>{g.document_type}</td>}
+                      {isTo && <td className={td}>{g.document_type}</td>}
                       <td className={stickyActionsCellClass(open)} onClick={(e) => e.stopPropagation()}>
                         <RowActionMenu
                           actions={[

@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import type { InventoryAdjustmentItemRow } from '../../types';
+import SortableTh from '../../components/SortableTh';
+import type { SortState } from '../../hooks/useSort';
 
 const IA_TYPE_LABELS: Record<string, string> = {
   DiscrepancyQuantity: 'Discrepancy Quantity',
@@ -84,37 +86,49 @@ export function AdjLinesTable({
   lines,
   qualityMode,
   emptyText = 'This adjustment has no lines.',
+  startNo = 1,
+  sort,
 }: {
   lines: InventoryAdjustmentItemRow[];
   qualityMode?: boolean;
   emptyText?: string;
+  /** Row number of the first line, for a paged table. */
+  startNo?: number;
+  /** Server-side sorting: the headers become sort buttons. */
+  sort?: { state: SortState; onSort: (col: string) => void };
 }) {
   const th = 'whitespace-nowrap bg-[#F2F4FD] px-3 py-2 font-semibold text-[#5166AE]';
   const td = 'border-b border-neutral-100 px-3 py-2 align-middle';
   const cols = qualityMode ? 7 : 6;
+  const head = (label: string, col: string, cls: string, align: 'left' | 'right' = 'left') =>
+    sort ? (
+      <SortableTh label={label} col={col} sort={sort.state} onSort={sort.onSort} align={align} pad="px-3" className={`${th} ${cls} !py-2`} />
+    ) : (
+      <th className={`${th} ${cls} ${align === 'right' ? 'text-right' : ''}`}>{label}</th>
+    );
   return (
     <table className="w-full min-w-[800px] border-separate border-spacing-0 text-left text-[13px]">
       <thead>
-        <tr>
+        <tr className="[&_button]:normal-case [&_button]:tracking-normal">
           <th className={`${th} w-12`}>No</th>
-          <th className={`${th} min-w-[220px]`}>Material</th>
-          <th className={`${th} min-w-[200px]`}>Warehouse</th>
-          <th className={`${th} min-w-[160px]`}>Bin</th>
-          <th className={`${th} min-w-[160px] text-right`}>Before Adjustment</th>
+          {head('Material', 'material_code', 'min-w-[220px]')}
+          {head('Warehouse', 'warehouse', 'min-w-[200px]')}
+          {head('Bin', 'bin', 'min-w-[160px]')}
+          {head('Before Adjustment', 'before_qty', 'min-w-[160px]', 'right')}
           {qualityMode ? (
             <>
-              <th className={`${th} min-w-[140px] text-right`}>Qty Passed</th>
-              <th className={`${th} min-w-[140px] text-right`}>Qty Non-Passed</th>
+              {head('Qty Passed', 'qty_passed', 'min-w-[140px]', 'right')}
+              {head('Qty Non-Passed', 'qty_non_passed', 'min-w-[140px]', 'right')}
             </>
           ) : (
-            <th className={`${th} min-w-[160px] text-right`}>Qty Adjustment</th>
+            head('Qty Adjustment', 'qty_adjustment', 'min-w-[160px]', 'right')
           )}
         </tr>
       </thead>
       <tbody className="text-neutral-700">
         {lines.map((l, i) => (
           <tr key={l.id} className="bg-white hover:bg-neutral-50">
-            <td className={`${td} w-12`}>{i + 1}</td>
+            <td className={`${td} w-12`}>{startNo + i}</td>
             <td className={td}>
               <Stacked top={l.material_code} bottom={l.material_name} strong="font-semibold" />
             </td>

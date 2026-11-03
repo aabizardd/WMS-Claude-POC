@@ -41,6 +41,7 @@ import { ComplaintsModule } from "./complaints/complaints.module";
 import { OracleSyncModule } from "./sync/oracle-sync.module";
 import { DashboardModule } from "./dashboard/dashboard.module";
 import { PurchaseOrdersModule } from "./purchase-orders/purchase-orders.module";
+import { CustomerReturnsModule } from "./customer-returns/customer-returns.module";
 import { TransferOrdersModule } from "./transfer-orders/transfer-orders.module";
 import { HealthModule } from "./health/health.module";
 import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
@@ -88,6 +89,7 @@ import { PermissionsGuard } from "./auth/guards/permissions.guard";
     DeliveryModule,
     ComplaintsModule,
     PurchaseOrdersModule,
+    CustomerReturnsModule,
     TransferOrdersModule,
     OracleSyncModule,
     DashboardModule,

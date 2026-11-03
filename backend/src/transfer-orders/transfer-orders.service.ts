@@ -30,7 +30,8 @@ const SORTABLE: Record<string, (d: SortDir) => ToOrder> = {
 const DEFAULT_ORDER: ToOrder = { lastModified: 'desc' };
 
 /** TOs not fulfilled yet have nothing to receive: left out of the inbound view. */
-const NOT_INBOUND_STATUSES = ['Pending Approval', 'Pending Fulfillment'];
+// Also the WMS-only states of a TO created in WMS and not yet in Oracle.
+const NOT_INBOUND_STATUSES = ['Pending Approval', 'Pending Fulfillment', 'Syncing', 'Failed'];
 
 /** A line's resolved WMS material (lines carry only its id). */
 type MatInfo = {
@@ -81,7 +82,7 @@ type ToLine = ToDetail['items'][number];
 export interface TransferOrderExportRow {
   tran_id: string | null;
   status: string | null;
-  erp_doc_id: string;
+  erp_doc_id: string | null;
   origin: string | null;
   destination: string | null;
   created_at: Date;
@@ -339,6 +340,9 @@ export class TransferOrdersService {
         warehouse: r.warehouse ? { id: r.warehouse.id, name: r.warehouse.name } : null,
         ownership: r.warehouse?.subsidiaryName ?? null,
         memo: r.memo,
+        source: r.source,
+        sync_status: r.syncStatus,
+        sync_error: r.syncError,
         item_count: r._count.items,
         created_by: r.createdBy,
         last_modified_by: SYNC_ACTOR,
@@ -556,6 +560,8 @@ export class TransferOrdersService {
 
   async getLastSyncAt() {
     const latest = await this.prisma.transferOrder.findFirst({
+      // TOs created in WMS were not synced in.
+      where: { source: 'ORACLE' },
       orderBy: { createdAt: 'desc' },
       select: { createdAt: true },
     });
@@ -599,6 +605,12 @@ export class TransferOrdersService {
       created_by: to.createdBy,
       last_modified_by: SYNC_ACTOR,
       memo: to.memo,
+      // Created in WMS: how far it got on its way to Oracle.
+      source: to.source,
+      sync_status: to.syncStatus,
+      sync_error: to.syncError,
+      sync_uncertain: to.syncUncertain,
+      sync_attempts: to.syncAttempts,
       date_created: to.dateCreated,
       last_modified: to.lastModified,
       created_at: to.createdAt,

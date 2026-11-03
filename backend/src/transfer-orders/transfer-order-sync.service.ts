@@ -21,7 +21,7 @@ interface OracleToItem {
   from_location_name?: string | null;
 }
 
-interface OracleTransferOrder {
+export interface OracleTransferOrder {
   id: number | string;
   tranid?: string | null;
   tran_date?: string | null;
@@ -94,6 +94,18 @@ export class TransferOrderSyncService {
    * change on the item receipt, and the incremental sync may not see it soon.
    */
   async syncOne(tranId: string): Promise<boolean> {
+    const to = await this.fetchOne(tranId);
+    if (!to) {
+      this.logger.warn(`syncOne: Transfer Order ${tranId} not returned by the bridge`);
+      return false;
+    }
+    await this.upsert(to);
+    this.logger.log(`syncOne: Transfer Order ${tranId} refreshed (status ${to.status_name ?? '-'})`);
+    return true;
+  }
+
+  /** One Transfer Order as Oracle has it, by its tranid (null when not found). */
+  async fetchOne(tranId: string): Promise<OracleTransferOrder | null> {
     const res = await this.erp.post<OracleToResponse>('/transfer-orders/get', {
       page: 1,
       page_size: 1,
@@ -102,13 +114,25 @@ export class TransferOrderSyncService {
       filters: { tranid: tranId },
     });
     const to = (res?.data ?? [])[0];
-    if (!to || to.id == null || to.tranid !== tranId) {
-      this.logger.warn(`syncOne: Transfer Order ${tranId} not returned by the bridge`);
-      return false;
+    return to && to.id != null && to.tranid === tranId ? to : null;
+  }
+
+  /**
+   * The first Transfer Order modified in Oracle since `since` that matches —
+   * how a retry finds a TO an earlier, unanswered attempt may have created.
+   */
+  async findRecent(
+    since: Date,
+    matches: (to: OracleTransferOrder) => boolean,
+    maxPages = 5,
+  ): Promise<OracleTransferOrder | null> {
+    for (let page = 1; page <= maxPages; page++) {
+      const res = await this.fetchPage(page, 100, since.toISOString());
+      const hit = (res.data ?? []).find((to) => to.id != null && matches(to));
+      if (hit) return hit;
+      if (page >= (res.total_pages || 1)) return null;
     }
-    await this.upsert(to);
-    this.logger.log(`syncOne: Transfer Order ${tranId} refreshed (status ${to.status_name ?? '-'})`);
-    return true;
+    return null;
   }
 
   async sync(options: SyncOptions = {}): Promise<SyncResult> {
@@ -174,7 +198,7 @@ export class TransferOrderSyncService {
     return result;
   }
 
-  private async upsert(to: OracleTransferOrder): Promise<void> {
+  async upsert(to: OracleTransferOrder): Promise<void> {
     const oracleId = String(to.id);
     const lm = to.last_modified ? new Date(to.last_modified) : null;
 
@@ -249,6 +273,25 @@ export class TransferOrderSyncService {
           lineNumber: it.line_number,
           remainingQty: itemData.committed,
           ...itemData,
+        },
+      });
+    }
+
+    // A TO created in WMS starts with its own lines (numbered 1..n). Once
+    // Oracle's are in, drop the drafts Oracle has no line for — only ones
+    // nothing in WMS has used yet.
+    if (record.source === 'WMS' && to.items?.length) {
+      const oracleLines = to.items
+        .map((it) => it.line_number)
+        .filter((n): n is number => n != null);
+      await this.prisma.transferOrderItem.deleteMany({
+        where: {
+          transferOrderId: record.id,
+          lineNumber: { notIn: oracleLines },
+          pickingItems: { none: {} },
+          packingItems: { none: {} },
+          deliveryItems: { none: {} },
+          goodsReceiveItems: { none: {} },
         },
       });
     }

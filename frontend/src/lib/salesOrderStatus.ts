@@ -12,8 +12,15 @@ export const SO_STATUSES = [
   'Rejected',
 ];
 
+/**
+ * A TO created in WMS before Oracle has it: Syncing while it is being sent,
+ * Failed when Oracle did not take it.
+ */
+export const TO_SYNC_STATUSES = ['Syncing', 'Failed'];
+
 /** Oracle's transfer-order statuses, in the order the status filter lists them. */
 export const TO_STATUSES = [
+  ...TO_SYNC_STATUSES,
   'Open',
   'Pending Approval',
   'Pending Fulfillment',
@@ -48,6 +55,9 @@ const STATUS_BADGE: Record<string, string> = {
   'Fully Billed': 'border-emerald-300 bg-emerald-50 text-emerald-700',
   'Rejected by Supervisor': 'border-rose-300 bg-rose-50 text-rose-700',
   'On Progress': 'border-orange-300 bg-orange-50 text-orange-700',
+  // A TO created in WMS, on its way to Oracle.
+  Syncing: 'border-sky-300 bg-sky-50 text-sky-700',
+  Failed: 'border-rose-300 bg-rose-50 text-rose-700',
 };
 
 /** Outlined pill colours for an Oracle sales-, transfer- or purchase-order status. */

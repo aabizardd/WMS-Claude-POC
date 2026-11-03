@@ -71,7 +71,10 @@ const PERMISSION_TREE: TreeNode[] = [
         label: 'Inbound from Local Vendor',
         children: [{ label: 'PO', resource: 'purchase-orders' }],
       },
-      { label: 'Inbound from Customer Return', comingSoon: true },
+      {
+        label: 'Inbound from Customer Return',
+        children: [{ label: 'CR', resource: 'customer-returns' }],
+      },
       { label: 'Inbound from Stock Transfer', comingSoon: true },
     ],
   },

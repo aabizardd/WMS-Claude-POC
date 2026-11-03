@@ -24,14 +24,15 @@ import { apiError, deleteTransferDoc, exportCsv, materialText } from './transfer
 import { TRANSFER_IN, type InboundSource } from './inboundSource';
 
 /**
- * Goods Receive Detail (Transfer IN / Local Vendor), as on WMS dev. An Open
+ * Goods Receive Detail (Transfer IN / Local Vendor / Customer Return), as on WMS dev. An Open
  * GR is received in place: Receive turns Actual Qty into inputs (with Max),
  * Confirm submits the Item Receipt to Oracle. A received GR then generates
  * its putaways.
  */
 export default function TransferGrDetailPage({ source = TRANSFER_IN }: { source?: InboundSource } = {}) {
   const BASE = source.base;
-  const isPo = source.code === 'PO';
+  // Only Transfer IN comes from another warehouse; PO and CR show none.
+  const isTo = source.code === 'TO';
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { has } = useAuth();
@@ -170,7 +171,7 @@ export default function TransferGrDetailPage({ source = TRANSFER_IN }: { source?
         { label: 'ERP Doc ID', value: gr!.erp_doc_id },
         { label: 'Ownership', value: gr!.ownership },
         { label: 'Warehouse', value: gr!.warehouse?.name },
-        ...(isPo ? [] : [{ label: 'Origin Warehouse', value: gr!.origin_warehouse }]),
+        ...(isTo ? [{ label: 'Origin Warehouse', value: gr!.origin_warehouse }] : []),
         { label: 'Created At', value: fmtStamp(gr!.created_at) },
       ],
       tables: [
@@ -261,7 +262,7 @@ export default function TransferGrDetailPage({ source = TRANSFER_IN }: { source?
     id: it.id,
     item_name: it.material_code,
     po_number: gr.transaction_id,
-    vendor_name: (isPo ? gr.supplier : gr.origin_warehouse) ?? null,
+    vendor_name: (isTo ? gr.origin_warehouse : (gr.supplier ?? gr.customer)) ?? null,
     item_description: it.material_name,
     qty_expected: it.planned_qty,
     qty_actual: it.actual_qty,
@@ -306,7 +307,7 @@ export default function TransferGrDetailPage({ source = TRANSFER_IN }: { source?
             { label: 'ERP Doc ID', value: gr.erp_doc_id },
             { label: 'Ownership', value: gr.ownership },
             { label: 'Warehouse', value: gr.warehouse?.name },
-            ...(isPo ? [] : [{ label: 'Origin Warehouse', value: gr.origin_warehouse }]),
+            ...(isTo ? [{ label: 'Origin Warehouse', value: gr.origin_warehouse }] : []),
             { label: 'Document Type', value: gr.document_type },
             { label: 'Created By', value: gr.created_by },
             { label: 'Created At', value: fmtStamp(gr.created_at) },

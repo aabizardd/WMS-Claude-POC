@@ -90,3 +90,14 @@ export class PoInboundController extends InboundScreensController {
     super(service);
   }
 }
+
+// Customer Return (Inbound from Customer Return).
+@Controller('cr-inbound')
+export class CrInboundController extends InboundScreensController {
+  protected readonly source = 'CUSTOMER_RETURN';
+
+  // Own constructor: Nest reads the injected types from the decorated class.
+  constructor(service: TransferInboundService) {
+    super(service);
+  }
+}

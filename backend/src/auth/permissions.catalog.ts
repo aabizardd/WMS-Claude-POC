@@ -45,6 +45,8 @@ const RESOURCES: { resource: string; label: string; actions: string[] }[] = [
   { resource: 'mrn', label: 'MRN', actions: ['read', 'sync'] },
   // Inbound (Local Vendor) — Purchase Orders mirror Oracle (read/sync).
   { resource: 'purchase-orders', label: 'Purchase Orders', actions: ['read', 'sync'] },
+  // Inbound (Customer Return) — Customer Returns mirror Oracle (read/sync).
+  { resource: 'customer-returns', label: 'Customer Returns', actions: ['read', 'sync'] },
   // create = Generate GR from PO (Inbound from Local Vendor).
   { resource: 'goods-receive', label: 'Goods Receive', actions: ['read', 'create', 'update', 'delete'] },
   // Inventory is generated automatically on receive; manual bin adjustment adds update.
@@ -59,8 +61,9 @@ const RESOURCES: { resource: string; label: string; actions: string[] }[] = [
   { resource: 'putaway', label: 'Putaway', actions: ['read', 'create', 'update', 'delete'] },
   // Outbound — Sales Orders mirror Oracle — read/sync only.
   { resource: 'sales-orders', label: 'Sales Orders', actions: ['read', 'sync'] },
-  // Outbound (Transfer Stock) — Transfer Orders mirror Oracle — read/sync.
-  { resource: 'transfer-orders', label: 'Transfer Orders', actions: ['read', 'sync'] },
+  // Outbound (Transfer Stock) — Transfer Orders mirror Oracle — read/sync;
+  // create = Create TO (sent straight to Oracle) from the TO In / TO Out lists.
+  { resource: 'transfer-orders', label: 'Transfer Orders', actions: ['read', 'sync', 'create'] },
   // Outbound — Picking generated from Sales Order — read, create (generate).
   { resource: 'picking', label: 'Picking', actions: ['read', 'create', 'update', 'delete'] },
   // Outbound — Packing generated from (Closed) Picking — read, create, update
@@ -104,6 +107,7 @@ export const STAFF_PERMISSION_KEYS = [
   'subsidiaries:read',
   'mrn:read',
   'purchase-orders:read',
+  'customer-returns:read',
   'goods-receive:read',
   'inventory:read',
   'inventory-adjustments:read',
