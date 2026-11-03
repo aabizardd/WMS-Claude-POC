@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../../lib/api';
+import { downloadFile } from '../../../lib/download';
 import type { Paginated, TransferGrFilter, TransferGrFilterField, TransferGrListLine, TransferGrRow } from '../../../types';
 import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
@@ -172,6 +173,25 @@ export default function TransferGrListPage({ source = TRANSFER_IN }: { source?: 
     toggle(col);
   };
   const appliedKey = JSON.stringify(applied);
+  const [exporting, setExporting] = useState(false);
+
+  /** Every GR the filters match, one row per line (list + accordion columns), in the list's order. */
+  async function exportExcel() {
+    if (exporting) return;
+    setExporting(true);
+    toast.info('Preparing the export…');
+    try {
+      await downloadFile(
+        `${source.api}/goods-receive/export`,
+        { status: status || undefined, filters: applied.length ? appliedKey : undefined, ...params() },
+        `${source.code.toLowerCase()}_goods_receive_export.xlsx`,
+      );
+    } catch {
+      toast.error('Export failed. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -279,7 +299,13 @@ export default function TransferGrListPage({ source = TRANSFER_IN }: { source?: 
         <ListHeader
           title={`Goods Receive - ${source.code}`}
           subtitle={`Validate and receive goods into the system for ${source.noun}`}
-          menu={[{ label: 'Export', icon: <ExportIcon />, onClick: () => toast.info('Export is not available yet.') }]}
+          menu={[
+            {
+              label: exporting ? 'Exporting…' : 'Export',
+              icon: <ExportIcon />,
+              onClick: exportExcel,
+            },
+          ]}
         />
 
         <ListFilterPanel

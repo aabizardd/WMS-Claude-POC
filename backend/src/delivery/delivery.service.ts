@@ -8,7 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import type { Writable } from 'stream';
-import { writeSoDeliveryXlsx } from '../sales-orders/so-delivery-export';
+import { writeSoDeliveryXlsx, writeToDeliveryXlsx } from '../sales-orders/so-delivery-export';
 import { PrismaService } from '../prisma/prisma.service';
 import { highestSeq } from '../common/doc-sequence';
 import { InventoryService } from '../inventory/inventory.service';
@@ -345,14 +345,21 @@ export class DeliveryService {
   }
 
   /**
-   * The Delivery Plan list's export: only SOs with delivered qty — the shipped
-   * (Closed) Sales Order plans the list's filters match, with their SO lines.
+   * The Delivery Plan list's export: every plan of the list's source (Sales
+   * or Transfer Order) its filters match — Open (not shipped yet: no SD,
+   * nothing delivered) and Closed — with the order lines on them.
    */
   exportXlsx(query: Parameters<DeliveryService['listWhere']>[0], scope: WarehouseScope, out: Writable) {
+    const isTransfer = query.source === 'TRANSFER_ORDER';
     const deliveryWhere: Prisma.DeliveryWhereInput = {
-      AND: [this.listWhere({ ...query, status: 'all' }, scope), { sourceType: 'SALES_ORDER', status: 'Closed' }],
+      AND: [
+        this.listWhere({ ...query, status: 'all' }, scope),
+        { sourceType: isTransfer ? 'TRANSFER_ORDER' : 'SALES_ORDER' },
+      ],
     };
-    return writeSoDeliveryXlsx(this.prisma, { soWhere: {}, deliveryWhere }, out);
+    return isTransfer
+      ? writeToDeliveryXlsx(this.prisma, { toWhere: {}, deliveryWhere }, out)
+      : writeSoDeliveryXlsx(this.prisma, { soWhere: {}, deliveryWhere }, out);
   }
 
   async findAll(

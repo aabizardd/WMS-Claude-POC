@@ -12,6 +12,36 @@ export type InboundSource = 'TO' | 'PO';
 
 const DOCUMENT_TYPE: Record<InboundSource, string> = { TO: 'Transfer Order', PO: 'Purchase Order' };
 
+/** One row of the Goods Receive export: a GR and one of its lines. */
+export interface GrExportRow {
+  status: string;
+  transaction_id: string | null;
+  gr_number: string;
+  erp_doc_id: string | null;
+  document_type: string;
+  origin_warehouse?: string | null;
+  supplier?: string | null;
+  ownership: string | null;
+  warehouse: string | null;
+  created_by: string | null;
+  created_at: Date;
+  updated_at: Date;
+  /** Null for a GR without lines. */
+  line: {
+    no: number;
+    line_number: number | null;
+    material_code: string | null;
+    material_name: string | null;
+    material_type: string | null;
+    material_category: string | null;
+    uom: string | null;
+    planned_qty: number;
+    actual_qty: number;
+    putaway_qty: number;
+    remain_qty: number;
+  } | null;
+}
+
 /** What a GR / putaway row shows of its source document. */
 interface SourceDoc {
   erpDocId: string | null;
@@ -316,6 +346,81 @@ export class TransferInboundService {
       ),
       totals,
     };
+  }
+
+  /**
+   * The Goods Receive list's export: one row per GR line — the list's GR
+   * columns repeated on each of its accordion lines — for every GR the list's
+   * filters match, in the list's order. A Part Number / Material Name filter
+   * keeps only the matching lines, as the accordion does; a GR without lines
+   * is one row with the line columns empty. Yielded in batches.
+   */
+  async *exportRows(source: InboundSource, q: QueryTransferInboundDto, scope: WarehouseScope): AsyncGenerator<GrExportRow[]> {
+    const where = await this.grWhere(source, q, scope);
+    const orderBy = buildOrderBy(q.sort_by, q.sort_order, GR_SORTABLE, { createdAt: 'desc' } as GrOrder);
+    const lineFilters = (q.filters ?? [])
+      .filter((f) => f.field === 'material_code' || f.field === 'material_name')
+      .map((f) => ({ field: f.field, values: (f.values ?? []).map((v) => v.trim().toLowerCase()).filter(Boolean) }))
+      .filter((f) => f.values.length);
+    const lineMatches = (code: string | null, name: string | null) =>
+      lineFilters.every((f) =>
+        f.values.some((v) => ((f.field === 'material_code' ? code : name) ?? '').toLowerCase().includes(v)),
+      );
+    const BATCH = 200;
+    for (let skip = 0; ; skip += BATCH) {
+      const grs = await this.prisma.goodsReceive.findMany({
+        where,
+        // The id keeps paging stable when the sort column has ties.
+        orderBy: [orderBy, { id: 'asc' }],
+        skip,
+        take: BATCH,
+        include: {
+          warehouse: { select: { name: true, subsidiaryName: true } },
+          createdBy: { select: { name: true } },
+          items: { orderBy: { lineNumber: 'asc' } },
+        },
+      });
+      const [docs, mats] = await Promise.all([
+        this.sourceDocs(source, grs.map((g) => g.sourceDocId)),
+        this.materials(grs.flatMap((g) => g.items.map((it) => it.materialId))),
+      ]);
+      const rows: GrExportRow[] = [];
+      for (const g of grs) {
+        const header = {
+          status: g.status,
+          transaction_id: g.sourceDocNumber,
+          gr_number: g.grNumber,
+          ...this.sourceFields(source, docs.get(g.sourceDocId)),
+          ownership: g.warehouse?.subsidiaryName ?? null,
+          warehouse: g.warehouse?.name ?? null,
+          created_by: g.createdBy?.name ?? null,
+          created_at: g.createdAt,
+          updated_at: g.updatedAt,
+        };
+        const received = g.status !== 'Open' && g.status !== 'SyncFailed';
+        let no = 0;
+        for (const it of g.items) {
+          const m = this.materialFields(mats.get(it.materialId ?? ''), it.materialCode, it.itemDisplay);
+          if (!lineMatches(m.material_code, m.material_name)) continue;
+          rows.push({
+            ...header,
+            line: {
+              no: ++no,
+              line_number: it.lineNumber,
+              material_code: m.material_code,
+              material_name: m.material_name,
+              material_type: m.material_type,
+              material_category: m.material_category,
+              uom: m.uom,
+              ...this.grLineQty(it, received),
+            },
+          });
+        }
+        if (!g.items.length) rows.push({ ...header, line: null });
+      }
+      if (rows.length) yield rows;
+      if (grs.length < BATCH) return;
+    }
   }
 
   async goodsReceive(source: InboundSource, id: string, scope: WarehouseScope) {

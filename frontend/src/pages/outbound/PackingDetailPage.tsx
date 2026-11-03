@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import api from '../../lib/api';
+import { downloadFile } from '../../lib/download';
 import { printDoc } from '../../lib/print';
 import type { PackingDetail, PackingItemRow } from '../../types';
 import { useAuth } from '../../context/AuthContext';
@@ -20,7 +21,7 @@ import {
   qty,
   type DocColumn,
 } from '../../components/wms/DocKit';
-import { apiError, exportCsv, materialText } from '../inbound/transfer/transferInbound';
+import { apiError, materialText } from '../inbound/transfer/transferInbound';
 import { progressConfirm } from './progressConfirm';
 import { PickingIds } from './PackingList';
 
@@ -230,7 +231,15 @@ export default function PackingDetailPage() {
           tables: [{ heading: 'Material List', columns: listColumns, rows: listRows }],
         }),
     },
-    { label: 'Export', icon: icons.download, onClick: () => exportCsv(`${pk.packing_id}.csv`, listColumns, listRows) },
+    {
+      // WMS dev's "Packing List" workbook, one row per material.
+      label: 'Export',
+      icon: icons.download,
+      onClick: () =>
+        downloadFile(`/packing/${pk.id}/export`, {}, `packing_list_${isTransfer ? 'TO' : 'SO'}_${pk.packing_id}.xlsx`).catch(() =>
+          toast.error('Export failed. Please try again.'),
+        ),
+    },
   ];
 
   return (

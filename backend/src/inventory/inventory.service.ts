@@ -171,7 +171,6 @@ export interface InventoryExportRow {
   material_name: string | null;
   warehouse_name: string | null;
   bin_label: string | null;
-  stock_unit_cuom: string | null;
   qty_on_hand: number;
   qty_available: number;
   qty_freeze: number;
@@ -307,7 +306,6 @@ export class InventoryService {
             material_name: m.material?.materialName ?? null,
             warehouse_name: m.warehouse?.name ?? null,
             bin_label: label || null,
-            stock_unit_cuom: m.material?.primaryUom?.uomCode ?? null,
             qty_on_hand: q.on_hand,
             qty_available: frozen ? 0 : q.avail_qty,
             qty_freeze: q.freeze_qty,

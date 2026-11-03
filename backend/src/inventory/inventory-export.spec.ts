@@ -35,7 +35,6 @@ describe('Inventory List export', () => {
       ['Rack B', 3, 2, 0, 1],
       ['Rack C', 0, 0, 0, 0],
     ]);
-    expect(all[0].stock_unit_cuom).toBe('PCS');
 
     const kit = [];
     for await (const rows of service.exportRows({ filters: [{ field: 'bin', values: ['rb'] }] }, scope)) kit.push(...rows);

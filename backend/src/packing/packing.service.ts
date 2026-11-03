@@ -81,7 +81,7 @@ const itemsInclude = {
     bin: { select: outboundBinSelect },
     picker: { select: { id: true, name: true } },
     // The Picking Bin the line came from.
-    pickingItem: { select: { bin: { select: { binLabel: true } } } },
+    pickingItem: { select: { bin: { select: { binLabel: true } }, picking: { select: { pickingCode: true } } } },
   },
   orderBy: { createdAt: 'asc' as const },
 } satisfies Prisma.Packing$itemsArgs;
@@ -617,6 +617,8 @@ export class PackingService {
       quality_issue: it.qualityIssue,
       remaining_qty: it.remainingQty,
       bin_label: it.bin?.binLabel ?? it.pickingItem?.bin?.binLabel ?? null,
+      // The picking this line was packed from.
+      picking_id: it.pickingItem?.picking?.pickingCode ?? null,
       picker: it.picker ? { id: it.picker.id, name: it.picker.name } : null,
       // Lines carry no audit of their own: a packed line shows the packing's last change.
       updated_by: handled > 0 ? (p.updatedBy?.name ?? null) : null,

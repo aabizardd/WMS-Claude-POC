@@ -16,7 +16,6 @@ const COLUMNS = [
   col('material_name', 34),
   col('warehouse_name', 32),
   col('bin_label', 22),
-  col('stock_unit_cuom', 16),
   col('qty_on_hand', 18),
   col('qty_available', 18),
   col('qty_freeze', 18),

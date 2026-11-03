@@ -22,13 +22,13 @@ export class DeliveryController {
   }
 
   /**
-   * Delivery Plan export: the shipped Sales Order plans the list's filters
-   * match, with their SO lines. Declared before ':id'.
+   * Delivery Plan export: the plans of the list's source (SO or TO) its
+   * filters match (Open or Closed), with their order lines. Declared before ':id'.
    */
   @Get('export')
   @RequirePermissions('delivery:read')
   async exportXlsx(@Query() query: QueryDeliveryDto, @CurrentUser() user: AuthUser, @Res() res: Response) {
-    res.set(xlsxHeaders(soDeliveryExportFileName('dp')));
+    res.set(xlsxHeaders(soDeliveryExportFileName(query.source === 'TRANSFER_ORDER' ? 'to-dp' : 'dp')));
     await this.service.exportXlsx(query, user, res);
   }
 

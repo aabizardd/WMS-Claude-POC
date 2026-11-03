@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../lib/api';
+import { downloadFile } from '../../lib/download';
 import type { IaFilter, IaFilterField, InventoryAdjustmentItemRow, InventoryAdjustmentRow, Paginated } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -154,6 +155,25 @@ export default function InventoryAdjustmentsPage() {
     toggle(col);
   };
   const appliedKey = JSON.stringify(applied);
+  const [exporting, setExporting] = useState(false);
+
+  /** Every row the filters match, one per line (list + accordion columns), in the list's order. */
+  async function exportExcel() {
+    if (exporting) return;
+    setExporting(true);
+    toast.info('Preparing the export…');
+    try {
+      await downloadFile(
+        '/inventory-adjustments/export',
+        { status: status || undefined, filters: applied.length ? appliedKey : undefined, ...params() },
+        'inventory_adjustment_export.xlsx',
+      );
+    } catch {
+      toast.error('Export failed. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -263,7 +283,7 @@ export default function InventoryAdjustmentsPage() {
         <ListHeader
           title="Inventory Adjustment"
           subtitle="Manage stock adjustments, resolve discrepancies, and track approval status"
-          menu={[{ label: 'Export', icon: <ExportIcon />, onClick: () => toast.info('Export is not available yet.') }]}
+          menu={[{ label: exporting ? 'Exporting…' : 'Export', icon: <ExportIcon />, onClick: exportExcel }]}
           actions={
             canCreate && (
               <Link to={`${BASE}/new`} className="btn-primary">

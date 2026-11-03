@@ -196,8 +196,9 @@ export default function DeliveryList({
   const [exporting, setExporting] = useState(false);
 
   /**
-   * Sales Order plans only: the shipped plans the filters match with their SO
-   * lines — what each SO asked for and what was delivered on which SD.
+   * Every plan of this list's source (SO or TO) the filters match, Open or
+   * Closed, with their order lines — what each order asked for and what was
+   * delivered on which SD.
    */
   async function exportExcel() {
     if (exporting) return;
@@ -206,8 +207,8 @@ export default function DeliveryList({
     try {
       await downloadFile(
         '/delivery/export',
-        { source: 'SALES_ORDER', status: 'all', filters: applied.length ? appliedKey : undefined },
-        'delivery_plan_sales_order_export.xlsx',
+        { source: source ?? 'SALES_ORDER', status: 'all', filters: applied.length ? appliedKey : undefined },
+        isTransfer ? 'delivery_plan_transfer_order_export.xlsx' : 'delivery_plan_sales_order_export.xlsx',
       );
     } catch {
       toast.error('Export failed. Please try again.');
@@ -337,8 +338,7 @@ export default function DeliveryList({
             {
               label: exporting ? 'Exporting…' : 'Export',
               icon: <ExportIcon />,
-              // The SO × delivery export; Transfer Order plans have none yet.
-              onClick: isTransfer ? () => toast.info('Export is not available yet.') : exportExcel,
+              onClick: exportExcel,
             },
           ]}
         />

@@ -7,7 +7,11 @@ import {
   Post,
   Put,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
+import { xlsxHeaders } from '../common/xlsx-export';
+import { packingExportFileName, writePackingXlsx } from './packing-export';
 import { PackingService } from './packing.service';
 import { GeneratePackingDto } from './dto/generate-packing.dto';
 import { ProgressPackingDto } from './dto/progress-packing.dto';
@@ -39,6 +43,15 @@ export class PackingController {
   @RequirePermissions('packing:read')
   findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.service.findOne(id, user);
+  }
+
+  // The detail's ☰ Export: WMS dev's "Packing List" sheet, one row per material.
+  @Get(':id/export')
+  @RequirePermissions('packing:read')
+  async exportOne(@Param('id') id: string, @CurrentUser() user: AuthUser, @Res() res: Response) {
+    const doc = await this.service.findOne(id, user);
+    res.set(xlsxHeaders(packingExportFileName(doc)));
+    await writePackingXlsx(doc, res);
   }
 
   @Post('generate')

@@ -1,4 +1,7 @@
-import { Controller, Delete, Get, Param, Query } from '@nestjs/common';
+import { Controller, Delete, Get, Param, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
+import { xlsxHeaders } from '../common/xlsx-export';
+import { grExportFileName, writeGrXlsx } from './gr-export';
 import { TransferInboundService, type InboundSource } from './transfer-inbound.service';
 import { QueryTransferInboundDto } from './dto/query-transfer-inbound.dto';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
@@ -18,6 +21,15 @@ abstract class InboundScreensController {
   @RequirePermissions('goods-receive:read')
   listGoodsReceives(@Query() q: QueryTransferInboundDto, @CurrentUser() user: AuthUser) {
     return this.service.listGoodsReceives(this.source, q, user);
+  }
+
+  // The GR list's export: list and accordion columns flat on one sheet, one
+  // row per GR line. Declared before 'goods-receive/:id'.
+  @Get('goods-receive/export')
+  @RequirePermissions('goods-receive:read')
+  async exportGoodsReceives(@Query() q: QueryTransferInboundDto, @CurrentUser() user: AuthUser, @Res() res: Response) {
+    res.set(xlsxHeaders(grExportFileName(this.source)));
+    await writeGrXlsx(this.source, this.service.exportRows(this.source, q, user), res);
   }
 
   @Get('goods-receive/:id')

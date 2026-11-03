@@ -114,6 +114,45 @@ type AdjDetail = Prisma.InventoryAdjustmentGetPayload<{
   include: typeof detailInclude;
 }>;
 
+export interface IaListQuery {
+  page?: number;
+  limit?: number;
+  search?: string;
+  adjustment_type?: string;
+  status?: string;
+  filters?: { field: IaFilterField; values: string[] }[];
+  sort_by?: string;
+  sort_order?: string;
+}
+
+/** One export row: a list row's header plus one of its accordion lines. */
+export interface IaExportRow {
+  adjustment_number: string;
+  status: InventoryAdjustmentStatus;
+  warehouse: string | null;
+  adjustment_type: InventoryAdjustmentType;
+  adjustment_type_label: string;
+  qty_mode: string;
+  bin_count: number;
+  total_qty: number;
+  class_name: string | null;
+  department_name: string | null;
+  ownership: string | null;
+  created_by: string | null;
+  created_at: Date;
+  line: {
+    no: number;
+    material_code: string | null;
+    material_name: string | null;
+    bin_code: string | null;
+    bin_label: string | null;
+    before_qty: number;
+    qty_adjustment: number;
+    qty_passed: number;
+    qty_non_passed: number;
+  } | null;
+}
+
 type AdjOrder = Prisma.InventoryAdjustmentOrderByWithRelationInput;
 const SORTABLE: Record<string, (d: SortDir) => AdjOrder> = {
   adjustment_number: (d) => ({ adjustmentNumber: d }),
@@ -1654,21 +1693,11 @@ export class InventoryAdjustmentsService {
     }
   }
 
-  async findAll(
-    query: {
-      page?: number;
-      limit?: number;
-      search?: string;
-      adjustment_type?: string;
-      status?: string;
-      filters?: { field: IaFilterField; values: string[] }[];
-      sort_by?: string;
-      sort_order?: string;
-    },
-    scope: WarehouseScope,
-  ) {
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 10;
+  /**
+   * The list's rows as (document, warehouse) pairs, filtered and sorted the
+   * way the list shows them. Shared by the list and its export.
+   */
+  private async listPairs(query: IaListQuery, scope: WarehouseScope) {
     const orderBy = buildOrderBy(query.sort_by, query.sort_order, SORTABLE, {
       createdAt: 'desc',
     });
@@ -1750,6 +1779,13 @@ export class InventoryAdjustmentsService {
       const dir = query.sort_order === 'desc' ? -1 : 1;
       pairs = [...pairs].sort((a, b) => dir * a.name.localeCompare(b.name));
     }
+    return pairs;
+  }
+
+  async findAll(query: IaListQuery, scope: WarehouseScope) {
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 10;
+    const pairs = await this.listPairs(query, scope);
 
     const total = pairs.length;
     const pagePairs = pairs.slice((page - 1) * limit, page * limit);
@@ -1772,6 +1808,48 @@ export class InventoryAdjustmentsService {
       },
       rows: pagePairs.map((p) => this.serializeList(byId.get(p.adjustmentId)!, p.warehouseId)),
     };
+  }
+
+  /**
+   * Export rows: one per list row (document and warehouse) and accordion
+   * line, in the list's order. Material and bin filters narrow the lines as
+   * they do in the accordion; a row without lines still gives one row.
+   */
+  async *exportRows(query: IaListQuery, scope: WarehouseScope): AsyncGenerator<IaExportRow[]> {
+    const BATCH = 200;
+    const pairs = await this.listPairs(query, scope);
+    const lineFilters = (query.filters ?? [])
+      .filter((f) => ['material_code', 'material_name', 'bin'].includes(f.field))
+      .map((f) => ({ field: f.field, values: f.values.map((v) => v.trim().toLowerCase()).filter(Boolean) }))
+      .filter((f) => f.values.length);
+    type Line = ReturnType<InventoryAdjustmentsService['serializeLine']>;
+    const hay = (field: IaFilterField, l: Line) =>
+      (field === 'material_code'
+        ? (l.material_code ?? '')
+        : field === 'material_name'
+          ? (l.material_name ?? '')
+          : `${l.bin_code ?? ''} ${l.bin_label ?? ''}`
+      ).toLowerCase();
+
+    for (let i = 0; i < pairs.length; i += BATCH) {
+      const chunk = pairs.slice(i, i + BATCH);
+      const full = await this.prisma.inventoryAdjustment.findMany({
+        where: { id: { in: [...new Set(chunk.map((p) => p.adjustmentId))] } },
+        include: listInclude,
+      });
+      const byId = new Map(full.map((a) => [a.id, a]));
+      const out: IaExportRow[] = [];
+      for (const p of chunk) {
+        const a = byId.get(p.adjustmentId);
+        if (!a) continue;
+        const { items, ...header } = this.serializeList(a, p.warehouseId);
+        const lines = items.filter((l) => lineFilters.every((f) => f.values.some((v) => hay(f.field, l).includes(v))));
+        const qtyMode = ruleFor(a.adjustmentType).qtyMode;
+        if (!lines.length) out.push({ ...header, qty_mode: qtyMode, line: null });
+        else lines.forEach((l, n) => out.push({ ...header, qty_mode: qtyMode, line: { ...l, no: n + 1 } }));
+      }
+      yield out;
+    }
   }
 
   /** Create-form default: the signed-in user's own department. */

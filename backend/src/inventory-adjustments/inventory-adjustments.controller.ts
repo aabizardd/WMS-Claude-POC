@@ -1,8 +1,11 @@
-import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { InventoryAdjustmentsService } from './inventory-adjustments.service';
 import { CreateInventoryAdjustmentDto } from './dto/create-inventory-adjustment.dto';
 import { ApproveInventoryAdjustmentDto } from './dto/approve-inventory-adjustment.dto';
 import { QueryInventoryAdjustmentDto } from './dto/query-inventory-adjustment.dto';
+import { iaExportFileName, writeIaXlsx } from './ia-export';
+import { xlsxHeaders } from '../common/xlsx-export';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import {
   CurrentUser,
@@ -79,6 +82,18 @@ export class InventoryAdjustmentsController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.service.findAll(query, user);
+  }
+
+  /** The list as one flat Excel sheet, with the same filters and sort. */
+  @Get('export')
+  @RequirePermissions('inventory-adjustments:read')
+  async export(
+    @Query() query: QueryInventoryAdjustmentDto,
+    @CurrentUser() user: AuthUser,
+    @Res() res: Response,
+  ) {
+    res.set(xlsxHeaders(iaExportFileName()));
+    await writeIaXlsx(this.service.exportRows(query, user), res);
   }
 
   @Get(':id')

@@ -53,6 +53,12 @@ export function wibDateTime(date: Date) {
   return `${t.y}-${t.m}-${t.d} ${t.hh}:${t.mm}:${t.ss}`;
 }
 
+/** "27/10/2026 14:33:11" in WIB, as WMS dev's document exports (packing list) write dates. */
+export function wibDateTimeDmy(date: Date) {
+  const t = wibParts(date);
+  return `${t.d}/${t.m}/${t.y} ${t.hh}:${t.mm}:${t.ss}`;
+}
+
 /** "2026-10-27 14:33" in WIB (the transfer-order export drops the seconds). */
 export function wibDateTimeMinutes(date: Date) {
   const t = wibParts(date);
