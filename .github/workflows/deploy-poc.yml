@@ -1,0 +1,27 @@
+name: Deploy POC
+
+on:
+  workflow_dispatch:            # tahap awal: hanya lewat tombol "Run workflow"
+
+concurrency:
+  group: deploy-poc             # tidak pernah ada 2 deploy bersamaan
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Siapkan SSH key dan known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.POC_DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "${{ secrets.POC_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Jalankan deploy di server
+        run: ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes -p 2222 panji@${{ secrets.POC_HOST }} deploy
+
+      - name: Hapus key dari runner
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
