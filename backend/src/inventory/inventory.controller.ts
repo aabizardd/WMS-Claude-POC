@@ -36,6 +36,16 @@ export class InventoryController {
     await writeInventoryXlsx(this.service.exportRows(query, user), res);
   }
 
+  /**
+   * The export confirmation's numbers: documents and rows for the current
+   * filters and for all data, without building the file.
+   */
+  @Get('export/summary')
+  @RequirePermissions('inventory:read')
+  exportSummary(@Query() query: QueryInventoryDto, @CurrentUser() user: AuthUser) {
+    return this.service.exportSummary(query, user);
+  }
+
   /** Reserved / In Transit documents of every inventory row (filtered, paged). */
   @Get('qty-sources/:type')
   @RequirePermissions('inventory:read')

@@ -262,6 +262,39 @@ export class InventoryService {
   }
 
   /**
+   * What an export would hold, before it is downloaded: documents (inventory
+   * rows — a material in a warehouse — that have at least one row in the
+   * file) and rows (the Excel rows — one per bin, a Bin filter keeping only
+   * matching bins), both
+   * for the list's current filters and for everything the user can see.
+   * Counted with the same where as exportRows(), so the numbers match the file.
+   */
+  async exportSummary(query: InventoryListQuery, scope: WarehouseScope) {
+    const count = async (q: InventoryListQuery) => {
+      const { where, filters } = this.listQuery(q, scope);
+      // exportRows() matches a Bin filter on the bin's label or code.
+      const binWhere: Prisma.InventoryBinStockWhereInput[] = filters
+        .filter((f) => f.field === 'bin')
+        .map((f) => ({
+          OR: f.values.flatMap((v) => [
+            { bin: { binLabel: { contains: v, mode: 'insensitive' as const } } },
+            { bin: { binCode: { contains: v, mode: 'insensitive' as const } } },
+          ]),
+        }));
+      const [documents, rows] = await this.prisma.$transaction([
+        // Only those with at least one row: one with no bin is not in the file.
+        this.prisma.inventoryManagement.count({
+          where: { AND: [where, { binStocks: { some: { AND: binWhere } } }] },
+        }),
+        this.prisma.inventoryBinStock.count({ where: { inventory: where, AND: binWhere } }),
+      ]);
+      return { documents, rows };
+    };
+    const [filtered, all] = await Promise.all([count(query), count({})]);
+    return { filtered, all };
+  }
+
+  /**
    * The Inventory List export (WMS dev's "inventory_details" sheet): one row
    * per material, warehouse and bin, for every inventory row the list's
    * filters match — not only one page — in the list's order. Every bin is
