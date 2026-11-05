@@ -1,8 +1,9 @@
 name: Deploy POC
 
 on:
-  workflow_dispatch:            # tahap awal: hanya lewat tombol "Run workflow"
-
+  push:
+    branches: [main]            # otomatis setiap ada push/merge ke main
+  workflow_dispatch:            # tombol manual tetap ada untuk deploy ulang
 concurrency:
   group: deploy-poc             # tidak pernah ada 2 deploy bersamaan
   cancel-in-progress: false
