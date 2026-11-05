@@ -1,5 +1,5 @@
 # ---- Build stage ----
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /app
 
 # Install all deps (incl. dev) for building + Prisma CLI.
@@ -13,7 +13,7 @@ COPY . .
 RUN npm run build
 
 # ---- Runtime stage ----
-FROM node:20-alpine
+FROM node:24-alpine
 RUN apk add --no-cache openssl
 WORKDIR /app
 ENV NODE_ENV=production
