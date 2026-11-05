@@ -112,20 +112,32 @@ export class TransferOrderCreateService implements OnApplicationBootstrap {
     private toSync: TransferOrderSyncService,
   ) {}
 
-  /** The receiving warehouses the user may pick: their own (every one when they have none). */
-  private async receivingWarehouses(userId: number) {
-    const own = await this.prisma.userWarehouse.findMany({
-      where: { userId, warehouse: { isInactive: false } },
-      select: { warehouse: { select: { id: true, name: true, oracleId: true } } },
-    });
-    if (own.length) {
-      return own.map((o) => o.warehouse).sort((a, b) => a.name.localeCompare(b.name));
-    }
-    return this.prisma.warehouse.findMany({
-      where: { isInactive: false, subsidiaryId: subsidiarySingleFilter() },
-      orderBy: { name: 'asc' },
-      select: { id: true, name: true, oracleId: true },
-    });
+  /**
+   * The receiving warehouses the user may pick, and the one picked first.
+   * A user picks among their own warehouses (every one when they have none);
+   * admin, the superuser, among every warehouse, starting on their own.
+   */
+  private async receivingWarehouses(user: AuthUser) {
+    const own = (
+      await this.prisma.userWarehouse.findMany({
+        where: { userId: user.userId, warehouse: { isInactive: false } },
+        select: { warehouse: { select: { id: true, name: true, oracleId: true } } },
+      })
+    )
+      .map((o) => o.warehouse)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const options =
+      own.length && user.role !== 'admin'
+        ? own
+        : await this.prisma.warehouse.findMany({
+            where: { isInactive: false, subsidiaryId: subsidiarySingleFilter() },
+            orderBy: { name: 'asc' },
+            select: { id: true, name: true, oracleId: true },
+          });
+    // Admin's header warehouse, else their own, else the first offered.
+    const preferred = [...(user.warehouseIds ?? []), ...own.map((w) => w.id)];
+    const defaultId = preferred.find((id) => options.some((o) => o.id === id)) ?? options[0]?.id ?? null;
+    return { options, defaultId };
   }
 
   /** Dropdowns and defaults for the Create TO form. */
@@ -147,18 +159,18 @@ export class TransferOrderCreateService implements OnApplicationBootstrap {
         orderBy: { name: 'asc' },
         select: { id: true, name: true, oracleId: true },
       }),
-      this.receivingWarehouses(user.userId),
+      this.receivingWarehouses(user),
     ]);
     return {
       created_by_name: me?.name ?? user.username,
       classes,
       departments,
       from_warehouses: fromWarehouses,
-      to_warehouses: toWarehouses,
+      to_warehouses: toWarehouses.options,
       default_class_id: classes.find((c) => c.oracleId === DEFAULT_CLASS_ORACLE_ID)?.id ?? null,
       default_department_id:
         departments.find((d) => d.oracleId === DEFAULT_DEPARTMENT_ORACLE_ID)?.id ?? null,
-      default_to_warehouse_id: toWarehouses[0]?.id ?? null,
+      default_to_warehouse_id: toWarehouses.defaultId,
     };
   }
 
@@ -301,11 +313,11 @@ export class TransferOrderCreateService implements OnApplicationBootstrap {
       this.prisma.class.findUnique({ where: { id: dto.class_id } }),
       this.prisma.department.findUnique({ where: { id: dto.department_id } }),
       this.prisma.user.findUnique({ where: { id: user.userId }, select: { name: true } }),
-      this.receivingWarehouses(user.userId),
+      this.receivingWarehouses(user),
     ]);
     if (!from || from.isInactive) throw new BadRequestException('Sending warehouse not found');
     if (!to || to.isInactive) throw new BadRequestException('Receiving warehouse not found');
-    if (!receivable.some((w) => w.id === to.id)) {
+    if (!receivable.options.some((w) => w.id === to.id)) {
       throw new BadRequestException(`"${to.name}" is not one of your warehouses`);
     }
     if (!klass) throw new BadRequestException('Selected class does not exist');

@@ -18,6 +18,7 @@ import InventoryBinTable from "./InventoryBinTable";
 import QtySourceLink from "./QtySourceLink";
 import { useToast } from "../../context/ToastContext";
 import { ExportIcon } from "../../components/ToolbarMenu";
+import ExportConfirmModal, { type ExportScope, type ExportSummary } from "../../components/ExportConfirmModal";
 import {
   AccordionPanelRow,
   DetailIcon,
@@ -164,6 +165,7 @@ export default function InventoryPage() {
   const [pageSize, setPageSize] = useState(10);
   const [reloadKey, setReloadKey] = useState(0);
   const [exporting, setExporting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initial.filters));
   const [applied, setApplied] = useState<InventoryFilter[]>(initial.filters);
@@ -284,15 +286,29 @@ export default function InventoryPage() {
     });
   }
 
-  /** Every row the filters match (not only this page), in the list's order. */
-  async function exportExcel() {
+  const filterParam = applied.length ? JSON.stringify(applied) : undefined;
+
+  /** The confirmation's numbers, counted by the backend for both options. */
+  function loadExportSummary() {
+    return api
+      .get<ExportSummary>("/inventory/export/summary", { params: { filters: filterParam } })
+      .then((r) => r.data);
+  }
+
+  /**
+   * Filtered: every row the filters match (not only this page); all: every
+   * row, whatever the filters. Both in the list's order; the list itself
+   * (filters, page) is left as it is.
+   */
+  async function exportExcel(scope: ExportScope) {
     if (exporting) return;
+    setExportOpen(false);
     setExporting(true);
     toast.info("Preparing the export…");
     try {
       await downloadFile(
         "/inventory/export",
-        { filters: applied.length ? JSON.stringify(applied) : undefined, ...params() },
+        { filters: scope === "filtered" ? filterParam : undefined, ...params() },
         "inventory_details.xlsx",
       );
     } catch {
@@ -315,7 +331,7 @@ export default function InventoryPage() {
             {
               label: exporting ? "Exporting…" : "Export",
               icon: <ExportIcon />,
-              onClick: exportExcel,
+              onClick: () => !exporting && setExportOpen(true),
             },
           ]}
         />
@@ -354,6 +370,17 @@ export default function InventoryPage() {
       </div>
 
       {/* The remaining columns, one field each. Nothing here searches until Apply. */}
+      <ExportConfirmModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        filters={applied.map((f) => ({
+          label: fieldLabel(f.field),
+          value: f.values.map((v) => valueLabel(f.field, v)).join(" or "),
+        }))}
+        loadSummary={loadExportSummary}
+        onConfirm={exportExcel}
+      />
+
       <ExtraFiltersModal open={extraOpen} onClose={closeExtras} onReset={resetExtras} onApply={applyExtras}>
         {EXTRA_FIELDS.map((f) => (
           <FilterField key={f.value} label={f.label}>
