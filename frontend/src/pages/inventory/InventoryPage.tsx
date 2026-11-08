@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../../lib/api";
 import { downloadFile } from "../../lib/download";
@@ -29,7 +29,6 @@ import {
   ListHeader,
   RefreshButton,
   RowExpandCell,
-  TotalCards,
   expandableRowClass,
   stickyActionsCellClass,
 } from "../../components/ListView";
@@ -336,6 +335,31 @@ export default function InventoryPage() {
           ]}
         />
 
+        {/* The same totals as the table's first row, readable without scrolling sideways. */}
+        {totals && (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7">
+            <StatCard label="Total Stock On Hand" value={totals.on_hand} color="#5166AE" icon={ICONS.boxes} />
+            <StatCard label="Total Available Quantity" value={totals.avail_qty} color="#2E8F5C" icon={ICONS.packageCheck} />
+            <StatCard label="Total Freeze Quantity" value={totals.freeze_qty} color="#5A7ACD" icon={ICONS.packageX} />
+            <StatCard label="Total Quantity Issue" value={totals.qty_issue} color="#FF7F11" icon={ICONS.packageMinus} />
+            <StatCard label="Total Quality Issue" value={totals.quality_issue} color="#CE2626" icon={ICONS.starX} />
+            <StatCard
+              label="Total Reserved Quantity"
+              value={totals.reserved_qty}
+              color="#6E5034"
+              icon={ICONS.bookmarkCheck}
+              href={qtyDocumentsHref("reserved", applied)}
+            />
+            <StatCard
+              label="Total In Transit Quantity"
+              value={totals.in_transit_qty}
+              color="#547792"
+              icon={ICONS.truck}
+              href={qtyDocumentsHref("in-transit", applied)}
+            />
+          </div>
+        )}
+
         {/* Filters: three that search as they change, the rest behind the modal. */}
         <ListFilterPanel
           extraCount={extraCount}
@@ -393,22 +417,6 @@ export default function InventoryPage() {
           </FilterField>
         ))}
       </ExtraFiltersModal>
-
-      {/* The same totals as the table's first row, readable without scrolling sideways. */}
-      {totals && (
-        <TotalCards
-          gridClass="grid-cols-2 sm:grid-cols-4 lg:grid-cols-7"
-          items={[
-            ["Stock On Hand", totals.on_hand],
-            ["Available Quantity", totals.avail_qty],
-            ["Freeze Quantity", totals.freeze_qty],
-            ["Quantity Issue", totals.qty_issue],
-            ["Quality Issue", totals.quality_issue],
-            ["Reserved Quantity", totals.reserved_qty, qtyDocumentsHref("reserved", applied)],
-            ["In Transit Quantity", totals.in_transit_qty, qtyDocumentsHref("in-transit", applied)],
-          ]}
-        />
-      )}
 
       <div className="mx-5 overflow-hidden rounded-lg border border-slate-200">
         <div className="overflow-x-auto">
@@ -572,5 +580,146 @@ export default function InventoryPage() {
         />
       </div>
     </div>
+  );
+}
+
+/** WMS dev's inventory card icons (Lucide). */
+const ICONS = {
+  boxes: (
+    <>
+      <path d="M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z" />
+      <path d="m7 16.5-4.74-2.85" />
+      <path d="m7 16.5 5-3" />
+      <path d="M7 16.5v5.17" />
+      <path d="M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z" />
+      <path d="m17 16.5-5-3" />
+      <path d="m17 16.5 4.74-2.85" />
+      <path d="M17 16.5v5.17" />
+      <path d="M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z" />
+      <path d="M12 8 7.26 5.15" />
+      <path d="m12 8 4.74-2.85" />
+      <path d="M12 13.5V8" />
+    </>
+  ),
+  packageCheck: (
+    <>
+      <path d="m16 16 2 2 4-4" />
+      <path d="M21 10V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l2-1.14" />
+      <path d="m7.5 4.27 9 5.15" />
+      <polyline points="3.29 7 12 12 20.71 7" />
+      <line x1="12" x2="12" y1="22" y2="12" />
+    </>
+  ),
+  packageX: (
+    <>
+      <path d="M21 10V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l2-1.14" />
+      <path d="m7.5 4.27 9 5.15" />
+      <polyline points="3.29 7 12 12 20.71 7" />
+      <line x1="12" x2="12" y1="22" y2="12" />
+      <path d="m17 13 5 5m-5 0 5-5" />
+    </>
+  ),
+  packageMinus: (
+    <>
+      <path d="M16 16h6" />
+      <path d="M21 10V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l2-1.14" />
+      <path d="m7.5 4.27 9 5.15" />
+      <polyline points="3.29 7 12 12 20.71 7" />
+      <line x1="12" x2="12" y1="22" y2="12" />
+    </>
+  ),
+  starX: (
+    <>
+      <path d="m15.5 15.5 5 5" />
+      <path d="m20.063 11.525 1.777-1.731a.53.53 0 00-.294-.905l-5.166-.755a2.1 2.1 0 01-1.595-1.16l-2.31-4.68a.53.53 0 00-.95.001L9.216 6.974a2.1 2.1 0 01-1.597 1.16l-5.165.755a.53.53 0 00-.294.906l3.736 3.637a2.1 2.1 0 01.611 1.879l-.88 5.139a.53.53 0 00.769.56l4.617-2.428a2.1 2.1 0 01.987-.243 2 2 0 01.132.004" />
+      <path d="m20.5 15.5-5 5" />
+    </>
+  ),
+  bookmarkCheck: (
+    <>
+      <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z" />
+      <path d="m9 10 2 2 4-4" />
+    </>
+  ),
+  truck: (
+    <>
+      <path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2" />
+      <path d="M15 18H9" />
+      <path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14" />
+      <circle cx="17" cy="18" r="2" />
+      <circle cx="7" cy="18" r="2" />
+    </>
+  ),
+};
+
+/**
+ * One inventory total, as WMS dev draws it: a coloured left rule, the label
+ * with a tinted icon, the value in the same colour. A card with a link opens
+ * the documents behind its total in a new tab ("See detail").
+ */
+function StatCard({
+  label,
+  value,
+  color,
+  icon,
+  href,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  icon: ReactNode;
+  href?: string;
+}) {
+  const body = (
+    <div className="flex h-full flex-col justify-between gap-1 border-l-2 pl-2.5" style={{ borderColor: color }}>
+      <div className="flex w-full items-center justify-between gap-1">
+        <span className="text-xs font-normal leading-4 text-[#4A5565] opacity-80 dark:text-slate-300">{label}</span>
+        <span
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full"
+          style={{ color, backgroundColor: `${color}33` }}
+        >
+          <svg
+            className="h-3.5 w-3.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            {icon}
+          </svg>
+        </span>
+      </div>
+      <div className="mt-auto flex w-full items-baseline justify-between gap-2">
+        <span className="text-lg font-semibold tabular-nums tracking-tight" style={{ color }}>
+          {value.toLocaleString()}
+        </span>
+        {href && (
+          <span className="inline-flex shrink-0 items-center gap-0.5 text-[11px] font-medium group-hover:underline" style={{ color }}>
+            See detail
+            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+              <path d="m9 18 6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+        )}
+      </div>
+    </div>
+  );
+  const card =
+    "group flex flex-col justify-between rounded-xl border border-gray-200 bg-gray-50 px-3 py-3.5 dark:border-slate-700 dark:bg-slate-800/60";
+  return href ? (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={`See the documents behind the ${label.toLowerCase()}`}
+      className={`${card} cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2`}
+    >
+      {body}
+    </a>
+  ) : (
+    <div className={card}>{body}</div>
   );
 }
