@@ -30,11 +30,11 @@ const COLUMNS: ExportColumn<Row>[] = [
 
 /**
  * "transfer_order_export_20261029_115041.xlsx", as WMS dev names it (WIB);
- * Export SD's file is "sales_delivery_export_…".
+ * the Delivery Plan's Export SD is "sales_delivery_export_…".
  */
-export function transferOrderExportFileName(now = new Date(), sdOnly = false) {
+export function transferOrderExportFileName(now = new Date(), kind: 'to' | 'sd' = 'to') {
   const t = wibParts(now);
-  const prefix = sdOnly ? 'sales_delivery_export' : 'transfer_order_export';
+  const prefix = kind === 'sd' ? 'sales_delivery_export' : 'transfer_order_export';
   return `${prefix}_${t.y}${t.m}${t.d}_${t.hh}${t.mm}${t.ss}.xlsx`;
 }
 

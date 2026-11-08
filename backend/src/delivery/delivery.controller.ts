@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, Post, Put, Query, Res } from '@ne
 import type { Response } from 'express';
 import { xlsxHeaders } from '../common/xlsx-export';
 import { soDeliveryExportFileName } from '../sales-orders/so-delivery-export';
+import { transferOrderExportFileName } from '../transfer-orders/transfer-order-export';
 import { DeliveryService } from './delivery.service';
 import { GenerateDeliveryDto } from './dto/generate-delivery.dto';
 import { QueryDeliveryDto } from './dto/query-delivery.dto';
@@ -30,6 +31,24 @@ export class DeliveryController {
   async exportXlsx(@Query() query: QueryDeliveryDto, @CurrentUser() user: AuthUser, @Res() res: Response) {
     res.set(xlsxHeaders(soDeliveryExportFileName(query.source === 'TRANSFER_ORDER' ? 'to-dp' : 'dp')));
     await this.service.exportXlsx(query, user, res);
+  }
+
+  /**
+   * TO Delivery Plan, Export SD: the Transfer Order export's "ITI TO" file,
+   * holding only the SD lines (shipped TO deliveries) its filters match.
+   */
+  @Get('export-sd')
+  @RequirePermissions('delivery:read')
+  async exportSd(@Query() query: QueryDeliveryDto, @CurrentUser() user: AuthUser, @Res() res: Response) {
+    res.set(xlsxHeaders(transferOrderExportFileName(new Date(), 'sd')));
+    await this.service.exportSdXlsx(query, user, res);
+  }
+
+  /** Export SD's confirmation numbers (SDs and rows), filtered and all. */
+  @Get('export-sd/summary')
+  @RequirePermissions('delivery:read')
+  exportSdSummary(@Query() query: QueryDeliveryDto, @CurrentUser() user: AuthUser) {
+    return this.service.exportSdSummary(query, user);
   }
 
   /** Dropdown values (master warehouses, customers, users) for SD Tracking. */

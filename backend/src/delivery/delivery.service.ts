@@ -14,6 +14,8 @@ import { highestSeq } from '../common/doc-sequence';
 import { InventoryService } from '../inventory/inventory.service';
 import { SalesOrderSyncService } from '../sales-orders/sales-order-sync.service';
 import { TransferOrderSyncService } from '../transfer-orders/transfer-order-sync.service';
+import { TransferOrdersService } from '../transfer-orders/transfer-orders.service';
+import { writeTransferOrderXlsx } from '../transfer-orders/transfer-order-export';
 import { reopenPacking } from '../common/outbound-revert';
 import type { GenerateDeliveryDto } from './dto/generate-delivery.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
@@ -192,6 +194,7 @@ export class DeliveryService {
     private config: ConfigService,
     private soSync: SalesOrderSyncService,
     private toSync: TransferOrderSyncService,
+    private transferOrders: TransferOrdersService,
   ) {}
 
   // ---------- Oracle Item Fulfillment bridge ----------
@@ -342,6 +345,55 @@ export class DeliveryService {
     }
     if (and.length) where.AND = and;
     return where;
+  }
+
+  /**
+   * Export SD's lines (TO Delivery Plan): the shipped (Closed) TO delivery
+   * lines — each on an SD — of the deliveries the list's filters match; a
+   * Part Number / Material Name filter keeps only the matching lines, as the
+   * list does.
+   */
+  private sdLines(query: Parameters<DeliveryService['listWhere']>[0], scope: WarehouseScope) {
+    const lineFilters: Prisma.DeliveryItemWhereInput[] = [];
+    for (const f of query.filters ?? []) {
+      const values = (f.values ?? []).map((v) => v.trim()).filter(Boolean);
+      if (!values.length) continue;
+      if (f.field === 'material_code') lineFilters.push({ OR: values.map((v) => ({ materialCode: ci(v) })) });
+      if (f.field === 'material_name') lineFilters.push({ OR: values.map((v) => ({ materialName: ci(v) })) });
+    }
+    const delivery: Prisma.DeliveryWhereInput = {
+      AND: [
+        this.listWhere({ ...query, source: 'TRANSFER_ORDER', status: 'all' }, scope),
+        { sourceType: 'TRANSFER_ORDER', status: 'Closed' },
+      ],
+    };
+    return { delivery, lines: { transferOrderItemId: { not: null }, delivery, AND: lineFilters } };
+  }
+
+  /**
+   * Export SD (TO Delivery Plan): the Transfer Order export's "ITI TO" file,
+   * holding only SD lines — those of shipped deliveries the filters match.
+   */
+  exportSdXlsx(query: Parameters<DeliveryService['listWhere']>[0], scope: WarehouseScope, out: Writable) {
+    return writeTransferOrderXlsx(this.transferOrders.exportSdRows(this.sdLines(query, scope).lines), out);
+  }
+
+  /**
+   * Export SD's confirmation numbers: documents (SDs with at least one row in
+   * the file) and rows (SD lines), for the list's filters and for every SD
+   * the user can see. Counted with the same where as exportSdXlsx().
+   */
+  async exportSdSummary(query: Parameters<DeliveryService['listWhere']>[0], scope: WarehouseScope) {
+    const count = async (q: Parameters<DeliveryService['listWhere']>[0]) => {
+      const { delivery, lines } = this.sdLines(q, scope);
+      const [documents, rows] = await this.prisma.$transaction([
+        this.prisma.delivery.count({ where: { AND: [delivery, { items: { some: lines } }] } }),
+        this.prisma.deliveryItem.count({ where: lines }),
+      ]);
+      return { documents, rows };
+    };
+    const [filtered, all] = await Promise.all([count(query), count({})]);
+    return { filtered, all };
   }
 
   /**

@@ -19,6 +19,7 @@ import RowActionMenu from '../../components/RowActionMenu';
 import TablePager from '../../components/TablePager';
 import MultiValueInput from '../../components/MultiValueInput';
 import { ExportIcon } from '../../components/ToolbarMenu';
+import ExportConfirmModal, { type ExportScope, type ExportSummary } from '../../components/ExportConfirmModal';
 import {
   AccordionPanelRow,
   DetailIcon,
@@ -194,6 +195,7 @@ export default function DeliveryList({
 
   const appliedKey = JSON.stringify(applied);
   const [exporting, setExporting] = useState(false);
+  const [sdExportOpen, setSdExportOpen] = useState(false);
 
   /**
    * Every plan of this list's source (SO or TO) the filters match, Open or
@@ -209,6 +211,38 @@ export default function DeliveryList({
         '/delivery/export',
         { source: source ?? 'SALES_ORDER', status: 'all', filters: applied.length ? appliedKey : undefined },
         isTransfer ? 'delivery_plan_transfer_order_export.xlsx' : 'delivery_plan_sales_order_export.xlsx',
+      );
+    } catch {
+      toast.error('Export failed. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  /** Export SD's confirmation numbers, counted by the backend for both options. */
+  function loadSdSummary() {
+    return api
+      .get<ExportSummary>('/delivery/export-sd/summary', {
+        params: { filters: applied.length ? appliedKey : undefined },
+      })
+      .then((r) => r.data);
+  }
+
+  /**
+   * Export SD (TO only): the Transfer Order export's layout, holding only the
+   * SD lines — shipped deliveries; an Open plan has no SD yet. Filtered
+   * follows the list's filters; all is every SD. The list is left as it is.
+   */
+  async function exportSd(scope: ExportScope) {
+    if (exporting) return;
+    setSdExportOpen(false);
+    setExporting(true);
+    toast.info('Preparing the export…');
+    try {
+      await downloadFile(
+        '/delivery/export-sd',
+        { filters: scope === 'filtered' && applied.length ? appliedKey : undefined },
+        'sales_delivery_export.xlsx',
       );
     } catch {
       toast.error('Export failed. Please try again.');
@@ -340,6 +374,15 @@ export default function DeliveryList({
               icon: <ExportIcon />,
               onClick: exportExcel,
             },
+            ...(isTransfer
+              ? [
+                  {
+                    label: 'Export SD',
+                    icon: <ExportIcon />,
+                    onClick: () => !exporting && setSdExportOpen(true),
+                  },
+                ]
+              : []),
           ]}
         />
 
@@ -370,6 +413,21 @@ export default function DeliveryList({
           ))}
         </ListFilterPanel>
       </div>
+
+      {/* Export SD's confirmation: filtered or every SD. */}
+      {isTransfer && (
+        <ExportConfirmModal
+          open={sdExportOpen}
+          onClose={() => setSdExportOpen(false)}
+          title="Confirm Export SD"
+          documentLabel="SDs"
+          filteredSubtitle="SDs (shipped deliveries) that match the active filters."
+          allSubtitle="Every SD you have access to, whatever the filters."
+          filters={applied.map((f) => ({ label: fieldLabel(f.field), value: f.values.join(' or ') }))}
+          loadSummary={loadSdSummary}
+          onConfirm={exportSd}
+        />
+      )}
 
       {/* Nothing here searches until Apply, which runs it with the fields above. */}
       <ExtraFiltersModal open={extraOpen} onClose={closeExtras} onReset={resetExtras} onApply={applyExtras}>

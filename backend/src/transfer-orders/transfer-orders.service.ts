@@ -47,11 +47,8 @@ const SYNC_ACTOR = 'ERP Sync';
 
 const ci = (v: string) => ({ contains: v, mode: 'insensitive' as const });
 
-/** A Sales Delivery (SD): a delivery shipped (Closed), which gives it its SD number. */
+/** A Sales Delivery (SD) line: on a shipped (Closed) delivery, which has the SD number. */
 const SHIPPED_DELIVERY: Prisma.DeliveryItemWhereInput = { delivery: { status: 'Closed' } };
-
-/** A TO line with at least one SD. */
-const LINE_HAS_SD: Prisma.TransferOrderItemWhereInput = { deliveryItems: { some: SHIPPED_DELIVERY } };
 
 /**
  * List filters, one per field. Several values on one field are OR-ed; fields
@@ -147,60 +144,8 @@ export class TransferOrdersService {
       const values = (f.values ?? []).map((v) => v.trim()).filter(Boolean);
       if (build && values.length) and.push({ OR: values.map(build) });
     }
-    // Export SD: only the TOs that have an SD.
-    if (query.sd_only === 'true') and.push({ items: { some: LINE_HAS_SD } });
     if (and.length) where.AND = and;
     return { where, orderBy };
-  }
-
-  /** The Part Number filter's values, one list per filter (values OR-ed, filters AND-ed). */
-  private partFilters(query: QueryTransferOrderDto) {
-    return (query.filters ?? [])
-      .filter((f) => f.field === 'material_code')
-      .map((f) => (f.values ?? []).map((v) => v.trim().toLowerCase()).filter(Boolean))
-      .filter((values) => values.length);
-  }
-
-  /**
-   * What an Export SD would hold, before it is downloaded: documents (TOs with
-   * at least one row in the file) and rows (one per shipped delivery line),
-   * for the list's current filters and for every TO with an SD the user can
-   * see in this list (TO Out or TO In). Counted the way exportRows() picks
-   * its rows — a Part Number filter matching the line's item name or its
-   * material's code — so the numbers match the file.
-   */
-  async exportSdSummary(query: QueryTransferOrderDto, scope: WarehouseScope) {
-    const count = async (q: QueryTransferOrderDto) => {
-      const { where } = this.listQuery({ ...q, sd_only: 'true' }, scope);
-      const lineWhere: Prisma.TransferOrderItemWhereInput[] = await Promise.all(
-        this.partFilters(q).map(async (values) => {
-          const mats = await this.prisma.material.findMany({
-            where: { OR: values.map((v) => ({ materialCode: ci(v) })) },
-            select: { id: true },
-          });
-          return {
-            OR: [
-              ...values.map((v) => ({ itemName: ci(v) })),
-              ...(mats.length ? [{ materialId: { in: mats.map((m) => m.id) } }] : []),
-            ],
-          };
-        }),
-      );
-      const [documents, rows] = await this.prisma.$transaction([
-        this.prisma.transferOrder.count({
-          where: { AND: [where, { items: { some: { AND: [LINE_HAS_SD, ...lineWhere] } } }] },
-        }),
-        this.prisma.deliveryItem.count({
-          where: { ...SHIPPED_DELIVERY, transferOrderItem: { transferOrder: where, AND: lineWhere } },
-        }),
-      ]);
-      return { documents, rows };
-    };
-    const [filtered, all] = await Promise.all([
-      count(query),
-      count({ direction: query.direction } as QueryTransferOrderDto),
-    ]);
-    return { filtered, all };
   }
 
   /**
@@ -212,16 +157,48 @@ export class TransferOrdersService {
    * empty, carrying Oracle's fulfilled / received qty if it has any. GRs are
    * tied to the TO line, not to an SD, so a line's received qty is spread
    * over its SDs in shipping order. Yielded in batches.
-   *
-   * Export SD (sd_only=true): the same layout, for the TOs that have an SD,
-   * and only their shipped delivery lines (a line with no SD is left out).
    */
   async *exportRows(query: QueryTransferOrderDto, scope: WarehouseScope): AsyncGenerator<TransferOrderExportRow[]> {
     const { where, orderBy } = this.listQuery(query, scope);
-    const sdOnly = query.sd_only === 'true';
     // A Part Number filter keeps only the matching lines, as the list's
     // accordion does (item name or material code, values OR-ed).
-    const partFilters = this.partFilters(query);
+    const partFilters = (query.filters ?? [])
+      .filter((f) => f.field === 'material_code')
+      .map((f) => (f.values ?? []).map((v) => v.trim().toLowerCase()).filter(Boolean))
+      .filter((values) => values.length);
+    yield* this.exportBatches(where, orderBy, partFilters, SHIPPED_DELIVERY, false);
+  }
+
+  /**
+   * Export SD (Delivery Plan): the same "ITI TO" layout, for the Transfer
+   * Orders that have a Sales Delivery, holding only their SD lines — the
+   * shipped (Closed) delivery lines `sdLines` picks (the Delivery Plan's
+   * filters). A TO line with no such SD line is left out. In the TO list's
+   * default order.
+   */
+  async *exportSdRows(sdLines: Prisma.DeliveryItemWhereInput): AsyncGenerator<TransferOrderExportRow[]> {
+    const lineWhere: Prisma.DeliveryItemWhereInput = { AND: [SHIPPED_DELIVERY, sdLines] };
+    yield* this.exportBatches(
+      { items: { some: { deliveryItems: { some: lineWhere } } } },
+      DEFAULT_ORDER,
+      [],
+      lineWhere,
+      true,
+    );
+  }
+
+  /**
+   * The "ITI TO" rows of the orders `where` picks, in batches: per line, one
+   * row per delivery line `deliveryLines` keeps; with `sdOnly`, a line with
+   * none is left out, else it is one row with Oracle's own figures.
+   */
+  private async *exportBatches(
+    where: Prisma.TransferOrderWhereInput,
+    orderBy: ToOrder,
+    partFilters: string[][],
+    deliveryLines: Prisma.DeliveryItemWhereInput,
+    sdOnly: boolean,
+  ): AsyncGenerator<TransferOrderExportRow[]> {
     const lineMatches = (itemName: string | null, code: string | null | undefined) =>
       partFilters.every((values) =>
         values.some((v) => (itemName ?? '').toLowerCase().includes(v) || (code ?? '').toLowerCase().includes(v)),
@@ -240,7 +217,7 @@ export class TransferOrdersService {
             orderBy: { lineNumber: 'asc' },
             include: {
               deliveryItems: {
-                where: SHIPPED_DELIVERY,
+                where: deliveryLines,
                 orderBy: [{ delivery: { updatedAt: 'asc' } }, { createdAt: 'asc' }],
                 select: {
                   qty: true,

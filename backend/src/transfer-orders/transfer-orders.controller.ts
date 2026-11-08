@@ -114,25 +114,13 @@ export class TransferOrdersController {
   /**
    * The TO Out (direction=out) or TO In (direction=in) list as an Excel file,
    * for whatever it is filtered and sorted by. Both come out in the same
-   * "ITI TO" layout: they are the same Transfer Orders. With sd_only=true it
-   * is Export SD: only TOs with a Sales Delivery, and only their SD lines.
+   * "ITI TO" layout: they are the same Transfer Orders.
    */
   @Get('export')
   @RequirePermissions('transfer-orders:read')
   async export(@Query() query: QueryTransferOrderDto, @CurrentUser() user: AuthUser, @Res() res: Response) {
-    res.set(xlsxHeaders(transferOrderExportFileName(new Date(), query.sd_only === 'true')));
+    res.set(xlsxHeaders(transferOrderExportFileName()));
     await writeTransferOrderXlsx(this.service.exportRows(query, user), res);
-  }
-
-  /**
-   * Export SD's confirmation numbers: documents (TOs with an SD) and rows (SD
-   * lines) for the current filters and for all data, without building the file.
-   * The file itself is GET /export with sd_only=true.
-   */
-  @Get('export/sd-summary')
-  @RequirePermissions('transfer-orders:read')
-  exportSdSummary(@Query() query: QueryTransferOrderDto, @CurrentUser() user: AuthUser) {
-    return this.service.exportSdSummary(query, user);
   }
 
   @Get()

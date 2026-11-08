@@ -93,10 +93,4 @@ export class QueryTransferOrderDto extends SortableQueryDto {
   @IsOptional()
   @IsIn(['out', 'in'])
   direction?: 'out' | 'in';
-
-  // "true" (Export SD) = only the TOs that have a Sales Delivery (SD), and
-  // in the export only their shipped delivery lines.
-  @IsOptional()
-  @IsIn(['true', 'false'])
-  sd_only?: string;
 }
