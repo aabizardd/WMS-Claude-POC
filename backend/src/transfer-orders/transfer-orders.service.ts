@@ -47,6 +47,9 @@ const SYNC_ACTOR = 'ERP Sync';
 
 const ci = (v: string) => ({ contains: v, mode: 'insensitive' as const });
 
+/** A delivery line that has shipped (its delivery is Closed and has the SD number). */
+const SHIPPED: Prisma.DeliveryItemWhereInput = { delivery: { status: 'Closed' } };
+
 /**
  * List filters, one per field. Several values on one field are OR-ed; fields
  * are AND-ed. Part Number looks inside the lines: the Oracle item name carries
@@ -146,6 +149,52 @@ export class TransferOrdersService {
   }
 
   /**
+   * What the TO export would hold, before it is downloaded: documents (TOs
+   * with at least one row in the file) and rows, for the list's current
+   * status and filters and for every TO the user can see in this list (TO Out
+   * or TO In, any status). Counted the way exportRows() writes them: per line
+   * (a Part Number filter keeps the lines whose item name or material code
+   * matches), one row per shipped delivery line, or one row if it has none.
+   */
+  async exportSummary(query: QueryTransferOrderDto, scope: WarehouseScope) {
+    const count = async (q: QueryTransferOrderDto) => {
+      const { where } = this.listQuery(q, scope);
+      const lineWhere: Prisma.TransferOrderItemWhereInput[] = await Promise.all(
+        (q.filters ?? [])
+          .filter((f) => f.field === 'material_code')
+          .map((f) => (f.values ?? []).map((v) => v.trim()).filter(Boolean))
+          .filter((values) => values.length)
+          .map(async (values) => {
+            const mats = await this.prisma.material.findMany({
+              where: { OR: values.map((v) => ({ materialCode: ci(v) })) },
+              select: { id: true },
+            });
+            return {
+              OR: [
+                ...values.map((v) => ({ itemName: ci(v) })),
+                ...(mats.length ? [{ materialId: { in: mats.map((m) => m.id) } }] : []),
+              ],
+            };
+          }),
+      );
+      const lines: Prisma.TransferOrderItemWhereInput = { transferOrder: where, AND: lineWhere };
+      const [documents, lineCount, shippedLines, shippedRows] = await this.prisma.$transaction([
+        this.prisma.transferOrder.count({ where: { AND: [where, { items: { some: { AND: lineWhere } } }] } }),
+        this.prisma.transferOrderItem.count({ where: lines }),
+        this.prisma.transferOrderItem.count({ where: { AND: [lines, { deliveryItems: { some: SHIPPED } }] } }),
+        this.prisma.deliveryItem.count({ where: { ...SHIPPED, transferOrderItem: lines } }),
+      ]);
+      // A line with shipped delivery lines is one row per line; one without is one row.
+      return { documents, rows: lineCount - shippedLines + shippedRows };
+    };
+    const [filtered, all] = await Promise.all([
+      count(query),
+      count({ direction: query.direction } as QueryTransferOrderDto),
+    ]);
+    return { filtered, all };
+  }
+
+  /**
    * The TO export (WMS dev's "ITI TO" sheet), the same for TO Out and TO In:
    * every order the list's filters match — not only one page — in the list's
    * order (a Part Number filter keeps only the matching lines). One row per
@@ -181,7 +230,7 @@ export class TransferOrdersService {
             orderBy: { lineNumber: 'asc' },
             include: {
               deliveryItems: {
-                where: { delivery: { status: 'Closed' } },
+                where: SHIPPED,
                 orderBy: [{ delivery: { updatedAt: 'asc' } }, { createdAt: 'asc' }],
                 select: {
                   qty: true,
@@ -252,6 +301,97 @@ export class TransferOrdersService {
               qty_shipped: d.qty,
               qty_received: received > 0 ? received : null,
               date_shipped: d.delivery.updatedAt,
+              date_received: received > 0 ? (receivedAt.get(l.id) ?? null) : null,
+            });
+          }
+        }
+      }
+      if (rows.length) yield rows;
+      if (orders.length < BATCH) return;
+    }
+  }
+
+  /**
+   * The TO Delivery Plan export, in the same "ITI TO" layout as the TO list:
+   * only the TO lines on the plans `deliveryWhere` matches, one row per plan
+   * line (Open or Closed). An Open plan has no shipped qty or date yet. As in
+   * exportRows(), a line's received qty is spread over its shipped (Closed)
+   * plans in shipping order — all of them, not only the matching ones.
+   * Newest TO first; yielded in batches.
+   */
+  async *deliveryPlanExportRows(deliveryWhere: Prisma.DeliveryWhereInput): AsyncGenerator<TransferOrderExportRow[]> {
+    const onPlan: Prisma.DeliveryItemWhereInput = { delivery: deliveryWhere };
+    const BATCH = 200;
+    for (let skip = 0; ; skip += BATCH) {
+      const orders = await this.prisma.transferOrder.findMany({
+        where: { items: { some: { deliveryItems: { some: onPlan } } } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        skip,
+        take: BATCH,
+        include: {
+          warehouse: { select: { name: true } },
+          items: {
+            where: { deliveryItems: { some: onPlan } },
+            orderBy: { lineNumber: 'asc' },
+            include: {
+              deliveryItems: {
+                orderBy: [{ delivery: { updatedAt: 'asc' } }, { createdAt: 'asc' }],
+                select: {
+                  id: true,
+                  qty: true,
+                  bin: { select: { binLabel: true } },
+                  pickingItem: { select: { bin: { select: { binLabel: true } } } },
+                  packing: { select: { packingCode: true } },
+                  delivery: { select: { status: true, sdoId: true, deliveryCode: true, updatedAt: true } },
+                },
+              },
+            },
+          },
+        },
+      });
+      const lines = orders.flatMap((o) => o.items);
+      const [matById, receivedAt, destinations, matching] = await Promise.all([
+        this.materialsById(lines),
+        this.lastReceivedAt(lines.map((l) => l.id)),
+        this.warehouseNames(orders.map((o) => o.toWarehouseId)),
+        lines.length
+          ? this.prisma.deliveryItem.findMany({
+              where: { ...onPlan, transferOrderItemId: { in: lines.map((l) => l.id) } },
+              select: { id: true },
+            })
+          : Promise.resolve([]),
+      ]);
+      const inFile = new Set(matching.map((d) => d.id));
+
+      const rows: TransferOrderExportRow[] = [];
+      for (const o of orders) {
+        for (const l of o.items) {
+          const mat = l.materialId ? matById.get(l.materialId) : null;
+          let toReceive = l.received;
+          for (const d of l.deliveryItems) {
+            const shipped = d.delivery.status === 'Closed';
+            const received = shipped ? Math.min(d.qty, Math.max(0, toReceive)) : 0;
+            toReceive -= received;
+            if (!inFile.has(d.id)) continue;
+            rows.push({
+              tran_id: o.tranId,
+              status: o.statusName,
+              erp_doc_id: o.oracleId,
+              origin: o.warehouse?.name ?? o.fromLocationName,
+              destination: (o.toWarehouseId && destinations.get(o.toWarehouseId)) || o.toLocationName,
+              created_at: o.createdAt,
+              request_qty: l.quantity,
+              sd_number: d.delivery.sdoId ?? d.delivery.deliveryCode,
+              packing_id: d.packing?.packingCode ?? null,
+              from_bin: d.pickingItem?.bin?.binLabel ?? null,
+              material_code: mat?.materialCode ?? l.itemName,
+              material_name: mat?.materialName ?? l.description,
+              erp_line_id: l.lineNumber,
+              staging_bin: d.bin?.binLabel ?? null,
+              uom: mat?.primaryUom?.uomCode ?? null,
+              qty_shipped: shipped ? d.qty : null,
+              qty_received: received > 0 ? received : null,
+              date_shipped: shipped ? d.delivery.updatedAt : null,
               date_received: received > 0 ? (receivedAt.get(l.id) ?? null) : null,
             });
           }

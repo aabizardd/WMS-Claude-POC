@@ -36,6 +36,16 @@ export class SalesDeliveryController {
     );
   }
 
+  /**
+   * The export confirmation's numbers: documents and rows (both sheets) for
+   * the current filters and for all data, without building the file.
+   */
+  @Get('export/summary')
+  @RequirePermissions('sales-delivery:read')
+  exportSummary(@Query() query: QuerySalesDeliveryDto, @CurrentUser() user: AuthUser) {
+    return this.service.exportSummary(query, user);
+  }
+
   // ---- create-form lookups (declared before ':id') ----
 
   /** Header defaults and dropdowns: From Location, To Location, department, class. */

@@ -21,6 +21,7 @@ import DateRangeInput, { formatRangeValue } from '../../components/DateRangeInpu
 import RowActionMenu from '../../components/RowActionMenu';
 import TablePager from '../../components/TablePager';
 import { ExportIcon } from '../../components/ToolbarMenu';
+import ExportConfirmModal, { type ExportScope, type ExportSummary } from '../../components/ExportConfirmModal';
 import { TO_STATUSES, TO_SYNC_STATUSES, soStatusBadgeClass } from '../../lib/salesOrderStatus';
 import TransferOrderLinesTable from './TransferOrderLinesTable';
 import TransferInLinesTable from '../inbound/TransferInLinesTable';
@@ -186,6 +187,7 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
   const [status, setStatus] = useState(initial.status);
   const [reloadKey, setReloadKey] = useState(0);
   const [exporting, setExporting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initial.filters));
   const [applied, setApplied] = useState<TransferOrderFilter[]>(initial.filters);
@@ -209,21 +211,34 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
 
   const appliedKey = JSON.stringify(applied);
 
+  const filterParam = applied.length ? JSON.stringify(applied) : undefined;
+  const directionParam = isIn ? 'in' : undefined;
+
+  /** The confirmation's numbers, counted by the backend for both options. */
+  function loadExportSummary() {
+    return api
+      .get<ExportSummary>('/transfer-orders/export/summary', {
+        params: { status: status || undefined, filters: filterParam, direction: directionParam },
+      })
+      .then((r) => r.data);
+  }
+
   /**
-   * Every order the filters match (not only this page), in the list's order.
-   * TO Out and TO In export the same "ITI TO" layout.
+   * Filtered: every order the status and filters match (not only this page);
+   * all: every order of this list (TO Out / TO In), any status. Both in the
+   * list's order and the same "ITI TO" layout; the list itself is left as it is.
    */
-  async function exportExcel() {
+  async function exportExcel(scope: ExportScope) {
     if (exporting) return;
+    setExportOpen(false);
     setExporting(true);
     toast.info('Preparing the export…');
     try {
       await downloadFile(
         '/transfer-orders/export',
         {
-          status: status || undefined,
-          filters: applied.length ? JSON.stringify(applied) : undefined,
-          direction: isIn ? 'in' : undefined,
+          ...(scope === 'filtered' ? { status: status || undefined, filters: filterParam } : {}),
+          direction: directionParam,
           ...params(),
         },
         'transfer_order_export.xlsx',
@@ -415,7 +430,7 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
             {
               label: exporting ? 'Exporting…' : 'Export',
               icon: <ExportIcon />,
-              onClick: exportExcel,
+              onClick: () => !exporting && setExportOpen(true),
             },
           ]}
           actions={
@@ -480,6 +495,21 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
           ))}
         </ListFilterPanel>
       </div>
+
+      <ExportConfirmModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        documentLabel="TOs"
+        filters={[
+          ...(status ? [{ label: 'Status', value: status }] : []),
+          ...applied.map((f) => ({
+            label: fieldLabel(f.field),
+            value: f.values.map((v) => valueLabel(f.field, v)).join(' or '),
+          })),
+        ]}
+        loadSummary={loadExportSummary}
+        onConfirm={exportExcel}
+      />
 
       {/* Nothing here searches until Apply. */}
       <ExtraFiltersModal open={extraOpen} onClose={closeExtras} onReset={resetExtras} onApply={applyExtras}>

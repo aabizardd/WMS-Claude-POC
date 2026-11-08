@@ -19,6 +19,7 @@ import RowActionMenu from '../../components/RowActionMenu';
 import TablePager from '../../components/TablePager';
 import MultiValueInput from '../../components/MultiValueInput';
 import { ExportIcon } from '../../components/ToolbarMenu';
+import ExportConfirmModal, { type ExportScope, type ExportSummary } from '../../components/ExportConfirmModal';
 import {
   AccordionPanelRow,
   DetailIcon,
@@ -194,20 +195,36 @@ export default function DeliveryList({
 
   const appliedKey = JSON.stringify(applied);
   const [exporting, setExporting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+
+  /** The confirmation's numbers, counted by the backend for both options. */
+  function loadExportSummary() {
+    return api
+      .get<ExportSummary>('/delivery/export/summary', {
+        params: { source: source ?? 'SALES_ORDER', filters: applied.length ? appliedKey : undefined },
+      })
+      .then((r) => r.data);
+  }
 
   /**
-   * Every plan of this list's source (SO or TO) the filters match, Open or
-   * Closed, with their order lines — what each order asked for and what was
-   * delivered on which SD.
+   * Filtered: every plan of this list's source (SO or TO) the filters match;
+   * all: every plan of the source. Open or Closed, with their order lines —
+   * what each order asked for and what was delivered on which SD (TO: the TO
+   * list's one-sheet layout). The list itself is left as it is.
    */
-  async function exportExcel() {
+  async function exportExcel(scope: ExportScope) {
     if (exporting) return;
+    setExportOpen(false);
     setExporting(true);
     toast.info('Preparing the export…');
     try {
       await downloadFile(
         '/delivery/export',
-        { source: source ?? 'SALES_ORDER', status: 'all', filters: applied.length ? appliedKey : undefined },
+        {
+          source: source ?? 'SALES_ORDER',
+          status: 'all',
+          filters: scope === 'filtered' && applied.length ? appliedKey : undefined,
+        },
         isTransfer ? 'delivery_plan_transfer_order_export.xlsx' : 'delivery_plan_sales_order_export.xlsx',
       );
     } catch {
@@ -338,7 +355,7 @@ export default function DeliveryList({
             {
               label: exporting ? 'Exporting…' : 'Export',
               icon: <ExportIcon />,
-              onClick: exportExcel,
+              onClick: () => !exporting && setExportOpen(true),
             },
           ]}
         />
@@ -370,6 +387,15 @@ export default function DeliveryList({
           ))}
         </ListFilterPanel>
       </div>
+
+      <ExportConfirmModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        documentLabel={isTransfer ? 'Transfer Orders' : 'Delivery Plans'}
+        filters={applied.map((f) => ({ label: fieldLabel(f.field), value: f.values.join(' or ') }))}
+        loadSummary={loadExportSummary}
+        onConfirm={exportExcel}
+      />
 
       {/* Nothing here searches until Apply, which runs it with the fields above. */}
       <ExtraFiltersModal open={extraOpen} onClose={closeExtras} onReset={resetExtras} onApply={applyExtras}>

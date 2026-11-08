@@ -339,6 +339,27 @@ export class PibInboundService {
   }
 
   /**
+   * What the GR - PIB export would hold, before it is downloaded: documents
+   * (GRs with at least one row in the file) and rows, for the list's current
+   * status and filters and for every GR the user can see. Counted by walking
+   * exportRows(), so a Part Number / Material Name filter counts exactly the
+   * lines the file keeps.
+   */
+  async exportSummary(q: QueryPibInboundDto, scope: WarehouseScope) {
+    const count = async (query: QueryPibInboundDto) => {
+      const grs = new Set<string | null>();
+      let rows = 0;
+      for await (const batch of this.exportRows(query, scope)) {
+        rows += batch.length;
+        for (const r of batch) grs.add(r.gr_number);
+      }
+      return { documents: grs.size, rows };
+    };
+    const [filtered, all] = await Promise.all([count(q), count({} as QueryPibInboundDto)]);
+    return { filtered, all };
+  }
+
+  /**
    * The Goods Receive - PIB export (WMS dev's "PIB" sheet): one row per GR
    * line, for every GR the list's filters match — not only one page — in the
    * list's order; a Part Number / Material Name filter keeps only the matching

@@ -32,6 +32,16 @@ export class DeliveryController {
     await this.service.exportXlsx(query, user, res);
   }
 
+  /**
+   * The Delivery Plan export confirmation's numbers: plans and rows for the
+   * current filters and for all data of the source, without building the file.
+   */
+  @Get('export/summary')
+  @RequirePermissions('delivery:read')
+  exportSummary(@Query() query: QueryDeliveryDto, @CurrentUser() user: AuthUser) {
+    return this.service.exportSummary(query, user);
+  }
+
   /** Dropdown values (master warehouses, customers, users) for SD Tracking. */
   @Get('tracking-options')
   @RequirePermissions('delivery:read')

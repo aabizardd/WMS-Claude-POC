@@ -8,7 +8,9 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import type { Writable } from 'stream';
-import { writeSoDeliveryXlsx, writeToDeliveryXlsx } from '../sales-orders/so-delivery-export';
+import { writeSoDeliveryXlsx } from '../sales-orders/so-delivery-export';
+import { writeTransferOrderXlsx } from '../transfer-orders/transfer-order-export';
+import { TransferOrdersService } from '../transfer-orders/transfer-orders.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { highestSeq } from '../common/doc-sequence';
 import { InventoryService } from '../inventory/inventory.service';
@@ -192,6 +194,7 @@ export class DeliveryService {
     private config: ConfigService,
     private soSync: SalesOrderSyncService,
     private toSync: TransferOrderSyncService,
+    private transferOrders: TransferOrdersService,
   ) {}
 
   // ---------- Oracle Item Fulfillment bridge ----------
@@ -344,12 +347,8 @@ export class DeliveryService {
     return where;
   }
 
-  /**
-   * The Delivery Plan list's export: every plan of the list's source (Sales
-   * or Transfer Order) its filters match — Open (not shipped yet: no SD,
-   * nothing delivered) and Closed — with the order lines on them.
-   */
-  exportXlsx(query: Parameters<DeliveryService['listWhere']>[0], scope: WarehouseScope, out: Writable) {
+  /** The Delivery Plan export's deliveries: the list's source, any status, its filters. */
+  private exportWhere(query: Parameters<DeliveryService['listWhere']>[0], scope: WarehouseScope) {
     const isTransfer = query.source === 'TRANSFER_ORDER';
     const deliveryWhere: Prisma.DeliveryWhereInput = {
       AND: [
@@ -357,8 +356,47 @@ export class DeliveryService {
         { sourceType: isTransfer ? 'TRANSFER_ORDER' : 'SALES_ORDER' },
       ],
     };
+    return { isTransfer, deliveryWhere };
+  }
+
+  /**
+   * What the Delivery Plan export would hold, before it is downloaded:
+   * documents (SO: delivery plans; TO: Transfer Orders, as the file lists
+   * them) with at least one row in the file, and rows (one per plan line on
+   * an SO / TO line), for the list's current filters and for every plan of
+   * this source the user can see. Counted with the same where as exportXlsx().
+   */
+  async exportSummary(query: Parameters<DeliveryService['listWhere']>[0], scope: WarehouseScope) {
+    const count = async (q: Parameters<DeliveryService['listWhere']>[0]) => {
+      const { isTransfer, deliveryWhere } = this.exportWhere(q, scope);
+      // The file reaches plan lines through the order lines.
+      const onOrderLine: Prisma.DeliveryItemWhereInput = isTransfer
+        ? { transferOrderItemId: { not: null } }
+        : { salesOrderItemId: { not: null } };
+      const [documents, rows] = await this.prisma.$transaction([
+        isTransfer
+          ? this.prisma.transferOrder.count({
+              where: { items: { some: { deliveryItems: { some: { delivery: deliveryWhere } } } } },
+            })
+          : this.prisma.delivery.count({ where: { AND: [deliveryWhere, { items: { some: onOrderLine } }] } }),
+        this.prisma.deliveryItem.count({ where: { ...onOrderLine, delivery: deliveryWhere } }),
+      ]);
+      return { documents, rows };
+    };
+    const [filtered, all] = await Promise.all([count(query), count({ source: query.source })]);
+    return { filtered, all };
+  }
+
+  /**
+   * The Delivery Plan list's export: every plan of the list's source (Sales
+   * or Transfer Order) its filters match — Open (not shipped yet: no SD,
+   * nothing delivered) and Closed — with the order lines on them. TO plans
+   * come out in the TO list's one-sheet "ITI TO" layout.
+   */
+  exportXlsx(query: Parameters<DeliveryService['listWhere']>[0], scope: WarehouseScope, out: Writable) {
+    const { isTransfer, deliveryWhere } = this.exportWhere(query, scope);
     return isTransfer
-      ? writeToDeliveryXlsx(this.prisma, { toWhere: {}, deliveryWhere }, out)
+      ? writeTransferOrderXlsx(this.transferOrders.deliveryPlanExportRows(deliveryWhere), out)
       : writeSoDeliveryXlsx(this.prisma, { soWhere: {}, deliveryWhere }, out);
   }
 

@@ -1137,6 +1137,26 @@ export class SalesDeliveryService {
   }
 
   /**
+   * What the export would hold, before it is downloaded: documents (Sales
+   * Deliveries and Returns with at least one line in the file) and rows (lines,
+   * both sheets), for the list's current filters and for every document the
+   * user can see. Counted with the same where as exportLines().
+   */
+  async exportSummary(query: QuerySalesDeliveryDto, scope: WarehouseScope) {
+    const count = async (q: QuerySalesDeliveryDto) => {
+      const { where, itemClauses } = this.listQuery({ ...q, document_type: undefined }, scope);
+      const lineWhere: Prisma.SalesDeliveryItemWhereInput = itemClauses.length ? { AND: itemClauses } : {};
+      const [documents, rows] = await this.prisma.$transaction([
+        this.prisma.salesDelivery.count({ where: { AND: [where, { items: { some: lineWhere } }] } }),
+        this.prisma.salesDeliveryItem.count({ where: { ...lineWhere, salesDelivery: where } }),
+      ]);
+      return { documents, rows };
+    };
+    const [filtered, all] = await Promise.all([count(query), count({} as QuerySalesDeliveryDto)]);
+    return { filtered, all };
+  }
+
+  /**
    * The period an export covers, for its file name: the Created At filter's
    * range when there is one, else the first and last matching document.
    */

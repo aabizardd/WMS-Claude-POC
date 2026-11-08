@@ -10,9 +10,9 @@ import { type ExportColumn, wibDateTimeMinutes, wibParts, writeXlsx } from '../c
  *
  * - From the Sales Order list: every SO the list's filters match (any status,
  *   with or without a delivery plan), all their lines and all their plans.
- * - From the Delivery Plan list (SO or TO): only orders with a delivery plan —
- *   every plan the list's filters match (Open or Closed), and the order lines
- *   on them.
+ * - From the SO Delivery Plan list: only orders with a delivery plan — every
+ *   plan the list's filters match (Open or Closed), and the order lines on
+ *   them. (The TO Delivery Plan list exports the TO list's "ITI TO" layout.)
  */
 export type OrderKind = 'SO' | 'TO';
 
@@ -20,11 +20,6 @@ export interface SoDeliveryScope {
   /** Which orders. */
   soWhere: Prisma.SalesOrderWhereInput;
   /** Restrict lines and plans to these deliveries (Delivery Plan export). */
-  deliveryWhere?: Prisma.DeliveryWhereInput;
-}
-
-export interface ToDeliveryScope {
-  toWhere: Prisma.TransferOrderWhereInput;
   deliveryWhere?: Prisma.DeliveryWhereInput;
 }
 
@@ -173,73 +168,6 @@ async function* soLines(prisma: PrismaService, scope: SoDeliveryScope): AsyncGen
           uom: l.material?.primaryUom?.uomCode ?? null,
           request_qty: l.quantity,
           given_qty: Math.max(0, l.quantity - l.remainingQty),
-          remaining_qty: l.remainingQty,
-          shipped: l.shipped,
-          deliveryItems: l.deliveryItems,
-        };
-      });
-    }
-    if (batch.length < BATCH) return;
-  }
-}
-
-/** The TO lines in scope, oldest order first, in batches. */
-async function* toLines(prisma: PrismaService, scope: ToDeliveryScope): AsyncGenerator<Line[]> {
-  const where: Prisma.TransferOrderItemWhereInput = {
-    transferOrder: scope.toWhere,
-    ...(scope.deliveryWhere ? { deliveryItems: { some: { delivery: scope.deliveryWhere } } } : {}),
-  };
-  for (let skip = 0; ; skip += BATCH) {
-    const batch = await prisma.transferOrderItem.findMany({
-      where,
-      include: {
-        transferOrder: { include: { warehouse: { select: { name: true, subsidiaryName: true } } } },
-        deliveryItems: deliveryItemsArgs(scope.deliveryWhere),
-      },
-      orderBy: [{ transferOrder: { tranId: 'asc' } }, { lineNumber: 'asc' }],
-      skip,
-      take: BATCH,
-    });
-    if (batch.length) {
-      // TO lines and headers carry only ids for the material and destination.
-      const [mats, dests] = await Promise.all([
-        prisma.material.findMany({
-          where: { id: { in: [...new Set(batch.map((l) => l.materialId).filter((x): x is string => !!x))] } },
-          select: { id: true, materialCode: true, materialName: true, primaryUom: { select: { uomCode: true } } },
-        }),
-        prisma.warehouse.findMany({
-          where: {
-            id: { in: [...new Set(batch.map((l) => l.transferOrder.toWarehouseId).filter((x): x is string => !!x))] },
-          },
-          select: { id: true, name: true },
-        }),
-      ]);
-      const matById = new Map(mats.map((m) => [m.id, m]));
-      const destById = new Map(dests.map((w) => [w.id, w.name]));
-      yield batch.map((l) => {
-        const to = l.transferOrder;
-        const m = l.materialId ? matById.get(l.materialId) : undefined;
-        return {
-          order: {
-            status: to.statusName,
-            transaction_id: to.tranId,
-            order_id: to.outboundId,
-            erp_doc_id: to.oracleId,
-            order_date: to.tranDate,
-            ownership: to.warehouse?.subsidiaryName ?? null,
-            warehouse: to.warehouse?.name ?? place(to.fromLocationName),
-            party: (to.toWarehouseId && destById.get(to.toWarehouseId)) || place(to.toLocationName),
-            memo: to.memo,
-            created_at: to.createdAt,
-            last_modified: to.lastModified,
-          },
-          line_number: l.lineNumber,
-          material_code: m?.materialCode ?? l.itemName,
-          material_name: m?.materialName ?? l.description,
-          uom: m?.primaryUom?.uomCode ?? null,
-          request_qty: l.quantity,
-          // Already sent to picking: committed qty no longer remaining.
-          given_qty: Math.max(0, l.committed - l.remainingQty),
           remaining_qty: l.remainingQty,
           shipped: l.shipped,
           deliveryItems: l.deliveryItems,
@@ -440,18 +368,6 @@ export function writeSoDeliveryXlsx(prisma: PrismaService, scope: SoDeliveryScop
     [
       { name: 'Sales Order', columns: lineColumns('SO'), rows: orderLineRows(soLines(prisma, scope), !scope.deliveryWhere) },
       { name: 'Delivery Plan', columns: deliveryColumns('SO'), rows: deliveryLineRows(soLines(prisma, scope)) },
-    ],
-    STYLE,
-  );
-}
-
-/** Streams the TO workbook (sheets "Transfer Order" and "Delivery Plan") to `out`. */
-export function writeToDeliveryXlsx(prisma: PrismaService, scope: ToDeliveryScope, out: Writable) {
-  return writeXlsx(
-    out,
-    [
-      { name: 'Transfer Order', columns: lineColumns('TO'), rows: orderLineRows(toLines(prisma, scope), !scope.deliveryWhere) },
-      { name: 'Delivery Plan', columns: deliveryColumns('TO'), rows: deliveryLineRows(toLines(prisma, scope)) },
     ],
     STYLE,
   );
