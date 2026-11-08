@@ -123,6 +123,16 @@ export class TransferOrdersController {
     await writeTransferOrderXlsx(this.service.exportRows(query, user), res);
   }
 
+  /**
+   * The export confirmation's numbers: documents (TOs) and rows for the
+   * current status and filters and for all data, without building the file.
+   */
+  @Get('export/summary')
+  @RequirePermissions('transfer-orders:read')
+  exportSummary(@Query() query: QueryTransferOrderDto, @CurrentUser() user: AuthUser) {
+    return this.service.exportSummary(query, user);
+  }
+
   @Get()
   @RequirePermissions('transfer-orders:read')
   findAll(@Query() query: QueryTransferOrderDto, @CurrentUser() user: AuthUser) {

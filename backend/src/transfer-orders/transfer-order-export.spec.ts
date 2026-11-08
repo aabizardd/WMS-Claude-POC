@@ -65,24 +65,6 @@ describe('Transfer Order export (TO Out / TO In)', () => {
     expect(rows.map((r) => r.erp_line_id)).toEqual([2, 3]);
   });
 
-  it('Export SD keeps only the SD lines, asking for those of the given deliveries', async () => {
-    const s = setup();
-    const out = [];
-    for await (const rows of s.exportSdRows({ deliveryId: 'd1' })) out.push(...rows);
-    expect(out.map((r) => [r.erp_line_id, r.sd_number])).toEqual([
-      [1, 'SD-A'],
-      [1, 'SD-B'],
-    ]);
-    const args = (s as unknown as { prisma: { transferOrder: { findMany: jest.Mock } } }).prisma.transferOrder.findMany.mock.calls[0][0];
-    const lineWhere = { AND: [{ delivery: { status: 'Closed' } }, { deliveryId: 'd1' }] };
-    expect(args.where).toEqual({ items: { some: { deliveryItems: { some: lineWhere } } } });
-    expect(args.include.items.include.deliveryItems.where).toEqual(lineWhere);
-  });
-
-  it('names the Export SD file', () => {
-    expect(transferOrderExportFileName(new Date('2026-10-29T04:50:41Z'), 'sd')).toBe('sales_delivery_export_20261029_115041.xlsx');
-  });
-
   it('names the file the way WMS dev does, in WIB', () => {
     expect(transferOrderExportFileName(new Date('2026-10-29T04:50:41Z'))).toBe('transfer_order_export_20261029_115041.xlsx');
   });

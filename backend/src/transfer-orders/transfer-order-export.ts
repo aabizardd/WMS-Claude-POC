@@ -28,14 +28,10 @@ const COLUMNS: ExportColumn<Row>[] = [
   { header: 'Date Received', width: 18, value: (r) => date(r.date_received) },
 ];
 
-/**
- * "transfer_order_export_20261029_115041.xlsx", as WMS dev names it (WIB);
- * the Delivery Plan's Export SD is "sales_delivery_export_…".
- */
-export function transferOrderExportFileName(now = new Date(), kind: 'to' | 'sd' = 'to') {
+/** "transfer_order_export_20261029_115041.xlsx", as WMS dev names it (WIB). */
+export function transferOrderExportFileName(now = new Date()) {
   const t = wibParts(now);
-  const prefix = kind === 'sd' ? 'sales_delivery_export' : 'transfer_order_export';
-  return `${prefix}_${t.y}${t.m}${t.d}_${t.hh}${t.mm}${t.ss}.xlsx`;
+  return `transfer_order_export_${t.y}${t.m}${t.d}_${t.hh}${t.mm}${t.ss}.xlsx`;
 }
 
 /** Streams the "ITI TO" workbook to `out`: white headers on indigo, frozen. */

@@ -47,8 +47,8 @@ const SYNC_ACTOR = 'ERP Sync';
 
 const ci = (v: string) => ({ contains: v, mode: 'insensitive' as const });
 
-/** A Sales Delivery (SD) line: on a shipped (Closed) delivery, which has the SD number. */
-const SHIPPED_DELIVERY: Prisma.DeliveryItemWhereInput = { delivery: { status: 'Closed' } };
+/** A delivery line that has shipped (its delivery is Closed and has the SD number). */
+const SHIPPED: Prisma.DeliveryItemWhereInput = { delivery: { status: 'Closed' } };
 
 /**
  * List filters, one per field. Several values on one field are OR-ed; fields
@@ -149,6 +149,52 @@ export class TransferOrdersService {
   }
 
   /**
+   * What the TO export would hold, before it is downloaded: documents (TOs
+   * with at least one row in the file) and rows, for the list's current
+   * status and filters and for every TO the user can see in this list (TO Out
+   * or TO In, any status). Counted the way exportRows() writes them: per line
+   * (a Part Number filter keeps the lines whose item name or material code
+   * matches), one row per shipped delivery line, or one row if it has none.
+   */
+  async exportSummary(query: QueryTransferOrderDto, scope: WarehouseScope) {
+    const count = async (q: QueryTransferOrderDto) => {
+      const { where } = this.listQuery(q, scope);
+      const lineWhere: Prisma.TransferOrderItemWhereInput[] = await Promise.all(
+        (q.filters ?? [])
+          .filter((f) => f.field === 'material_code')
+          .map((f) => (f.values ?? []).map((v) => v.trim()).filter(Boolean))
+          .filter((values) => values.length)
+          .map(async (values) => {
+            const mats = await this.prisma.material.findMany({
+              where: { OR: values.map((v) => ({ materialCode: ci(v) })) },
+              select: { id: true },
+            });
+            return {
+              OR: [
+                ...values.map((v) => ({ itemName: ci(v) })),
+                ...(mats.length ? [{ materialId: { in: mats.map((m) => m.id) } }] : []),
+              ],
+            };
+          }),
+      );
+      const lines: Prisma.TransferOrderItemWhereInput = { transferOrder: where, AND: lineWhere };
+      const [documents, lineCount, shippedLines, shippedRows] = await this.prisma.$transaction([
+        this.prisma.transferOrder.count({ where: { AND: [where, { items: { some: { AND: lineWhere } } }] } }),
+        this.prisma.transferOrderItem.count({ where: lines }),
+        this.prisma.transferOrderItem.count({ where: { AND: [lines, { deliveryItems: { some: SHIPPED } }] } }),
+        this.prisma.deliveryItem.count({ where: { ...SHIPPED, transferOrderItem: lines } }),
+      ]);
+      // A line with shipped delivery lines is one row per line; one without is one row.
+      return { documents, rows: lineCount - shippedLines + shippedRows };
+    };
+    const [filtered, all] = await Promise.all([
+      count(query),
+      count({ direction: query.direction } as QueryTransferOrderDto),
+    ]);
+    return { filtered, all };
+  }
+
+  /**
    * The TO export (WMS dev's "ITI TO" sheet), the same for TO Out and TO In:
    * every order the list's filters match — not only one page — in the list's
    * order (a Part Number filter keeps only the matching lines). One row per
@@ -166,39 +212,6 @@ export class TransferOrdersService {
       .filter((f) => f.field === 'material_code')
       .map((f) => (f.values ?? []).map((v) => v.trim().toLowerCase()).filter(Boolean))
       .filter((values) => values.length);
-    yield* this.exportBatches(where, orderBy, partFilters, SHIPPED_DELIVERY, false);
-  }
-
-  /**
-   * Export SD (Delivery Plan): the same "ITI TO" layout, for the Transfer
-   * Orders that have a Sales Delivery, holding only their SD lines — the
-   * shipped (Closed) delivery lines `sdLines` picks (the Delivery Plan's
-   * filters). A TO line with no such SD line is left out. In the TO list's
-   * default order.
-   */
-  async *exportSdRows(sdLines: Prisma.DeliveryItemWhereInput): AsyncGenerator<TransferOrderExportRow[]> {
-    const lineWhere: Prisma.DeliveryItemWhereInput = { AND: [SHIPPED_DELIVERY, sdLines] };
-    yield* this.exportBatches(
-      { items: { some: { deliveryItems: { some: lineWhere } } } },
-      DEFAULT_ORDER,
-      [],
-      lineWhere,
-      true,
-    );
-  }
-
-  /**
-   * The "ITI TO" rows of the orders `where` picks, in batches: per line, one
-   * row per delivery line `deliveryLines` keeps; with `sdOnly`, a line with
-   * none is left out, else it is one row with Oracle's own figures.
-   */
-  private async *exportBatches(
-    where: Prisma.TransferOrderWhereInput,
-    orderBy: ToOrder,
-    partFilters: string[][],
-    deliveryLines: Prisma.DeliveryItemWhereInput,
-    sdOnly: boolean,
-  ): AsyncGenerator<TransferOrderExportRow[]> {
     const lineMatches = (itemName: string | null, code: string | null | undefined) =>
       partFilters.every((values) =>
         values.some((v) => (itemName ?? '').toLowerCase().includes(v) || (code ?? '').toLowerCase().includes(v)),
@@ -217,7 +230,7 @@ export class TransferOrdersService {
             orderBy: { lineNumber: 'asc' },
             include: {
               deliveryItems: {
-                where: deliveryLines,
+                where: SHIPPED,
                 orderBy: [{ delivery: { updatedAt: 'asc' } }, { createdAt: 'asc' }],
                 select: {
                   qty: true,
@@ -260,7 +273,6 @@ export class TransferOrdersService {
             uom: mat?.primaryUom?.uomCode ?? null,
           };
           if (!l.deliveryItems.length) {
-            if (sdOnly) continue;
             // Nothing shipped through WMS: Oracle's own figures, if any (a TO
             // fulfilled or received in Oracle directly).
             rows.push({

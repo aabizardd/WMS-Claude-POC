@@ -195,54 +195,37 @@ export default function DeliveryList({
 
   const appliedKey = JSON.stringify(applied);
   const [exporting, setExporting] = useState(false);
-  const [sdExportOpen, setSdExportOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
-  /**
-   * Every plan of this list's source (SO or TO) the filters match, Open or
-   * Closed, with their order lines — what each order asked for and what was
-   * delivered on which SD.
-   */
-  async function exportExcel() {
-    if (exporting) return;
-    setExporting(true);
-    toast.info('Preparing the export…');
-    try {
-      await downloadFile(
-        '/delivery/export',
-        { source: source ?? 'SALES_ORDER', status: 'all', filters: applied.length ? appliedKey : undefined },
-        isTransfer ? 'delivery_plan_transfer_order_export.xlsx' : 'delivery_plan_sales_order_export.xlsx',
-      );
-    } catch {
-      toast.error('Export failed. Please try again.');
-    } finally {
-      setExporting(false);
-    }
-  }
-
-  /** Export SD's confirmation numbers, counted by the backend for both options. */
-  function loadSdSummary() {
+  /** The confirmation's numbers, counted by the backend for both options. */
+  function loadExportSummary() {
     return api
-      .get<ExportSummary>('/delivery/export-sd/summary', {
-        params: { filters: applied.length ? appliedKey : undefined },
+      .get<ExportSummary>('/delivery/export/summary', {
+        params: { source: source ?? 'SALES_ORDER', filters: applied.length ? appliedKey : undefined },
       })
       .then((r) => r.data);
   }
 
   /**
-   * Export SD (TO only): the Transfer Order export's layout, holding only the
-   * SD lines — shipped deliveries; an Open plan has no SD yet. Filtered
-   * follows the list's filters; all is every SD. The list is left as it is.
+   * Filtered: every plan of this list's source (SO or TO) the filters match;
+   * all: every plan of the source. Open or Closed, with their order lines —
+   * what each order asked for and what was delivered on which SD. The list
+   * itself is left as it is.
    */
-  async function exportSd(scope: ExportScope) {
+  async function exportExcel(scope: ExportScope) {
     if (exporting) return;
-    setSdExportOpen(false);
+    setExportOpen(false);
     setExporting(true);
     toast.info('Preparing the export…');
     try {
       await downloadFile(
-        '/delivery/export-sd',
-        { filters: scope === 'filtered' && applied.length ? appliedKey : undefined },
-        'sales_delivery_export.xlsx',
+        '/delivery/export',
+        {
+          source: source ?? 'SALES_ORDER',
+          status: 'all',
+          filters: scope === 'filtered' && applied.length ? appliedKey : undefined,
+        },
+        isTransfer ? 'delivery_plan_transfer_order_export.xlsx' : 'delivery_plan_sales_order_export.xlsx',
       );
     } catch {
       toast.error('Export failed. Please try again.');
@@ -372,17 +355,8 @@ export default function DeliveryList({
             {
               label: exporting ? 'Exporting…' : 'Export',
               icon: <ExportIcon />,
-              onClick: exportExcel,
+              onClick: () => !exporting && setExportOpen(true),
             },
-            ...(isTransfer
-              ? [
-                  {
-                    label: 'Export SD',
-                    icon: <ExportIcon />,
-                    onClick: () => !exporting && setSdExportOpen(true),
-                  },
-                ]
-              : []),
           ]}
         />
 
@@ -414,20 +388,14 @@ export default function DeliveryList({
         </ListFilterPanel>
       </div>
 
-      {/* Export SD's confirmation: filtered or every SD. */}
-      {isTransfer && (
-        <ExportConfirmModal
-          open={sdExportOpen}
-          onClose={() => setSdExportOpen(false)}
-          title="Confirm Export SD"
-          documentLabel="SDs"
-          filteredSubtitle="SDs (shipped deliveries) that match the active filters."
-          allSubtitle="Every SD you have access to, whatever the filters."
-          filters={applied.map((f) => ({ label: fieldLabel(f.field), value: f.values.join(' or ') }))}
-          loadSummary={loadSdSummary}
-          onConfirm={exportSd}
-        />
-      )}
+      <ExportConfirmModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        documentLabel="Delivery Plans"
+        filters={applied.map((f) => ({ label: fieldLabel(f.field), value: f.values.join(' or ') }))}
+        loadSummary={loadExportSummary}
+        onConfirm={exportExcel}
+      />
 
       {/* Nothing here searches until Apply, which runs it with the fields above. */}
       <ExtraFiltersModal open={extraOpen} onClose={closeExtras} onReset={resetExtras} onApply={applyExtras}>

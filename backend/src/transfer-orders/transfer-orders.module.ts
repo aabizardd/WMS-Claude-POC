@@ -7,6 +7,6 @@ import { TransferOrderCreateService } from './transfer-order-create.service';
 @Module({
   controllers: [TransferOrdersController],
   providers: [TransferOrdersService, TransferOrderSyncService, TransferOrderCreateService],
-  exports: [TransferOrderSyncService, TransferOrdersService],
+  exports: [TransferOrderSyncService],
 })
 export class TransferOrdersModule {}
