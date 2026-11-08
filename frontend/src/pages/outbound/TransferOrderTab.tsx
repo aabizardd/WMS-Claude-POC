@@ -21,6 +21,7 @@ import DateRangeInput, { formatRangeValue } from '../../components/DateRangeInpu
 import RowActionMenu from '../../components/RowActionMenu';
 import TablePager from '../../components/TablePager';
 import { ExportIcon } from '../../components/ToolbarMenu';
+import ExportConfirmModal, { type ExportScope, type ExportSummary } from '../../components/ExportConfirmModal';
 import { TO_STATUSES, TO_SYNC_STATUSES, soStatusBadgeClass } from '../../lib/salesOrderStatus';
 import TransferOrderLinesTable from './TransferOrderLinesTable';
 import TransferInLinesTable from '../inbound/TransferInLinesTable';
@@ -186,6 +187,7 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
   const [status, setStatus] = useState(initial.status);
   const [reloadKey, setReloadKey] = useState(0);
   const [exporting, setExporting] = useState(false);
+  const [sdExportOpen, setSdExportOpen] = useState(false);
 
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initial.filters));
   const [applied, setApplied] = useState<TransferOrderFilter[]>(initial.filters);
@@ -227,6 +229,46 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
           ...params(),
         },
         'transfer_order_export.xlsx',
+      );
+    } catch {
+      toast.error('Export failed. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  const filterParam = applied.length ? JSON.stringify(applied) : undefined;
+
+  /** Export SD's confirmation numbers, counted by the backend for both options. */
+  function loadSdSummary() {
+    return api
+      .get<ExportSummary>('/transfer-orders/export/sd-summary', {
+        params: { status: status || undefined, filters: filterParam, direction: isIn ? 'in' : undefined },
+      })
+      .then((r) => r.data);
+  }
+
+  /**
+   * Export SD: the "ITI TO" layout, for TOs that have a Sales Delivery and
+   * only their SD lines. Filtered follows the list's status and filters; all
+   * is every TO with an SD in this list, whatever they are. The list itself
+   * is left as it is.
+   */
+  async function exportSd(scope: ExportScope) {
+    if (exporting) return;
+    setSdExportOpen(false);
+    setExporting(true);
+    toast.info('Preparing the export…');
+    try {
+      await downloadFile(
+        '/transfer-orders/export',
+        {
+          sd_only: 'true',
+          ...(scope === 'filtered' ? { status: status || undefined, filters: filterParam } : {}),
+          direction: isIn ? 'in' : undefined,
+          ...params(),
+        },
+        'sales_delivery_export.xlsx',
       );
     } catch {
       toast.error('Export failed. Please try again.');
@@ -417,6 +459,11 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
               icon: <ExportIcon />,
               onClick: exportExcel,
             },
+            {
+              label: 'Export SD',
+              icon: <ExportIcon />,
+              onClick: () => !exporting && setSdExportOpen(true),
+            },
           ]}
           actions={
             canCreate && (
@@ -480,6 +527,24 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
           ))}
         </ListFilterPanel>
       </div>
+
+      {/* Export SD: filtered (status + filters) or every TO with an SD. */}
+      <ExportConfirmModal
+        open={sdExportOpen}
+        onClose={() => setSdExportOpen(false)}
+        title="Confirm Export SD"
+        filteredSubtitle="TOs with a Sales Delivery (SD) that match the active filters."
+        allSubtitle="Every TO with a Sales Delivery (SD) you have access to, whatever the filters."
+        filters={[
+          ...(status ? [{ label: 'Status', value: status }] : []),
+          ...applied.map((f) => ({
+            label: fieldLabel(f.field),
+            value: f.values.map((v) => valueLabel(f.field, v)).join(' or '),
+          })),
+        ]}
+        loadSummary={loadSdSummary}
+        onConfirm={exportSd}
+      />
 
       {/* Nothing here searches until Apply. */}
       <ExtraFiltersModal open={extraOpen} onClose={closeExtras} onReset={resetExtras} onApply={applyExtras}>

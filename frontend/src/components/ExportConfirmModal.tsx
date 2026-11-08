@@ -28,6 +28,9 @@ export default function ExportConfirmModal({
   loadSummary,
   onConfirm,
   documentLabel = 'Documents',
+  title = 'Confirm Export',
+  filteredSubtitle = 'Only the data that matches the active filters.',
+  allSubtitle = 'Every record you have access to, whatever the filters.',
 }: {
   open: boolean;
   onClose: () => void;
@@ -36,6 +39,9 @@ export default function ExportConfirmModal({
   loadSummary: () => Promise<ExportSummary>;
   onConfirm: (scope: ExportScope) => void;
   documentLabel?: string;
+  title?: string;
+  filteredSubtitle?: string;
+  allSubtitle?: string;
 }) {
   const hasFilters = filters.length > 0;
   const [scope, setScope] = useState<ExportScope>('filtered');
@@ -80,7 +86,7 @@ export default function ExportConfirmModal({
               <DownloadIcon className="h-5 w-5" />
             </span>
             <h3 id="export-confirm-title" className="text-xl font-semibold text-slate-900 dark:text-white">
-              Confirm Export
+              {title}
             </h3>
           </div>
           <button
@@ -105,7 +111,7 @@ export default function ExportConfirmModal({
             onSelect={() => setScope('filtered')}
             icon={<FilterIcon className="h-6 w-6" />}
             title="Export Filtered Data"
-            subtitle="Only the data that matches the active filters."
+            subtitle={filteredSubtitle}
           >
             <InfoPill>
               {hasFilters ? (
@@ -132,7 +138,7 @@ export default function ExportConfirmModal({
             onSelect={() => setScope('all')}
             icon={<LayersIcon className="h-6 w-6" />}
             title="Export All Data"
-            subtitle="Every record you have access to, whatever the filters."
+            subtitle={allSubtitle}
           >
             <InfoPill>
               <Totals counts={summary?.all} loading={loading} documentLabel={documentLabel} first />

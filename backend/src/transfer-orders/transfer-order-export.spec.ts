@@ -42,9 +42,9 @@ describe('Transfer Order export (TO Out / TO In)', () => {
     };
     return new TransferOrdersService(prisma as never);
   }
-  const collect = async (s: TransferOrdersService, filters: { field: string; values: string[] }[] = []) => {
+  const collect = async (s: TransferOrdersService, filters: { field: string; values: string[] }[] = [], sdOnly = false) => {
     const out = [];
-    for await (const rows of s.exportRows({ filters } as never, { role: 'admin', warehouseIds: null })) out.push(...rows);
+    for await (const rows of s.exportRows({ filters, sd_only: sdOnly ? 'true' : undefined } as never, { role: 'admin', warehouseIds: null })) out.push(...rows);
     return out;
   };
 
@@ -65,7 +65,46 @@ describe('Transfer Order export (TO Out / TO In)', () => {
     expect(rows.map((r) => r.erp_line_id)).toEqual([2, 3]);
   });
 
+  it('Export SD keeps only the shipped delivery lines', async () => {
+    const rows = await collect(setup(), [], true);
+    expect(rows.map((r) => [r.erp_line_id, r.sd_number])).toEqual([
+      [1, 'SD-A'],
+      [1, 'SD-B'],
+    ]);
+  });
+
+  it('Export SD only asks for TOs that have an SD', async () => {
+    const prisma = { transferOrder: { findMany: jest.fn().mockResolvedValue([]) } };
+    const s = new TransferOrdersService(prisma as never);
+    for await (const _ of s.exportRows({ sd_only: 'true' } as never, { role: 'admin', warehouseIds: null })) void _;
+    expect(JSON.stringify(prisma.transferOrder.findMany.mock.calls[0][0].where)).toContain('"status":"Closed"');
+  });
+
+  it('Export SD summary counts filtered and all TOs with an SD', async () => {
+    const prisma = {
+      material: { findMany: jest.fn().mockResolvedValue([{ id: 'm1' }]) },
+      transferOrder: { count: jest.fn().mockResolvedValue(2) },
+      deliveryItem: { count: jest.fn().mockResolvedValue(5) },
+      $transaction: (ops: Promise<number>[]) => Promise.all(ops),
+    };
+    const s = new TransferOrdersService(prisma as never);
+    const out = await s.exportSdSummary(
+      { status: 'Pending Receipt', filters: [{ field: 'material_code', values: ['bolt'] }] } as never,
+      { role: 'admin', warehouseIds: null },
+    );
+    expect(out).toEqual({ filtered: { documents: 2, rows: 5 }, all: { documents: 2, rows: 5 } });
+    // The two counts run side by side: told apart by their where.
+    const wheres = prisma.deliveryItem.count.mock.calls.map((c) => JSON.stringify(c[0].where));
+    const filteredRows = wheres.find((w) => w.includes('Pending Receipt'))!;
+    const allRows = wheres.find((w) => w !== filteredRows)!;
+    expect(wheres).toHaveLength(2);
+    expect(filteredRows).toContain('"m1"');
+    expect(allRows).not.toContain('Pending Receipt');
+    expect(allRows).toContain('"status":"Closed"');
+  });
+
   it('names the file the way WMS dev does, in WIB', () => {
+    expect(transferOrderExportFileName(new Date('2026-10-29T04:50:41Z'), true)).toBe('sales_delivery_export_20261029_115041.xlsx');
     expect(transferOrderExportFileName(new Date('2026-10-29T04:50:41Z'))).toBe('transfer_order_export_20261029_115041.xlsx');
   });
 });

@@ -47,6 +47,12 @@ const SYNC_ACTOR = 'ERP Sync';
 
 const ci = (v: string) => ({ contains: v, mode: 'insensitive' as const });
 
+/** A Sales Delivery (SD): a delivery shipped (Closed), which gives it its SD number. */
+const SHIPPED_DELIVERY: Prisma.DeliveryItemWhereInput = { delivery: { status: 'Closed' } };
+
+/** A TO line with at least one SD. */
+const LINE_HAS_SD: Prisma.TransferOrderItemWhereInput = { deliveryItems: { some: SHIPPED_DELIVERY } };
+
 /**
  * List filters, one per field. Several values on one field are OR-ed; fields
  * are AND-ed. Part Number looks inside the lines: the Oracle item name carries
@@ -141,8 +147,60 @@ export class TransferOrdersService {
       const values = (f.values ?? []).map((v) => v.trim()).filter(Boolean);
       if (build && values.length) and.push({ OR: values.map(build) });
     }
+    // Export SD: only the TOs that have an SD.
+    if (query.sd_only === 'true') and.push({ items: { some: LINE_HAS_SD } });
     if (and.length) where.AND = and;
     return { where, orderBy };
+  }
+
+  /** The Part Number filter's values, one list per filter (values OR-ed, filters AND-ed). */
+  private partFilters(query: QueryTransferOrderDto) {
+    return (query.filters ?? [])
+      .filter((f) => f.field === 'material_code')
+      .map((f) => (f.values ?? []).map((v) => v.trim().toLowerCase()).filter(Boolean))
+      .filter((values) => values.length);
+  }
+
+  /**
+   * What an Export SD would hold, before it is downloaded: documents (TOs with
+   * at least one row in the file) and rows (one per shipped delivery line),
+   * for the list's current filters and for every TO with an SD the user can
+   * see in this list (TO Out or TO In). Counted the way exportRows() picks
+   * its rows — a Part Number filter matching the line's item name or its
+   * material's code — so the numbers match the file.
+   */
+  async exportSdSummary(query: QueryTransferOrderDto, scope: WarehouseScope) {
+    const count = async (q: QueryTransferOrderDto) => {
+      const { where } = this.listQuery({ ...q, sd_only: 'true' }, scope);
+      const lineWhere: Prisma.TransferOrderItemWhereInput[] = await Promise.all(
+        this.partFilters(q).map(async (values) => {
+          const mats = await this.prisma.material.findMany({
+            where: { OR: values.map((v) => ({ materialCode: ci(v) })) },
+            select: { id: true },
+          });
+          return {
+            OR: [
+              ...values.map((v) => ({ itemName: ci(v) })),
+              ...(mats.length ? [{ materialId: { in: mats.map((m) => m.id) } }] : []),
+            ],
+          };
+        }),
+      );
+      const [documents, rows] = await this.prisma.$transaction([
+        this.prisma.transferOrder.count({
+          where: { AND: [where, { items: { some: { AND: [LINE_HAS_SD, ...lineWhere] } } }] },
+        }),
+        this.prisma.deliveryItem.count({
+          where: { ...SHIPPED_DELIVERY, transferOrderItem: { transferOrder: where, AND: lineWhere } },
+        }),
+      ]);
+      return { documents, rows };
+    };
+    const [filtered, all] = await Promise.all([
+      count(query),
+      count({ direction: query.direction } as QueryTransferOrderDto),
+    ]);
+    return { filtered, all };
   }
 
   /**
@@ -154,15 +212,16 @@ export class TransferOrdersService {
    * empty, carrying Oracle's fulfilled / received qty if it has any. GRs are
    * tied to the TO line, not to an SD, so a line's received qty is spread
    * over its SDs in shipping order. Yielded in batches.
+   *
+   * Export SD (sd_only=true): the same layout, for the TOs that have an SD,
+   * and only their shipped delivery lines (a line with no SD is left out).
    */
   async *exportRows(query: QueryTransferOrderDto, scope: WarehouseScope): AsyncGenerator<TransferOrderExportRow[]> {
     const { where, orderBy } = this.listQuery(query, scope);
+    const sdOnly = query.sd_only === 'true';
     // A Part Number filter keeps only the matching lines, as the list's
     // accordion does (item name or material code, values OR-ed).
-    const partFilters = (query.filters ?? [])
-      .filter((f) => f.field === 'material_code')
-      .map((f) => (f.values ?? []).map((v) => v.trim().toLowerCase()).filter(Boolean))
-      .filter((values) => values.length);
+    const partFilters = this.partFilters(query);
     const lineMatches = (itemName: string | null, code: string | null | undefined) =>
       partFilters.every((values) =>
         values.some((v) => (itemName ?? '').toLowerCase().includes(v) || (code ?? '').toLowerCase().includes(v)),
@@ -181,7 +240,7 @@ export class TransferOrdersService {
             orderBy: { lineNumber: 'asc' },
             include: {
               deliveryItems: {
-                where: { delivery: { status: 'Closed' } },
+                where: SHIPPED_DELIVERY,
                 orderBy: [{ delivery: { updatedAt: 'asc' } }, { createdAt: 'asc' }],
                 select: {
                   qty: true,
@@ -224,6 +283,7 @@ export class TransferOrdersService {
             uom: mat?.primaryUom?.uomCode ?? null,
           };
           if (!l.deliveryItems.length) {
+            if (sdOnly) continue;
             // Nothing shipped through WMS: Oracle's own figures, if any (a TO
             // fulfilled or received in Oracle directly).
             rows.push({
