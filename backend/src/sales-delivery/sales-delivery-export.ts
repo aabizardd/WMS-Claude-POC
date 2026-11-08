@@ -11,6 +11,7 @@ function columns(isReturn: boolean): ExportColumn<Line>[] {
   return [
     { header: isReturn ? 'Sales Return Number' : 'Sales Delivery Number', width: 26, value: (r) => r.number },
     { header: 'Netsuite ID', width: 14, value: (r) => text(r.netsuite_id) },
+    { header: 'Transaction ID', width: 20, value: (r) => text(r.transaction_id) },
     { header: 'Origin Location', width: 24, value: (r) => text(r.origin) },
     { header: 'Destination Location', width: 24, value: (r) => text(r.destination) },
     { header: 'Customer', width: 28, value: (r) => text(r.customer) },

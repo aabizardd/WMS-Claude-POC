@@ -444,7 +444,7 @@ export default function SalesReturnCreatePage() {
         },
       );
       draftStore.clear(source.id);
-      toast.success(`${r.data.delivery_number} submitted`);
+      toast.success(`${r.data.delivery_number} submitted — sending to Oracle…`);
       navigate(`/admin/inventory/sales-delivery/${r.data.id}`);
     } catch (err) {
       if (axios.isAxiosError(err)) {

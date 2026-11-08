@@ -1648,7 +1648,8 @@ export interface ComplaintDetail extends ComplaintRow {
 // ===== Inventory Sales Delivery =====
 
 /** Every created document is Success; Failed is reserved for the Oracle post. */
-export type SalesDeliveryStatus = 'Success' | 'Failed';
+/** Syncing: saved in WMS, the Oracle inventory transfer is being posted. */
+export type SalesDeliveryStatus = 'Syncing' | 'Success' | 'Failed';
 
 /** A return reverses a delivery; both live in the same list. */
 export type SalesDeliveryDocumentType = 'SalesDelivery' | 'SalesReturn';
@@ -1692,8 +1693,12 @@ export interface SalesDeliveryRow {
   document_type: SalesDeliveryDocumentType;
   source_delivery_number: string | null;
   status: SalesDeliveryStatus;
-  /** NetSuite internal id (a generated dummy in the POC). */
+  /** NetSuite internal id of the Oracle transfer (older documents: a generated dummy). */
   netsuite_id: string | null;
+  /** Oracle's document_number for the transfer. */
+  transaction_id: string | null;
+  /** Why the last Oracle post failed (status Failed). */
+  oracle_error: string | null;
   from_warehouse: string | null;
   to_warehouse: string | null;
   customer: string | null;
@@ -1730,8 +1735,12 @@ export interface SalesDeliveryDetail {
   source_delivery_id: string | null;
   source_delivery_number: string | null;
   status: SalesDeliveryStatus;
-  /** NetSuite internal id (a generated dummy in the POC). */
+  /** NetSuite internal id of the Oracle transfer (older documents: a generated dummy). */
   netsuite_id: string | null;
+  /** Oracle's document_number for the transfer. */
+  transaction_id: string | null;
+  /** Why the last Oracle post failed (status Failed). */
+  oracle_error: string | null;
   from_warehouse_id: string;
   from_warehouse: string | null;
   to_warehouse_id: string;
@@ -1807,6 +1816,7 @@ export interface SalesOrderFilter {
 export type SalesDeliveryFilterField =
   | 'delivery_number'
   | 'netsuite_id'
+  | 'transaction_id'
   | 'document_type'
   | 'from_warehouse'
   /** Exact Origin warehouse id (tracking dropdown). */

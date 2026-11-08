@@ -4,6 +4,7 @@ import axios from 'axios';
 import api from '../../lib/api';
 import type { SalesDeliveryDetail } from '../../types';
 import { useToast } from '../../context/ToastContext';
+import { useAuth } from '../../context/AuthContext';
 import TablePager from '../../components/TablePager';
 import ToolbarMenu, { ExportIcon, PrintIcon } from '../../components/ToolbarMenu';
 import { RefreshButton } from '../../components/ListView';
@@ -17,7 +18,9 @@ function statusPill(status: string) {
   const cls =
     status === 'Failed'
       ? 'border-rose-300 bg-rose-50 text-rose-700'
-      : 'border-emerald-300 bg-emerald-50 text-emerald-700';
+      : status === 'Syncing'
+        ? 'border-sky-300 bg-sky-50 text-sky-700'
+        : 'border-emerald-300 bg-emerald-50 text-emerald-700';
   return (
     <span className={`inline-flex min-w-[7rem] justify-center rounded-full border px-3 py-0.5 text-xs font-medium ${cls}`}>
       {sdStatusLabel(status)}
@@ -34,6 +37,9 @@ export default function SalesDeliveryDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const toast = useToast();
+  const { has } = useAuth();
+  const canRetry = has('sales-delivery:create');
+  const [retrying, setRetrying] = useState(false);
 
   const [d, setD] = useState<SalesDeliveryDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,6 +66,38 @@ export default function SalesDeliveryDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // The Oracle post runs in the background: follow it until it settles.
+  const syncing = d?.status === 'Syncing';
+  useEffect(() => {
+    if (!syncing || !id) return;
+    const t = setInterval(() => {
+      api
+        .get<SalesDeliveryDetail>(`/sales-delivery/${id}`)
+        .then((r) => {
+          setD(r.data);
+          if (r.data.status === 'Success') toast.success('Sent to Oracle');
+          else if (r.data.status === 'Failed') toast.error(`Oracle: ${r.data.oracle_error ?? 'send failed'}`);
+        })
+        .catch(() => undefined);
+    }, 3000);
+    return () => clearInterval(t);
+  }, [syncing, id, toast]);
+
+  async function retry() {
+    if (!id || retrying) return;
+    setRetrying(true);
+    try {
+      const r = await api.put<SalesDeliveryDetail>(`/sales-delivery/${id}/retry`, {});
+      setD(r.data);
+      toast.info('Sending to Oracle…');
+    } catch (err) {
+      const m = axios.isAxiosError(err) ? err.response?.data?.message : null;
+      toast.error(typeof m === 'string' ? m : 'Retry failed');
+    } finally {
+      setRetrying(false);
+    }
+  }
 
   if (loading && !d) {
     return <div className="flex h-64 items-center justify-center text-slate-400">Loading…</div>;
@@ -115,8 +153,24 @@ export default function SalesDeliveryDetailPage() {
             ]}
           />
           <RefreshButton onClick={load} spinning={loading} />
+          {d.status === 'Failed' && canRetry && (
+            <button type="button" className="btn-primary" onClick={retry} disabled={retrying}>
+              {retrying ? 'Sending…' : 'Retry Send to Oracle'}
+            </button>
+          )}
         </div>
       </div>
+
+      {d.status === 'Syncing' && (
+        <div className="mb-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700">
+          <b>Sending to Oracle…</b> The document is saved; this page updates when Oracle answers.
+        </div>
+      )}
+      {d.status === 'Failed' && (
+        <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <b>Oracle send failed.</b> {d.oracle_error ?? 'No reason was given.'}
+        </div>
+      )}
 
       {/* Info */}
       <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-5">
@@ -147,8 +201,9 @@ export default function SalesDeliveryDetailPage() {
             label="Total Quantity"
             value={<span className="font-semibold text-brand-700">{fmt(d.total_qty)}</span>}
           />
-          {/* A generated dummy: the POC does not post to NetSuite. */}
+          {/* Oracle's transfer id (older documents carry a generated dummy). */}
           <Info label="Netsuite ID" value={d.netsuite_id} />
+          <Info label="Transaction ID" value={d.transaction_id} />
           <Info label="Created By" value={d.created_by} />
           <Info label="Created At (WIB)" value={formatDateTime(d.created_at)} />
         </dl>

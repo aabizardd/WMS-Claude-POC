@@ -1216,6 +1216,8 @@ model InventoryAdjustmentEvent {
 // that is created is Success; Failed is reserved for the Oracle post, which is
 // not wired yet — nothing sets it today.
 enum SalesDeliveryStatus {
+  // Saved in WMS; the Oracle inventory transfer is being posted in the background.
+  Syncing
   Success
   Failed
 }
@@ -1238,9 +1240,15 @@ model SalesDelivery {
   // Kept in the database but deliberately not exposed by the API or the UI.
   documentNumber String                    @unique @map("document_number") // TI-YYYYMMDD-NNN
   status         SalesDeliveryStatus       @default(Success)
-  // The NetSuite internal id of the posted transfer. The POC does not post to
-  // NetSuite, so a realistic dummy is generated on create (numeric, rising).
+  // The NetSuite internal id of the posted transfer (Oracle inventory/transfer).
+  // Documents from before the Oracle post carry a generated dummy.
   netsuiteId     String?                   @unique @map("netsuite_id")
+  // Oracle's document_number for the transfer, shown as the Transaction ID.
+  transactionId  String?                   @map("transaction_id")
+  // The background Oracle post: last failure (cleared on success), and a lock
+  // so only one sender posts a document at a time.
+  oracleError    String?                   @map("oracle_error")
+  oracleSendLock String?                   @map("oracle_send_lock")
 
   // From and To are both picked from the active warehouses and must differ.
   // From defaults to the creator's warehouse on the form.

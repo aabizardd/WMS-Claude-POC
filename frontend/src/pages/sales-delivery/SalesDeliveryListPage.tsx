@@ -60,6 +60,7 @@ const DOC_TYPE_NOUN: Record<DocTypeView, string> = {
 };
 
 const SD_STATUS_LABELS: Record<string, string> = {
+  Syncing: 'Syncing',
   Success: 'Success',
   Failed: 'Failed',
 };
@@ -70,6 +71,7 @@ export function sdStatusLabel(s: string) {
 
 export function sdStatusBadge(s: string) {
   const map: Record<string, string> = {
+    Syncing: 'bg-sky-50 text-sky-700',
     Success: 'bg-emerald-50 text-emerald-700',
     Failed: 'bg-rose-50 text-rose-700',
   };
@@ -110,6 +112,7 @@ const EXTRA_FIELDS: FieldDef[] = [
   { value: 'material_name', label: 'Material Name', kind: 'text', item: true },
   { value: 'delivery_number', label: 'SD/SR Number', kind: 'text' },
   { value: 'netsuite_id', label: 'Netsuite ID', kind: 'text' },
+  { value: 'transaction_id', label: 'Transaction ID', kind: 'text' },
   { value: 'created_by', label: 'Created By', kind: 'text' },
   { value: 'status', label: 'Status', kind: 'status' },
 ];
@@ -121,6 +124,7 @@ const ITEM_FIELDS = new Set<SalesDeliveryFilterField>(
 );
 
 const STATUS_OPTIONS = [
+  { value: 'Syncing', label: 'Syncing' },
   { value: 'Success', label: 'Success' },
   { value: 'Failed', label: 'Failed' },
 ];
@@ -252,8 +256,8 @@ export default function SalesDeliveryListPage() {
 
   const appliedKey = JSON.stringify(applied);
 
-  async function load() {
-    setLoading(true);
+  async function load(quiet = false) {
+    if (!quiet) setLoading(true);
     try {
       const r = await api.get<Paginated<SalesDeliveryRow> & { totals?: { qty: number } }>('/sales-delivery', {
         params: {
@@ -267,13 +271,26 @@ export default function SalesDeliveryListPage() {
       });
       setData(r.data);
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, pageSize, docView, appliedKey, sort.sortBy, sort.order, reloadKey]);
+
+  // While a document is posted to Oracle in the background, re-read the page
+  // quietly (no loading state) until it settles.
+  const syncingKey = (data?.rows ?? [])
+    .filter((r) => r.status === 'Syncing')
+    .map((r) => r.id)
+    .join(',');
+  useEffect(() => {
+    if (!syncingKey) return;
+    const t = setInterval(() => load(true).catch(() => undefined), 3000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncingKey, page, pageSize, docView, appliedKey, sort.sortBy, sort.order]);
 
   // Mirror the view into the URL so a refresh restores it. Replace rather than
   // push, so Back still leaves the page.

@@ -1,10 +1,18 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  type OnApplicationBootstrap,
+} from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import {
   Prisma,
   SalesDeliveryDocumentType,
   SalesDeliveryStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ErpHttpService } from '../erp/erp-http.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { subsidiarySingleFilter } from '../common/subsidiary-filter';
 import { isFrozenBinLabel, usableBinStockWhere } from '../common/frozen-bins';
@@ -28,6 +36,7 @@ export interface WarehouseScope {
 export interface SalesDeliveryExportLine {
   number: string;
   netsuite_id: string | null;
+  transaction_id: string | null;
   origin: string | null;
   destination: string | null;
   customer: string | null;
@@ -70,6 +79,7 @@ const HEADER_FILTERS: Record<
     deliveryNumber: { contains: v, mode: 'insensitive' },
   }),
   netsuite_id: (v) => ({ netsuiteId: { contains: v, mode: 'insensitive' } }),
+  transaction_id: (v) => ({ transactionId: { contains: v, mode: 'insensitive' } }),
   document_type: (v) => ({
     documentType: Object.values(SalesDeliveryDocumentType).includes(
       v as SalesDeliveryDocumentType,
@@ -152,6 +162,7 @@ type SdOrder = Prisma.SalesDeliveryOrderByWithRelationInput;
 const SORTABLE: Record<string, (d: SortDir) => SdOrder> = {
   delivery_number: (d) => ({ deliveryNumber: d }),
   netsuite_id: (d) => ({ netsuiteId: d }),
+  transaction_id: (d) => ({ transactionId: { sort: d, nulls: 'last' } }),
   status: (d) => ({ status: d }),
   from_warehouse: (d) => ({ fromWarehouse: { name: d } }),
   to_warehouse: (d) => ({ toWarehouse: { name: d } }),
@@ -175,11 +186,90 @@ interface PreparedLine {
   avail: number;
 }
 
+/** Oracle inventory/transfer is always posted for this subsidiary. */
+const ORACLE_TRANSFER_SUBSIDIARY = 6;
+
+/** "08-11-2026": the submit date in WIB, as inventory/transfer takes it. */
+export function transferTranDate(at: Date): string {
+  const t = new Date(at.getTime() + 7 * 3600_000);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(t.getUTCDate())}-${p(t.getUTCMonth() + 1)}-${t.getUTCFullYear()}`;
+}
+
+/** POST /inventory/transfer's answer, as far as WMS reads it. */
+interface OracleTransferResponse {
+  status?: string;
+  success?: boolean;
+  message?: string;
+  document_number?: string | number | null;
+  [key: string]: unknown;
+}
+
+const text = (v: unknown) => (v == null || v === '' ? null : String(v).trim() || null);
+
+/** The created transfer's Oracle id and document number, wherever the bridge puts them. */
+export function readCreatedTransfer(body: OracleTransferResponse | null) {
+  const data = (body?.data && typeof body.data === 'object' ? body.data : {}) as Record<string, unknown>;
+  const pick = (...keys: string[]) => {
+    for (const k of keys) {
+      const v = text(body?.[k]) ?? text(data[k]);
+      if (v) return v;
+    }
+    return null;
+  };
+  return {
+    id: pick('inventory_transfer_id', 'transfer_id', 'internal_id', 'id'),
+    documentNumber: pick('document_number', 'tranid'),
+  };
+}
+
+/**
+ * The inventory/transfer request for a document: its warehouses, department
+ * and class by Oracle id, the submit date, the stored memo, and one line per
+ * Oracle item (bins of one material summed). A Sales Return already runs From
+ * the billing warehouse back To the source, so it is posted the same way.
+ */
+export function buildTransferPayload(sd: {
+  deliveryNumber: string;
+  createdAt: Date;
+  memo: string | null;
+  fromWarehouse: { oracleId: string | null; name: string } | null;
+  toWarehouse: { oracleId: string | null; name: string } | null;
+  department: { oracleId: string | null } | null;
+  class: { oracleId: string | null } | null;
+  items: { qtyTransfer: number; materialCode: string | null; material: { erpDocId: string | null } | null }[];
+}) {
+  const num = (v: string | null | undefined, what: string) => {
+    const n = Number(v);
+    if (v == null || v === '' || !Number.isFinite(n)) throw new Error(`${what} has no Oracle id — cannot post to Oracle`);
+    return n;
+  };
+  const qty = new Map<number, number>();
+  for (const it of sd.items) {
+    const item = num(it.material?.erpDocId, `Material ${it.materialCode ?? ''}`.trim());
+    qty.set(item, (qty.get(item) ?? 0) + it.qtyTransfer);
+  }
+  if (!qty.size) throw new Error('The document has no lines to post');
+  return {
+    subsidiary: ORACLE_TRANSFER_SUBSIDIARY,
+    from_location: num(sd.fromWarehouse?.oracleId, `From Location ${sd.fromWarehouse?.name ?? ''}`.trim()),
+    to_location: num(sd.toWarehouse?.oracleId, `To Location ${sd.toWarehouse?.name ?? ''}`.trim()),
+    trandate: transferTranDate(sd.createdAt),
+    department: num(sd.department?.oracleId, 'Department'),
+    class: num(sd.class?.oracleId, 'Class'),
+    memo: sd.memo ?? sd.deliveryNumber,
+    lines: [...qty].map(([item, quantity]) => ({ item, quantity })),
+  };
+}
+
 @Injectable()
-export class SalesDeliveryService {
+export class SalesDeliveryService implements OnApplicationBootstrap {
   private readonly logger = new Logger(SalesDeliveryService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private erp: ErpHttpService,
+  ) {}
 
   /**
    * From Location is freely chosen, so a document concerns a warehouse whether it
@@ -467,7 +557,8 @@ export class SalesDeliveryService {
 
   /**
    * There is no Draft stage: the confirmation dialog on the create form is the
-   * submission, so a document is born Success and is read-only afterwards.
+   * submission. The document is saved as Syncing and read-only; the Oracle
+   * inventory transfer is posted in the background (Success / Failed).
    * Stock is deliberately NOT moved — see the note on the Prisma model.
    */
   async create(dto: CreateSalesDeliveryDto, scope: WarehouseScope) {
@@ -613,9 +704,8 @@ export class SalesDeliveryService {
           deliveryNumber: numbers.deliveryNumber,
           documentNumber: numbers.documentNumber,
           documentType: isReturn ? 'SalesReturn' : 'SalesDelivery',
-          netsuiteId: await this.nextNetsuiteId(tx),
           sourceDeliveryId,
-          status: 'Success',
+          status: 'Syncing',
           fromWarehouseId,
           toWarehouseId,
           customerId: dto.customer_id ?? null,
@@ -642,7 +732,131 @@ export class SalesDeliveryService {
     );
 
     this.logger.log(`Sales delivery ${created.deliveryNumber} created`);
+    this.sendLater(created.id);
     return this.findOne(created.id, scope);
+  }
+
+  // ---------- Oracle inventory transfer (background) ----------
+
+  /** Post a Failed document to Oracle again (in the background, like Create). */
+  async retry(id: string, scope: WarehouseScope) {
+    const sd = await this.prisma.salesDelivery.findUnique({ where: { id }, include: detailInclude });
+    if (!sd || !this.canSee(sd, scope)) {
+      throw new NotFoundException(`Sales delivery ${id} not found`);
+    }
+    const { count } = await this.prisma.salesDelivery.updateMany({
+      where: { id, status: 'Failed', oracleSendLock: null },
+      data: { status: 'Syncing', oracleError: null },
+    });
+    if (!count) {
+      throw new BadRequestException(`Only a failed document can be sent again (this one is ${sd.status})`);
+    }
+    this.sendLater(id);
+    return this.findOne(id, scope);
+  }
+
+  /**
+   * At start: a document whose post was running (locked) when the server
+   * stopped has an unknown outcome — Oracle may have created the transfer — so
+   * it is not resent by itself but marked Failed, to check in Oracle before a
+   * Retry. One still queued (never started) is sent now.
+   */
+  async onApplicationBootstrap() {
+    try {
+      const waiting = await this.prisma.salesDelivery.findMany({
+        where: { status: 'Syncing' },
+        select: { id: true, deliveryNumber: true, oracleSendLock: true },
+      });
+      for (const sd of waiting) {
+        if (!sd.oracleSendLock) {
+          this.sendLater(sd.id);
+          continue;
+        }
+        const msg = `The Oracle send was interrupted (server restart). Check Oracle for ${sd.deliveryNumber} before retrying.`;
+        await this.prisma.salesDelivery.update({
+          where: { id: sd.id },
+          data: { status: 'Failed', oracleError: msg, oracleSendLock: null },
+        });
+        this.logger.warn(`Sales delivery ${sd.deliveryNumber}: ${msg}`);
+      }
+    } catch (e) {
+      this.logger.error(`Sales delivery send recovery failed: ${(e as Error).message}`);
+    }
+  }
+
+  private sendLater(id: string) {
+    setImmediate(() => {
+      this.send(id).catch((e) =>
+        this.logger.error(`[SD] ${id} background send crashed: ${(e as Error).message}`),
+      );
+    });
+  }
+
+  /** The background Oracle post (POST /inventory/transfer) of one document. */
+  async send(id: string) {
+    // Claim it: only one sender per document, ever at once.
+    const lock = randomUUID();
+    const { count } = await this.prisma.salesDelivery.updateMany({
+      where: { id, status: 'Syncing', oracleSendLock: null },
+      data: { oracleSendLock: lock },
+    });
+    if (!count) return;
+    const sd = await this.prisma.salesDelivery.findUniqueOrThrow({
+      where: { id },
+      include: {
+        fromWarehouse: { select: { oracleId: true, name: true } },
+        toWarehouse: { select: { oracleId: true, name: true } },
+        department: { select: { oracleId: true } },
+        class: { select: { oracleId: true } },
+        items: { select: { qtyTransfer: true, materialCode: true, material: { select: { erpDocId: true } } } },
+      },
+    });
+
+    const fail = async (msg: string) => {
+      await this.prisma.salesDelivery.update({
+        where: { id },
+        data: { status: 'Failed', oracleError: msg.slice(0, 1000), oracleSendLock: null },
+      });
+      this.logger.warn(`Sales delivery ${sd.deliveryNumber} failed to reach Oracle: ${msg}`);
+    };
+
+    let payload: ReturnType<typeof buildTransferPayload>;
+    try {
+      payload = buildTransferPayload(sd);
+    } catch (e) {
+      await fail((e as Error).message);
+      return;
+    }
+    this.logger.log(`[SD] ${sd.deliveryNumber} REQUEST ${JSON.stringify(payload)}`);
+    let res: { ok: boolean; status: number; body: OracleTransferResponse | null };
+    try {
+      // Not retried on a network error: the first try may have created it.
+      res = await this.erp.postRaw<OracleTransferResponse>('/inventory/transfer', payload, { idempotent: false });
+    } catch (e) {
+      await fail(`Failed to reach Oracle: ${(e as Error).message}`);
+      return;
+    }
+    this.logger.log(`[SD] ${sd.deliveryNumber} RESPONSE ${res.status} ${JSON.stringify(res.body)}`);
+    const body = res.body;
+    const created = readCreatedTransfer(body);
+    const ok = res.ok && body?.success !== false && body?.status !== 'error' && body?.status !== 'failed';
+    if (!ok) {
+      await fail(body?.message ?? `Oracle Inventory Transfer failed (HTTP ${res.status})`);
+      return;
+    }
+    await this.prisma.salesDelivery.update({
+      where: { id },
+      data: {
+        status: 'Success',
+        netsuiteId: created.id,
+        transactionId: created.documentNumber,
+        oracleError: null,
+        oracleSendLock: null,
+      },
+    });
+    this.logger.log(
+      `Sales delivery ${sd.deliveryNumber} sent to Oracle (transfer ${created.id ?? '?'}, ${created.documentNumber ?? 'no document number'})`,
+    );
   }
 
   /**
@@ -970,18 +1184,6 @@ export class SalesDeliveryService {
   }
 
   /**
-   * A dummy NetSuite id for a new document: the highest one so far plus an
-   * uneven step (1-120), so ids rise the way real internal ids do. A clash
-   * with a concurrent create is retried by createWithNumber.
-   */
-  private async nextNetsuiteId(tx: Prisma.TransactionClient): Promise<string> {
-    const [row] = await tx.$queryRaw<{ max: bigint | null }[]>`
-      SELECT MAX(netsuite_id::bigint) AS max FROM sales_deliveries WHERE netsuite_id ~ '^[0-9]+$'`;
-    const last = row?.max != null ? Number(row.max) : 110000;
-    return String(last + 1 + Math.floor(Math.random() * 120));
-  }
-
-  /**
    * SD-YYYYMMDD-NNN for a delivery, SR-YYYYMMDD-NNN for a return, plus the
    * TI-YYYYMMDD-NNN transfer number both carry.
    */
@@ -1116,6 +1318,7 @@ export class SalesDeliveryService {
           return {
             number: sd.deliveryNumber,
             netsuite_id: sd.netsuiteId,
+            transaction_id: sd.transactionId,
             origin: sd.fromWarehouse?.name ?? null,
             destination: sd.toWarehouse?.name ?? null,
             customer: sd.customer?.companyName ?? null,
@@ -1303,6 +1506,8 @@ export class SalesDeliveryService {
       source_delivery_number: sd.sourceDelivery?.deliveryNumber ?? null,
       status: sd.status,
       netsuite_id: sd.netsuiteId,
+      transaction_id: sd.transactionId,
+      oracle_error: sd.oracleError,
       from_warehouse: sd.fromWarehouse?.name ?? null,
       to_warehouse: sd.toWarehouse?.name ?? null,
       customer: sd.customer?.companyName ?? null,
@@ -1325,6 +1530,8 @@ export class SalesDeliveryService {
       source_delivery_number: sd.sourceDelivery?.deliveryNumber ?? null,
       status: sd.status,
       netsuite_id: sd.netsuiteId,
+      transaction_id: sd.transactionId,
+      oracle_error: sd.oracleError,
       from_warehouse_id: sd.fromWarehouseId,
       from_warehouse: sd.fromWarehouse?.name ?? null,
       to_warehouse_id: sd.toWarehouseId,

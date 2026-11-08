@@ -444,7 +444,7 @@ export default function SalesDeliveryCreatePage() {
         },
       );
       draftStore.clear();
-      toast.success(`${r.data.delivery_number} submitted`);
+      toast.success(`${r.data.delivery_number} submitted — sending to Oracle…`);
       navigate(`/admin/inventory/sales-delivery/${r.data.id}`);
     } catch (err) {
       // Keep the dialog open so the user can see the error and retry.

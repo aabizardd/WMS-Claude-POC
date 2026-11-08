@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Res } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { SalesDeliveryService } from './sales-delivery.service';
 import { CreateSalesDeliveryDto } from './dto/create-sales-delivery.dto';
@@ -111,6 +111,13 @@ export class SalesDeliveryController {
   @RequirePermissions('sales-delivery:read')
   findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.service.findOne(id, user);
+  }
+
+  /** Send a Failed document to Oracle again (in the background). */
+  @Put(':id/retry')
+  @RequirePermissions('sales-delivery:create')
+  retry(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.service.retry(id, user);
   }
 
   @Post()

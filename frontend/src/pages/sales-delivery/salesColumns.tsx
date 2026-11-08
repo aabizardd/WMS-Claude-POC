@@ -4,7 +4,7 @@ import type { SortState } from '../../hooks/useSort';
 import SortableTh from '../../components/SortableTh';
 
 /**
- * The Inventory Sales list table columns: No, Status, SD Number, Netsuite ID, Origin, Destination,
+ * The Inventory Sales list table columns: No, Status, SD Number, Netsuite ID, Transaction ID, Origin, Destination,
  * Department, Class, Customer, Total Materials, Total Qty, Memo, Created By,
  * Created At (Actions is added by each page).
  */
@@ -13,6 +13,7 @@ export type SalesColumnKey =
   | 'status'
   | 'number'
   | 'netsuite_id'
+  | 'transaction_id'
   | 'origin'
   | 'destination'
   | 'department'
@@ -35,6 +36,7 @@ interface SalesColumn {
 }
 
 const STATUS_BADGE: Record<string, string> = {
+  Syncing: 'bg-sky-50 text-sky-700 ring-sky-200',
   Success: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
   Failed: 'bg-rose-50 text-rose-700 ring-rose-200',
 };
@@ -76,6 +78,12 @@ export const SALES_COLUMNS: SalesColumn[] = [
     ),
   },
   { key: 'netsuite_id', label: () => 'Netsuite ID', sortCol: 'netsuite_id', cell: (d) => d.netsuite_id ?? '-' },
+  {
+    key: 'transaction_id',
+    label: () => 'Transaction ID',
+    sortCol: 'transaction_id',
+    cell: (d) => d.transaction_id ?? '-',
+  },
   {
     key: 'origin',
     label: () => 'Origin Location',
@@ -183,7 +191,8 @@ export function SalesRowCells({
 }
 
 const ALL_KEYS = SALES_COLUMNS.map((c) => c.key);
-const STORAGE_KEY = 'wms.inventorySales.columns';
+// ".v2": choices saved before Transaction ID existed would hide it.
+const STORAGE_KEY = 'wms.inventorySales.columns.v2';
 
 /**
  * Which columns are shown. Kept in this browser only (a per-viewer
