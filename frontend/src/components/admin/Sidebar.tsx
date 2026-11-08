@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useI18n } from '../../context/I18nContext';
@@ -170,7 +171,10 @@ export default function Sidebar({
         .toUpperCase()
     : '?';
 
+  const [confirmLogout, setConfirmLogout] = useState(false);
+
   function handleLogout() {
+    setConfirmLogout(false);
     logout();
     navigate('/login', { replace: true });
   }
@@ -274,7 +278,7 @@ export default function Sidebar({
             )}
             </Link>
             <button
-              onClick={handleLogout}
+              onClick={() => setConfirmLogout(true)}
               className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-rose-500/10"
               aria-label="Sign out"
               title="Sign out"
@@ -286,7 +290,71 @@ export default function Sidebar({
           </div>
         </div>
       </aside>
+
+      {confirmLogout && <LogoutConfirm onCancel={() => setConfirmLogout(false)} onConfirm={handleLogout} />}
     </>
+  );
+}
+
+/**
+ * WMS dev's "Confirm Log Out" dialog. Rendered on <body>: the side bar is
+ * transformed, which would trap a fixed overlay inside it. Esc or a click
+ * outside cancels; Cancel has the focus, so Enter never logs out by accident.
+ */
+function LogoutConfirm({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    cancelRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onCancel();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onCancel]);
+
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]" onClick={onCancel} />
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="logout-title"
+        aria-describedby="logout-desc"
+        className="relative w-full max-w-[400px] rounded-2xl bg-white px-6 pb-6 pt-8 text-center shadow-xl dark:bg-slate-800"
+      >
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-neutral-50 text-neutral-600 dark:bg-slate-700 dark:text-slate-200">
+          <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+            <path d="m16 17 5-5-5-5" />
+            <path d="M21 12H9" />
+          </svg>
+        </div>
+        <h2 id="logout-title" className="mt-5 text-lg font-semibold text-neutral-900 dark:text-white">
+          Confirm Log Out
+        </h2>
+        <p id="logout-desc" className="mt-2 text-sm leading-relaxed text-neutral-500 dark:text-slate-400">
+          Are you sure you want to log out of your session?
+          <br />
+          You can always log back in later.
+        </p>
+        <div className="mt-6 grid grid-cols-2 gap-3">
+          <button
+            ref={cancelRef}
+            type="button"
+            onClick={onCancel}
+            className="h-10 rounded-lg border border-neutral-200 bg-white text-sm font-semibold text-neutral-700 transition hover:bg-neutral-50 focus:outline-none focus:ring-2 focus:ring-neutral-300 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="h-10 rounded-lg bg-[#8B2621] text-sm font-semibold text-white transition hover:bg-[#74201C] focus:outline-none focus:ring-2 focus:ring-[#8B2621]/40"
+          >
+            Log Out
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

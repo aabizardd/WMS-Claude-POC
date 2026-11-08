@@ -46,10 +46,17 @@ export class AuthService {
       );
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { username: dto.username },
-      include: this.roleInclude,
-    });
+    // "Email or Username", as on WMS dev: an "@" means the email (any case).
+    const login = dto.username.trim();
+    const user = login.includes('@')
+      ? await this.prisma.user.findFirst({
+          where: { email: { equals: login, mode: 'insensitive' } },
+          include: this.roleInclude,
+        })
+      : await this.prisma.user.findUnique({
+          where: { username: login },
+          include: this.roleInclude,
+        });
 
     if (!user || !user.isActive) {
       this.loginThrottle.recordFailure(dto.username, ip);
