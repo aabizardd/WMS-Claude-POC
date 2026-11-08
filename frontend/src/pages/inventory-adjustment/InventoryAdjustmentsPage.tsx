@@ -49,6 +49,7 @@ const PRIMARY_FIELDS: FieldDef[] = [
   { value: 'created_at', label: 'Created At', kind: 'date' },
 ];
 const EXTRA_FIELDS: FieldDef[] = [
+  { value: 'transaction_id', label: 'Transaction ID', kind: 'text' },
   { value: 'bin', label: 'Bin', kind: 'text' },
   { value: 'material_name', label: 'Material Name', kind: 'text' },
   { value: 'type', label: 'Type', kind: 'text' },
@@ -109,6 +110,7 @@ function formatDateTime(value: string | null | undefined) {
 const COLUMNS = [
   { key: 'status', label: 'Status' },
   { key: 'adjustment_number', label: 'Adjustment ID' },
+  { key: 'transaction_id', label: 'Transaction ID' },
   { key: 'warehouse', label: 'Warehouse' },
   { key: 'type', label: 'Type' },
   { key: 'bins', label: 'Bins' },
@@ -144,8 +146,9 @@ export default function InventoryAdjustmentsPage() {
   const [extraOpen, setExtraOpen] = useState(false);
   // Every row's lines are open by default; this holds the ones closed by hand.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // "-v2": choices saved before Transaction ID existed would hide it.
   const { visible, setVisible } = useColumnVisibility(
-    'ia-list-columns',
+    'ia-list-columns-v2',
     COLUMNS.map((c) => c.key),
   );
   const show = (k: string) => visible.includes(k);
@@ -175,19 +178,23 @@ export default function InventoryAdjustmentsPage() {
     }
   }
 
+  /** This page of the list, as filtered and sorted now. */
+  function fetchPage() {
+    return api.get<Paginated<InventoryAdjustmentRow>>('/inventory-adjustments', {
+      params: {
+        page,
+        limit: pageSize,
+        status: status || undefined,
+        filters: applied.length ? JSON.stringify(applied) : undefined,
+        ...params(),
+      },
+    });
+  }
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    api
-      .get<Paginated<InventoryAdjustmentRow>>('/inventory-adjustments', {
-        params: {
-          page,
-          limit: pageSize,
-          status: status || undefined,
-          filters: applied.length ? JSON.stringify(applied) : undefined,
-          ...params(),
-        },
-      })
+    fetchPage()
       .then((r) => !cancelled && setData(r.data))
       .catch(() => !cancelled && setData(null))
       .finally(() => !cancelled && setLoading(false));
@@ -196,6 +203,27 @@ export default function InventoryAdjustmentsPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, pageSize, status, appliedKey, sort.sortBy, sort.order, reloadKey]);
+
+  // While a row's Oracle post runs in the background, re-read the page quietly
+  // (no loading state, lines stay open) until it settles.
+  const sendingKey = (data?.rows ?? [])
+    .filter((r) => r.oracle_sending)
+    .map((r) => r.id)
+    .join(',');
+  useEffect(() => {
+    if (!sendingKey) return;
+    let cancelled = false;
+    const t = setInterval(() => {
+      fetchPage()
+        .then((r) => !cancelled && setData(r.data))
+        .catch(() => undefined);
+    }, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sendingKey, page, pageSize, status, appliedKey, sort.sortBy, sort.order]);
 
   // Keep the status and filters in the URL.
   useEffect(() => {
@@ -359,6 +387,9 @@ export default function InventoryAdjustmentsPage() {
                 {show('adjustment_number') && (
                   <SortableTh label="Adjustment ID" col="adjustment_number" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 )}
+                {show('transaction_id') && (
+                  <SortableTh label="Transaction ID" col="transaction_id" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                )}
                 {show('warehouse') && <SortableTh label="Warehouse" col="warehouse" sort={sort} onSort={onSort} pad="px-4" className={th} />}
                 {show('type') && <SortableTh label="Type" col="adjustment_type" sort={sort} onSort={onSort} pad="px-4" className={th} />}
                 {show('bins') && <th className="whitespace-nowrap px-4 py-3 text-right font-medium">Bins</th>}
@@ -394,9 +425,11 @@ export default function InventoryAdjustmentsPage() {
                       {show('status') && (
                         <td className="px-4 py-3">
                           <AdjStatusPill status={a.status} />
+                          {a.oracle_sending && <div className="mt-1 text-xs text-slate-500">Sending to Oracle…</div>}
                         </td>
                       )}
                       {show('adjustment_number') && <td className={`${td} text-slate-800`}>{a.adjustment_number}</td>}
+                      {show('transaction_id') && <td className={td}>{a.transaction_id ?? '-'}</td>}
                       {show('warehouse') && (
                         <td className="px-4 py-3 text-slate-700">
                           <div className="whitespace-nowrap">{a.warehouse ?? '-'}</div>

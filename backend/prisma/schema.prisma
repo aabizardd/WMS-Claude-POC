@@ -1017,6 +1017,9 @@ model InventoryAdjustment {
 
   // Oracle inventory_adjustment_id returned after a successful post. "-" until then.
   oracleId String @default("-") @map("oracle_id")
+  // Oracle's document_number from that same post response, shown as the
+  // Transaction ID. Null until then.
+  transactionId String? @map("transaction_id")
 
   createdById Int?  @map("created_by")
   createdBy   User? @relation("AdjustmentCreator", fields: [createdById], references: [id])
@@ -1032,6 +1035,10 @@ model InventoryAdjustment {
   // FR-IA-16. Last send failure; cleared on a successful (re)send. The document
   // stays Approved so it can be resent without creating a new one.
   oracleError          String?   @map("oracle_error")
+  // Set while the Oracle post runs in the background (approve / resend);
+  // the lock lets only one sender post a document at a time.
+  oracleSendingAt      DateTime? @map("oracle_sending_at")
+  oracleSendLock       String?   @map("oracle_send_lock")
   oracleRejectReason   String?   @map("oracle_reject_reason")
   completedAt          DateTime? @map("completed_at")
 

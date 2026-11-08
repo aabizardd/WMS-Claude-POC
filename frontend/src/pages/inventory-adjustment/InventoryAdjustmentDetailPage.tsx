@@ -86,6 +86,25 @@ export default function InventoryAdjustmentDetailPage() {
   );
   useEffect(() => load(), [load]);
 
+  // The Oracle post runs in the background: follow it until it settles.
+  const sending = !!a?.oracle_sending;
+  useEffect(() => {
+    if (!sending) return;
+    const t = setInterval(() => {
+      api
+        .get<InventoryAdjustmentDetail>(`/inventory-adjustments/${id}`)
+        .then((r) => {
+          setA(r.data);
+          if (r.data.oracle_sending) return;
+          setLinesKey((k) => k + 1);
+          if (r.data.oracle_error) toast.error(`Oracle: ${r.data.oracle_error}`);
+          else if (r.data.status === 'WaitingOracleApproval') toast.success('Sent to Oracle');
+        })
+        .catch(() => undefined);
+    }, 3000);
+    return () => clearInterval(t);
+  }, [sending, id, toast]);
+
   function openDialog(action: Exclude<PendingAction, null>) {
     setPending(action);
     setReason('');
@@ -106,8 +125,9 @@ export default function InventoryAdjustmentDetailPage() {
       setA(r.data);
       setPending(null);
       if (pending === 'reject') toast.success('Adjustment rejected');
-      else if (r.data.oracle_error) toast.error(`Oracle: ${r.data.oracle_error}`);
       else if (r.data.status === 'Completed') toast.success('Approved and stock updated');
+      else if (r.data.oracle_sending) toast.info(pending === 'send' ? 'Resending to Oracle…' : 'Approved — sending to Oracle…');
+      else if (r.data.oracle_error) toast.error(`Oracle: ${r.data.oracle_error}`);
       else toast.success('Approved and sent to Oracle');
     } catch (err) {
       // Keep the dialog open so the action can be retried.
@@ -156,6 +176,7 @@ export default function InventoryAdjustmentDetailPage() {
   const fields: { label: string; value: ReactNode }[] = [
     { label: 'Status', value: <AdjStatusPill status={a.status} compact /> },
     { label: 'Adjustment Code', value: a.adjustment_number },
+    { label: 'Transaction ID', value: a.transaction_id ?? '-' },
     { label: 'Type', value: adjTypeLabel(a.adjustment_type) },
     { label: 'Total Adjustment', value: <SignedQty value={a.total_qty} className="font-semibold" /> },
     { label: 'ERP Doc ID', value: a.oracle_id && a.oracle_id !== '-' ? a.oracle_id : '-' },
@@ -232,7 +253,7 @@ export default function InventoryAdjustmentDetailPage() {
         </>
       )}
       {/* FR-IA-16 rule 3: an approved document whose Oracle send failed. */}
-      {a.status === 'Approved' && a.oracle_error && canApprove && (
+      {a.status === 'Approved' && a.oracle_error && !a.oracle_sending && canApprove && (
         <PrimaryButton onClick={() => openDialog('send')}>Resend to Oracle</PrimaryButton>
       )}
       {a.status === 'WaitingOracleApproval' && (
@@ -245,8 +266,13 @@ export default function InventoryAdjustmentDetailPage() {
 
   return (
     <DetailCard title="Detail Inventory Adjustment" backTo="/admin/inventory-adjustments" actions={actions}>
+      {a.oracle_sending && (
+        <Banner tone="blue">
+          <b>Sending to Oracle…</b> The approval is saved; this page updates when Oracle answers.
+        </Banner>
+      )}
       {/* FR-IA-16 rule 2: the failure is visible with its cause. */}
-      {a.oracle_error && (
+      {a.oracle_error && !a.oracle_sending && (
         <Banner tone="red">
           <b>Oracle send failed.</b> No stock was changed. {a.oracle_error}
         </Banner>
@@ -427,8 +453,8 @@ export default function InventoryAdjustmentDetailPage() {
   );
 }
 
-function Banner({ tone, children }: { tone: 'red'; children: ReactNode }) {
-  const cls = tone === 'red' ? 'border-red-200 bg-red-50 text-red-700' : '';
+function Banner({ tone, children }: { tone: 'red' | 'blue'; children: ReactNode }) {
+  const cls = tone === 'red' ? 'border-red-200 bg-red-50 text-red-700' : 'border-blue-200 bg-blue-50 text-blue-700';
   return <div className={`rounded-lg border px-4 py-3 text-sm ${cls}`}>{children}</div>;
 }
 

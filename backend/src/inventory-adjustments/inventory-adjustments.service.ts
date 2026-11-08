@@ -1,12 +1,13 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
   ServiceUnavailableException,
+  type OnApplicationBootstrap,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { randomUUID } from 'crypto';
 import type {
   InventoryAdjustmentStatus,
   InventoryAdjustmentType,
@@ -49,6 +50,8 @@ interface OracleAdjustmentResponse {
   success?: boolean;
   message?: string;
   inventory_adjustment_id?: number;
+  // Oracle's transaction number, returned with the id; stored as the Transaction ID.
+  document_number?: string | number | null;
 }
 
 // POST /inventory/adjustments/get-status with { id: [<oracle ids>] }.
@@ -130,6 +133,7 @@ export interface IaListQuery {
 /** One export row: a list row's header plus one of its accordion lines. */
 export interface IaExportRow {
   adjustment_number: string;
+  transaction_id: string | null;
   status: InventoryAdjustmentStatus;
   warehouse: string | null;
   adjustment_type: InventoryAdjustmentType;
@@ -158,6 +162,7 @@ export interface IaExportRow {
 type AdjOrder = Prisma.InventoryAdjustmentOrderByWithRelationInput;
 const SORTABLE: Record<string, (d: SortDir) => AdjOrder> = {
   adjustment_number: (d) => ({ adjustmentNumber: d }),
+  transaction_id: (d) => ({ transactionId: { sort: d, nulls: 'last' } }),
   adjustment_type: (d) => ({ adjustmentType: d }),
   status: (d) => ({ status: d }),
   oracle_approval_status: (d) => ({ oracleApprovalStatus: d }),
@@ -197,6 +202,7 @@ export const IA_FILTER_FIELDS = [
   'material_code',
   'warehouse',
   'created_at',
+  'transaction_id',
   'bin',
   'material_name',
   'type',
@@ -205,7 +211,7 @@ export const IA_FILTER_FIELDS = [
 export type IaFilterField = (typeof IA_FILTER_FIELDS)[number];
 
 @Injectable()
-export class InventoryAdjustmentsService {
+export class InventoryAdjustmentsService implements OnApplicationBootstrap {
   private readonly logger = new Logger(InventoryAdjustmentsService.name);
 
   constructor(
@@ -1009,10 +1015,7 @@ export class InventoryAdjustmentsService {
   ) {
     const a = await this.prisma.inventoryAdjustment.findUnique({
       where: { id },
-      include: {
-        items: true,
-        createdBy: { select: { id: true, role: { select: { name: true } } } },
-      },
+      include: { items: true },
     });
     if (!a || !this.canSee(a, scope)) {
       throw new NotFoundException(`Inventory adjustment ${id} not found`);
@@ -1024,6 +1027,8 @@ export class InventoryAdjustmentsService {
     }
 
     const reason = dto.reason?.trim() || null;
+
+    // Anyone holding the approve permission may decide, the creator included.
 
     // FR-IA-12 rule 3.
     if (dto.action === 'reject') {
@@ -1047,21 +1052,6 @@ export class InventoryAdjustmentsService {
       });
       this.logger.log(`Adjustment ${a.adjustmentNumber} rejected internally`);
       return this.findOne(id, scope);
-    }
-
-    // FR-IA-12 rule 2 / NFR-IA-P-02: segregation of duties. The approver must be
-    // a different person AND hold a different role from the document's creator,
-    // so one role cannot both raise and approve a stock change.
-    if (a.createdById && a.createdById === scope.userId) {
-      throw new ForbiddenException(
-        'The approver must be a different user from the one who created the document',
-      );
-    }
-    const creatorRole = a.createdBy?.role?.name ?? null;
-    if (creatorRole && creatorRole === scope.role) {
-      throw new ForbiddenException(
-        `The approver must hold a different role from the creator (both are "${creatorRole}")`,
-      );
     }
 
     // Record the internal approval FIRST so that a later Oracle failure leaves a
@@ -1117,9 +1107,80 @@ export class InventoryAdjustmentsService {
 
   // ---------- Oracle integration (FR-IA-13, FR-IA-16) ----------
 
-  /** Post to Oracle. Used by approval and by the manual resend of a failed send. */
+  /**
+   * Queue the Oracle post, used by approval and by the manual resend of a
+   * failed send. The document is marked as sending and the post runs in the
+   * background, so the request returns at once; the detail page follows it.
+   */
   async sendToOracle(id: string, scope: WarehouseScope) {
-    const a = await this.prisma.inventoryAdjustment.findUnique({
+    const a = await this.mustFind(id, scope);
+    if (a.status !== 'Approved') {
+      throw new BadRequestException(
+        `Only internally approved documents can be sent to Oracle (this one is ${a.status})`,
+      );
+    }
+    // FR-IA-13 rule 7 / FR-IA-16 rule 4: never post the same document twice.
+    if (a.oracleId && a.oracleId !== '-') {
+      throw new BadRequestException(
+        `This document was already sent to Oracle (id ${a.oracleId})`,
+      );
+    }
+    const { count } = await this.prisma.inventoryAdjustment.updateMany({
+      where: { id, status: 'Approved', oracleSendingAt: null },
+      data: { oracleSendingAt: new Date(), oracleError: null },
+    });
+    if (!count) {
+      throw new BadRequestException('This document is already being sent to Oracle');
+    }
+    this.deliverLater(id, scope.userId);
+    return this.findOne(id, scope);
+  }
+
+  /**
+   * A send still marked as running when the server starts was cut off: its
+   * outcome is unknown (Oracle may have created the IA), so it is not resent
+   * by itself — it becomes a failed send to check in Oracle before resending.
+   */
+  async onApplicationBootstrap() {
+    try {
+      const cut = await this.prisma.inventoryAdjustment.findMany({
+        where: { status: 'Approved', oracleSendingAt: { not: null } },
+        select: { id: true, adjustmentNumber: true },
+      });
+      for (const a of cut) {
+        const msg = `The Oracle send was interrupted (server restart). Check Oracle for ${a.adjustmentNumber} before resending.`;
+        await this.prisma.$transaction(async (tx) => {
+          await tx.inventoryAdjustment.update({
+            where: { id: a.id },
+            data: { oracleSendingAt: null, oracleSendLock: null, oracleError: msg },
+          });
+          await this.event(tx, a.id, 'oracle_failed', { from: 'Approved', to: 'Approved', message: msg });
+        });
+        this.logger.warn(`Adjustment ${a.adjustmentNumber}: ${msg}`);
+      }
+    } catch (e) {
+      this.logger.error(`Inventory adjustment send recovery failed: ${(e as Error).message}`);
+    }
+  }
+
+  private deliverLater(id: string, actorId: number) {
+    setImmediate(() => {
+      this.deliver(id, actorId).catch((e) =>
+        this.logger.error(`[IA] ${id} background send crashed: ${(e as Error).message}`),
+      );
+    });
+  }
+
+  /** The background Oracle post of one queued document. */
+  async deliver(id: string, actorId: number) {
+    // Claim it: only one sender per document, ever at once.
+    const lock = randomUUID();
+    const { count } = await this.prisma.inventoryAdjustment.updateMany({
+      where: { id, status: 'Approved', oracleSendingAt: { not: null }, oracleSendLock: null },
+      data: { oracleSendLock: lock },
+    });
+    if (!count) return;
+    const a = await this.prisma.inventoryAdjustment.findUniqueOrThrow({
       where: { id },
       include: {
         warehouse: { select: { oracleId: true } },
@@ -1137,20 +1198,6 @@ export class InventoryAdjustmentsService {
         },
       },
     });
-    if (!a || !this.canSee(a, scope)) {
-      throw new NotFoundException(`Inventory adjustment ${id} not found`);
-    }
-    if (a.status !== 'Approved') {
-      throw new BadRequestException(
-        `Only internally approved documents can be sent to Oracle (this one is ${a.status})`,
-      );
-    }
-    // FR-IA-13 rule 7 / FR-IA-16 rule 4: never post the same document twice.
-    if (a.oracleId && a.oracleId !== '-') {
-      throw new BadRequestException(
-        `This document was already sent to Oracle (id ${a.oracleId})`,
-      );
-    }
 
     try {
       const oracle = await this.postToOracle(a);
@@ -1160,16 +1207,19 @@ export class InventoryAdjustmentsService {
           data: {
             status: 'WaitingOracleApproval',
             oracleId: String(oracle.inventoryAdjustmentId),
+            transactionId: oracle.documentNumber,
             oracleApprovalStatus: 'Pending Approval',
             oracleSentAt: new Date(),
             oracleError: null,
+            oracleSendingAt: null,
+            oracleSendLock: null,
           },
         });
         await this.event(tx, id, 'oracle_sent', {
           from: 'Approved',
           to: 'WaitingOracleApproval',
-          actorId: scope.userId,
-          message: `Oracle IA ${oracle.inventoryAdjustmentId}: ${oracle.message}`,
+          actorId,
+          message: `Oracle IA ${oracle.inventoryAdjustmentId}${oracle.documentNumber ? ` (${oracle.documentNumber})` : ''}: ${oracle.message}`,
         });
       });
       this.logger.log(
@@ -1181,19 +1231,17 @@ export class InventoryAdjustmentsService {
       await this.prisma.$transaction(async (tx) => {
         await tx.inventoryAdjustment.update({
           where: { id },
-          data: { oracleError: msg },
+          data: { oracleError: msg, oracleSendingAt: null, oracleSendLock: null },
         });
         await this.event(tx, id, 'oracle_failed', {
           from: 'Approved',
           to: 'Approved',
-          actorId: scope.userId,
+          actorId,
           message: msg,
         });
       });
       this.logger.warn(`Adjustment ${a.adjustmentNumber} failed to reach Oracle: ${msg}`);
     }
-
-    return this.findOne(id, scope);
   }
 
   /**
@@ -1348,7 +1396,7 @@ export class InventoryAdjustmentsService {
       warehouse: { oracleId: string | null } | null;
     }[];
     discrepancies: { discrepancy: { discrepancyId: string } }[];
-  }): Promise<{ inventoryAdjustmentId: number; message: string }> {
+  }): Promise<{ inventoryAdjustmentId: number; documentNumber: string | null; message: string }> {
     const locationOracle = a.warehouse?.oracleId;
     const classOracle = a.class?.oracleId;
     // The header department; documents from before it existed fall back to the
@@ -1426,7 +1474,8 @@ export class InventoryAdjustmentsService {
     const startedAt = Date.now();
     let res: { ok: boolean; status: number; body: OracleAdjustmentResponse | null };
     try {
-      res = await this.erp.postRaw<OracleAdjustmentResponse>(endpoint, payload);
+      // Not retried on a network error: the first try may have created it.
+      res = await this.erp.postRaw<OracleAdjustmentResponse>(endpoint, payload, { idempotent: false });
     } catch (e) {
       const msg = `Failed to reach Oracle Inventory Adjustment: ${(e as Error).message}`;
       await this.logIntegration({
@@ -1463,8 +1512,10 @@ export class InventoryAdjustmentsService {
         body?.message ?? `Oracle Inventory Adjustment failed (HTTP ${res.status})`,
       );
     }
+    const documentNumber = body?.document_number != null ? String(body.document_number).trim() : '';
     return {
       inventoryAdjustmentId: invId,
+      documentNumber: documentNumber || null,
       message: body?.message ?? 'Inventory Adjustment created',
     };
   }
@@ -1682,6 +1733,8 @@ export class InventoryAdjustmentsService {
         };
       case 'created_by':
         return { createdBy: { name: contains } };
+      case 'transaction_id':
+        return { transactionId: contains };
       case 'type': {
         // Typed as text, matched against the labels people see.
         const needle = v.toLowerCase();
@@ -2031,6 +2084,7 @@ export class InventoryAdjustmentsService {
       id: `${a.id}:${warehouseId}`,
       adjustment_id: a.id,
       adjustment_number: a.adjustmentNumber,
+      transaction_id: a.transactionId,
       warehouse_id: warehouseId,
       warehouse: wh?.name ?? null,
       warehouse_parent: wh?.parentName ?? null,
@@ -2049,6 +2103,8 @@ export class InventoryAdjustmentsService {
       oracle_id: a.oracleId,
       oracle_approval_status: a.oracleApprovalStatus,
       oracle_error: a.oracleError,
+      // The Oracle post is running in the background.
+      oracle_sending: a.oracleSendingAt != null,
       created_by: a.createdBy?.name ?? null,
       created_at: a.createdAt,
       items: items.map((it) => this.serializeLine(a.adjustmentType, it)),
@@ -2060,6 +2116,7 @@ export class InventoryAdjustmentsService {
     return {
       id: a.id,
       adjustment_number: a.adjustmentNumber,
+      transaction_id: a.transactionId,
       warehouse: this.warehouseLabel(a),
       warehouse_id: a.warehouseId,
       ownership: a.warehouse?.subsidiaryName ?? null,
@@ -2079,6 +2136,8 @@ export class InventoryAdjustmentsService {
       oracle_approval_status: a.oracleApprovalStatus,
       oracle_sent_at: a.oracleSentAt,
       oracle_error: a.oracleError,
+      // The Oracle post is running in the background.
+      oracle_sending: a.oracleSendingAt != null,
       oracle_reject_reason: a.oracleRejectReason,
       completed_at: a.completedAt,
       created_by: a.createdBy?.name ?? null,

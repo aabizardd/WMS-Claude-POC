@@ -912,6 +912,8 @@ export interface InventoryAdjustmentRow {
   id: string;
   adjustment_id: string;
   adjustment_number: string;
+  /** Oracle's document_number, once the document reached Oracle. */
+  transaction_id: string | null;
   warehouse_id: string;
   warehouse: string | null;
   warehouse_parent: string | null;
@@ -930,6 +932,8 @@ export interface InventoryAdjustmentRow {
   oracle_id?: string;
   oracle_approval_status?: string;
   oracle_error?: string | null;
+  /** The Oracle post is running in the background. */
+  oracle_sending?: boolean;
   created_by: string | null;
   created_at: string;
   /** Every line, for the list's accordion. */
@@ -941,6 +945,7 @@ export type IaFilterField =
   | 'material_code'
   | 'warehouse'
   | 'created_at'
+  | 'transaction_id'
   | 'bin'
   | 'material_name'
   | 'type'
@@ -1047,6 +1052,8 @@ export interface InventoryAdjustmentEvent {
 export interface InventoryAdjustmentDetail {
   id: string;
   adjustment_number: string;
+  /** Oracle's document_number, once the document reached Oracle. */
+  transaction_id: string | null;
   warehouse: string | null;
   warehouse_id: string | null;
   ownership: string | null;
@@ -1066,6 +1073,8 @@ export interface InventoryAdjustmentDetail {
   oracle_approval_status: string;
   oracle_sent_at: string | null;
   oracle_error: string | null;
+  /** The Oracle post is running in the background. */
+  oracle_sending: boolean;
   oracle_reject_reason: string | null;
   completed_at: string | null;
   created_by: string | null;

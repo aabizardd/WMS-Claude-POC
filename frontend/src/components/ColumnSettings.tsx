@@ -14,8 +14,12 @@ export function useColumnVisibility(storageKey: string, allKeys: string[]) {
     try {
       const raw = localStorage.getItem(storageKey);
       const parsed: unknown = raw ? JSON.parse(raw) : null;
-      if (Array.isArray(parsed)) {
-        const keep = allKeys.filter((k) => parsed.includes(k));
+      // Saved as the visible keys, and (since columns started being added
+      // later) every key the list had then: a column added since shows.
+      const saved = Array.isArray(parsed) ? { visible: parsed, known: null } : parsed;
+      if (saved && typeof saved === 'object' && Array.isArray((saved as { visible?: unknown }).visible)) {
+        const { visible: shown, known } = saved as { visible: unknown[]; known: unknown[] | null };
+        const keep = allKeys.filter((k) => shown.includes(k) || (Array.isArray(known) && !known.includes(k)));
         if (keep.length) return keep;
       }
     } catch {
@@ -28,7 +32,7 @@ export function useColumnVisibility(storageKey: string, allKeys: string[]) {
     const ordered = allKeys.filter((k) => next.includes(k));
     setVisible(ordered);
     try {
-      localStorage.setItem(storageKey, JSON.stringify(ordered));
+      localStorage.setItem(storageKey, JSON.stringify({ visible: ordered, known: allKeys }));
     } catch {
       // Not persisted; still applied for this visit.
     }
