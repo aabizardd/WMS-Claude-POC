@@ -209,8 +209,8 @@ export default function DeliveryList({
   /**
    * Filtered: every plan of this list's source (SO or TO) the filters match;
    * all: every plan of the source. Open or Closed, with their order lines —
-   * what each order asked for and what was delivered on which SD. The list
-   * itself is left as it is.
+   * what each order asked for and what was delivered on which SD (TO: the TO
+   * list's one-sheet layout). The list itself is left as it is.
    */
   async function exportExcel(scope: ExportScope) {
     if (exporting) return;
@@ -391,7 +391,7 @@ export default function DeliveryList({
       <ExportConfirmModal
         open={exportOpen}
         onClose={() => setExportOpen(false)}
-        documentLabel="Delivery Plans"
+        documentLabel={isTransfer ? 'Transfer Orders' : 'Delivery Plans'}
         filters={applied.map((f) => ({ label: fieldLabel(f.field), value: f.values.join(' or ') }))}
         loadSummary={loadExportSummary}
         onConfirm={exportExcel}

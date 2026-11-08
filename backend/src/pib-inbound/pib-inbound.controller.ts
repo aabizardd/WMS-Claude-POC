@@ -33,6 +33,16 @@ export class PibInboundController {
     await writePibGrXlsx(this.service.exportRows(q, user), res);
   }
 
+  /**
+   * The export confirmation's numbers: GRs and rows for the current status and
+   * filters and for all data, without building the file.
+   */
+  @Get('goods-receive/export/summary')
+  @RequirePermissions('goods-receive:read')
+  exportSummary(@Query() q: QueryPibInboundDto, @CurrentUser() user: AuthUser) {
+    return this.service.exportSummary(q, user);
+  }
+
   @Get('goods-receive/:id')
   @RequirePermissions('goods-receive:read')
   goodsReceive(@Param('id') id: string, @CurrentUser() user: AuthUser) {

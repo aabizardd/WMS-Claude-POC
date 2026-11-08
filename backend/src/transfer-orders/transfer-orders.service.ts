@@ -311,6 +311,97 @@ export class TransferOrdersService {
     }
   }
 
+  /**
+   * The TO Delivery Plan export, in the same "ITI TO" layout as the TO list:
+   * only the TO lines on the plans `deliveryWhere` matches, one row per plan
+   * line (Open or Closed). An Open plan has no shipped qty or date yet. As in
+   * exportRows(), a line's received qty is spread over its shipped (Closed)
+   * plans in shipping order — all of them, not only the matching ones.
+   * Newest TO first; yielded in batches.
+   */
+  async *deliveryPlanExportRows(deliveryWhere: Prisma.DeliveryWhereInput): AsyncGenerator<TransferOrderExportRow[]> {
+    const onPlan: Prisma.DeliveryItemWhereInput = { delivery: deliveryWhere };
+    const BATCH = 200;
+    for (let skip = 0; ; skip += BATCH) {
+      const orders = await this.prisma.transferOrder.findMany({
+        where: { items: { some: { deliveryItems: { some: onPlan } } } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        skip,
+        take: BATCH,
+        include: {
+          warehouse: { select: { name: true } },
+          items: {
+            where: { deliveryItems: { some: onPlan } },
+            orderBy: { lineNumber: 'asc' },
+            include: {
+              deliveryItems: {
+                orderBy: [{ delivery: { updatedAt: 'asc' } }, { createdAt: 'asc' }],
+                select: {
+                  id: true,
+                  qty: true,
+                  bin: { select: { binLabel: true } },
+                  pickingItem: { select: { bin: { select: { binLabel: true } } } },
+                  packing: { select: { packingCode: true } },
+                  delivery: { select: { status: true, sdoId: true, deliveryCode: true, updatedAt: true } },
+                },
+              },
+            },
+          },
+        },
+      });
+      const lines = orders.flatMap((o) => o.items);
+      const [matById, receivedAt, destinations, matching] = await Promise.all([
+        this.materialsById(lines),
+        this.lastReceivedAt(lines.map((l) => l.id)),
+        this.warehouseNames(orders.map((o) => o.toWarehouseId)),
+        lines.length
+          ? this.prisma.deliveryItem.findMany({
+              where: { ...onPlan, transferOrderItemId: { in: lines.map((l) => l.id) } },
+              select: { id: true },
+            })
+          : Promise.resolve([]),
+      ]);
+      const inFile = new Set(matching.map((d) => d.id));
+
+      const rows: TransferOrderExportRow[] = [];
+      for (const o of orders) {
+        for (const l of o.items) {
+          const mat = l.materialId ? matById.get(l.materialId) : null;
+          let toReceive = l.received;
+          for (const d of l.deliveryItems) {
+            const shipped = d.delivery.status === 'Closed';
+            const received = shipped ? Math.min(d.qty, Math.max(0, toReceive)) : 0;
+            toReceive -= received;
+            if (!inFile.has(d.id)) continue;
+            rows.push({
+              tran_id: o.tranId,
+              status: o.statusName,
+              erp_doc_id: o.oracleId,
+              origin: o.warehouse?.name ?? o.fromLocationName,
+              destination: (o.toWarehouseId && destinations.get(o.toWarehouseId)) || o.toLocationName,
+              created_at: o.createdAt,
+              request_qty: l.quantity,
+              sd_number: d.delivery.sdoId ?? d.delivery.deliveryCode,
+              packing_id: d.packing?.packingCode ?? null,
+              from_bin: d.pickingItem?.bin?.binLabel ?? null,
+              material_code: mat?.materialCode ?? l.itemName,
+              material_name: mat?.materialName ?? l.description,
+              erp_line_id: l.lineNumber,
+              staging_bin: d.bin?.binLabel ?? null,
+              uom: mat?.primaryUom?.uomCode ?? null,
+              qty_shipped: shipped ? d.qty : null,
+              qty_received: received > 0 ? received : null,
+              date_shipped: shipped ? d.delivery.updatedAt : null,
+              date_received: received > 0 ? (receivedAt.get(l.id) ?? null) : null,
+            });
+          }
+        }
+      }
+      if (rows.length) yield rows;
+      if (orders.length < BATCH) return;
+    }
+  }
+
   /** Per TO line, when its latest Goods Receive was closed (received). */
   private async lastReceivedAt(lineIds: string[]) {
     const items = lineIds.length

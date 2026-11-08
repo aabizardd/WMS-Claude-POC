@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../../lib/api';
 import { downloadFile } from '../../../lib/download';
+import ExportConfirmModal, { type ExportScope, type ExportSummary } from '../../../components/ExportConfirmModal';
 import type { Paginated, PibGrFilter, PibGrFilterField, PibGrRow, TransferGrListLine } from '../../../types';
 import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
@@ -150,6 +151,7 @@ export default function PibGrListPage() {
   const [status, setStatus] = useState(initial.status);
   const [reloadKey, setReloadKey] = useState(0);
   const [exporting, setExporting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initial.filters));
   const [applied, setApplied] = useState<PibGrFilter[]>(initial.filters);
   const [extraOpen, setExtraOpen] = useState(false);
@@ -162,17 +164,32 @@ export default function PibGrListPage() {
   };
   const appliedKey = JSON.stringify(applied);
 
-  /** Every GR the filters match (not only this page), one row per line, in the list's order. */
-  async function exportExcel() {
+  /** The confirmation's numbers, counted by the backend for both options. */
+  function loadExportSummary() {
+    return api
+      .get<ExportSummary>('/pib-inbound/goods-receive/export/summary', {
+        params: { status: status || undefined, filters: applied.length ? appliedKey : undefined },
+      })
+      .then((r) => r.data);
+  }
+
+  /**
+   * Filtered: every GR the status and filters match (not only this page); all:
+   * every GR, any status. One row per line, in the list's order; the list
+   * itself is left as it is.
+   */
+  async function exportExcel(scope: ExportScope) {
     if (exporting) return;
+    setExportOpen(false);
     setExporting(true);
     toast.info('Preparing the export…');
     try {
       await downloadFile(
         '/pib-inbound/goods-receive/export',
         {
-          status: status || undefined,
-          filters: applied.length ? JSON.stringify(applied) : undefined,
+          ...(scope === 'filtered'
+            ? { status: status || undefined, filters: applied.length ? appliedKey : undefined }
+            : {}),
           ...params(),
         },
         'pib_goods_receive_export.xlsx',
@@ -292,7 +309,11 @@ export default function PibGrListPage() {
           subtitle="Validate and receive goods into the system for pib"
           menu={[
             ...(has('mrn:sync') ? [{ label: 'Sync from ERP', icon: <SyncIcon />, onClick: () => setSyncOpen(true) }] : []),
-            { label: exporting ? 'Exporting…' : 'Export', icon: <ExportIcon />, onClick: exportExcel },
+            {
+              label: exporting ? 'Exporting…' : 'Export',
+              icon: <ExportIcon />,
+              onClick: () => !exporting && setExportOpen(true),
+            },
           ]}
         />
 
@@ -466,6 +487,21 @@ export default function PibGrListPage() {
       </div>
 
       <PibSyncModal open={syncOpen} onClose={() => setSyncOpen(false)} onSynced={() => setReloadKey((k) => k + 1)} />
+
+      <ExportConfirmModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        documentLabel="GRs"
+        filters={[
+          ...(status ? [{ label: 'Status', value: STATUSES.find(([v]) => v === status)?.[1] ?? status }] : []),
+          ...applied.map((f) => ({
+            label: fieldLabel(f.field),
+            value: f.values.map((v) => (f.field === 'created_at' ? formatRangeValue(v) : v)).join(' or '),
+          })),
+        ]}
+        loadSummary={loadExportSummary}
+        onConfirm={exportExcel}
+      />
     </div>
   );
 }

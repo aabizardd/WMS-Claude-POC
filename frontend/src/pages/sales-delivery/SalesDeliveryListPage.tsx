@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../lib/api';
 import { downloadFile } from '../../lib/download';
+import ExportConfirmModal, { type ExportScope, type ExportSummary } from '../../components/ExportConfirmModal';
 import type {
   Paginated,
   SalesDeliveryFilter,
@@ -232,6 +233,7 @@ export default function SalesDeliveryListPage() {
   const [switchedTo, setSwitchedTo] = useState<DocTypeView | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [exporting, setExporting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
   // Draft values are what the user edits; `applied` is what the server was
   // asked for. Keeping them apart stops every keystroke from firing a request.
@@ -373,18 +375,29 @@ export default function SalesDeliveryListPage() {
   /** How many of the modal's fields are in force. */
   const extraCount = applied.filter((f) => EXTRA_FIELDS.some((x) => x.value === f.field)).length;
 
+  /** The confirmation's numbers, counted by the backend for both options. */
+  function loadExportSummary() {
+    return api
+      .get<ExportSummary>('/sales-delivery/export/summary', {
+        params: { filters: applied.length ? appliedKey : undefined },
+      })
+      .then((r) => r.data);
+  }
+
   /**
-   * Every document the filters match (not only this page), in the list's
-   * order: a Sales Delivery and a Sales Return sheet, whichever tab is open.
+   * Filtered: every document the filters match (not only this page); all:
+   * every document. In the list's order: a Sales Delivery and a Sales Return
+   * sheet, whichever tab is open. The list itself is left as it is.
    */
-  async function exportExcel() {
+  async function exportExcel(scope: ExportScope) {
     if (exporting) return;
+    setExportOpen(false);
     setExporting(true);
     toast.info('Preparing the export…');
     try {
       await downloadFile(
         '/sales-delivery/export',
-        { filters: applied.length ? JSON.stringify(applied) : undefined, ...params() },
+        { filters: scope === 'filtered' && applied.length ? appliedKey : undefined, ...params() },
         'SDKawasan.xlsx',
       );
     } catch {
@@ -457,7 +470,7 @@ export default function SalesDeliveryListPage() {
             {
               label: exporting ? 'Exporting…' : 'Export',
               icon: <ExportIcon />,
-              onClick: exportExcel,
+              onClick: () => !exporting && setExportOpen(true),
             },
           ]}
           actions={
@@ -668,6 +681,18 @@ export default function SalesDeliveryListPage() {
           }}
         />
       </div>
+
+      <ExportConfirmModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        documentLabel="Documents"
+        filters={applied.map((f) => ({
+          label: fieldLabel(f.field),
+          value: f.values.map((v) => valueLabel(f.field, v)).join(' or '),
+        }))}
+        loadSummary={loadExportSummary}
+        onConfirm={exportExcel}
+      />
     </div>
   );
 }
