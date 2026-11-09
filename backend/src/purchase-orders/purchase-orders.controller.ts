@@ -6,7 +6,11 @@ import {
   Param,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
+import { xlsxHeaders } from '../common/xlsx-export';
+import { requestGrExportFileName, writeRequestGrXlsx } from '../common/request-gr-export';
 import { PurchaseOrdersService } from './purchase-orders.service';
 import { PurchaseOrderSyncService } from './purchase-order-sync.service';
 import { QueryPurchaseOrderDto } from './dto/query-purchase-order.dto';
@@ -61,6 +65,25 @@ export class PurchaseOrdersController {
   @RequirePermissions('purchase-orders:read')
   lastSync() {
     return this.service.getLastSyncAt();
+  }
+
+  /**
+   * The Request list as an Excel file, down to its Goods Receives: one sheet,
+   * one row per line and GR line (GR columns empty when none was made yet),
+   * for whatever the list is filtered and sorted by. Declared before ':id'.
+   */
+  @Get('export')
+  @RequirePermissions('purchase-orders:read')
+  async exportXlsx(@Query() query: QueryPurchaseOrderDto, @CurrentUser() user: AuthUser, @Res() res: Response) {
+    res.set(xlsxHeaders(requestGrExportFileName('PO')));
+    await writeRequestGrXlsx('PO', this.service.exportRows(query, user), res);
+  }
+
+  /** The export confirmation's numbers (filtered and all), without building the file. */
+  @Get('export/summary')
+  @RequirePermissions('purchase-orders:read')
+  exportSummary(@Query() query: QueryPurchaseOrderDto, @CurrentUser() user: AuthUser) {
+    return this.service.exportSummary(query, user);
   }
 
   @Get(':id')

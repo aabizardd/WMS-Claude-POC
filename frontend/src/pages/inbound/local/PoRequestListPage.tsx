@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../../lib/api';
+import { downloadFile } from '../../../lib/download';
+import ExportConfirmModal, { type ExportScope, type ExportSummary } from '../../../components/ExportConfirmModal';
 import Modal from '../../../components/Modal';
 import type {
   Paginated,
@@ -148,6 +150,45 @@ export default function PoRequestListPage() {
     toggle(col);
   };
   const appliedKey = JSON.stringify(applied);
+  const [exporting, setExporting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+
+  /** The confirmation's numbers, counted by the backend for both options. */
+  function loadExportSummary() {
+    return api
+      .get<ExportSummary>('/purchase-orders/export/summary', {
+        params: { status: status || undefined, filters: applied.length ? appliedKey : undefined },
+      })
+      .then((r) => r.data);
+  }
+
+  /**
+   * Filtered: every PO the status and filters match (not only this page);
+   * all: every PO, any status. One sheet, down to the Goods Receives: a row
+   * per line and GR line, GR columns empty when none was made yet.
+   */
+  async function exportExcel(scope: ExportScope) {
+    if (exporting) return;
+    setExportOpen(false);
+    setExporting(true);
+    toast.info('Preparing the export…');
+    try {
+      await downloadFile(
+        '/purchase-orders/export',
+        {
+          ...(scope === 'filtered'
+            ? { status: status || undefined, filters: applied.length ? appliedKey : undefined }
+            : {}),
+          ...params(),
+        },
+        'po_request_gr_export.xlsx',
+      );
+    } catch {
+      toast.error('Export failed. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const [syncOpen, setSyncOpen] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
@@ -294,7 +335,13 @@ export default function PoRequestListPage() {
         <ListHeader
           title="Request - PO"
           subtitle="Record incoming requests for local vendor"
-          menu={[{ label: 'Export', icon: <ExportIcon />, onClick: () => toast.info('Export is not available yet.') }]}
+          menu={[
+            {
+              label: exporting ? 'Exporting…' : 'Export',
+              icon: <ExportIcon />,
+              onClick: () => !exporting && setExportOpen(true),
+            },
+          ]}
         />
 
         <ListFilterPanel
@@ -349,6 +396,21 @@ export default function PoRequestListPage() {
       </div>
 
       {/* Nothing here searches until Apply. */}
+      <ExportConfirmModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        documentLabel="Purchase Orders"
+        filters={[
+          ...(status ? [{ label: 'Status', value: STATUSES.find(([v]) => v === status)?.[1] ?? status }] : []),
+          ...applied.map((f) => ({
+            label: fieldLabel(f.field),
+            value: f.values.map((v) => (f.field === 'created_at' ? formatRangeValue(v) : v)).join(' or '),
+          })),
+        ]}
+        loadSummary={loadExportSummary}
+        onConfirm={exportExcel}
+      />
+
       <ExtraFiltersModal open={extraOpen} onClose={closeExtras} onReset={resetExtras} onApply={applyExtras}>
         {EXTRA_FIELDS.map((f) => (
           <FilterField key={f.value} label={f.label}>

@@ -69,7 +69,9 @@ export default function Login() {
       {/* The form: a card on small screens, the white wave on the right on wide ones. */}
       <div
         className="relative z-10 flex w-full flex-col justify-between rounded-2xl bg-white p-8 shadow-xl sm:max-w-[440px] lg:absolute lg:right-0 lg:top-0 lg:h-screen lg:w-[45vw] lg:max-w-none lg:rounded-none lg:bg-transparent lg:bg-[length:100%_100%] lg:bg-center lg:bg-no-repeat lg:pl-[7%] lg:pr-8 lg:shadow-none lg:[background-image:var(--login-wave)]"
-        style={{ ['--login-wave' as string]: `url(${loginWave})` }}
+        // Quoted: the production build inlines this small SVG as a data URI with
+        // ' and spaces in it, which an unquoted url() rejects (no wave at all).
+        style={{ ['--login-wave' as string]: `url("${loginWave}")` }}
       >
         <div className="hidden min-h-0 lg:block lg:h-[10vh] 2xl:h-[15vh]" />
         <div className="mx-auto my-auto w-full max-w-[350px] 2xl:max-w-[430px]">

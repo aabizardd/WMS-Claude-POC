@@ -54,6 +54,13 @@ export class SalesOrdersController {
     await this.service.exportXlsx(query, user, res);
   }
 
+  /** The export confirmation's numbers (filtered and all), without building the file. */
+  @Get('export/summary')
+  @RequirePermissions('sales-orders:read')
+  exportSummary(@Query() query: QuerySalesOrderDto, @CurrentUser() user: AuthUser) {
+    return this.service.exportSummary(query, user);
+  }
+
   @Get('statuses')
   @RequirePermissions('sales-orders:read')
   statuses(@CurrentUser() user: AuthUser) {
