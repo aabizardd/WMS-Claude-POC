@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { DeliveryStatus, Prisma } from '@prisma/client';
 import type { Writable } from 'stream';
-import { writeSoDeliveryXlsx } from './so-delivery-export';
+import { countSoDeliveryRows, writeSoDeliveryXlsx } from './so-delivery-export';
 import { PrismaService } from '../prisma/prisma.service';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { subsidiarySingleFilter } from '../common/subsidiary-filter';
@@ -183,6 +183,22 @@ export class SalesOrdersService {
     out: Writable,
   ) {
     return writeSoDeliveryXlsx(this.prisma, { soWhere: this.listWhere(query, scope) }, out);
+  }
+
+  /**
+   * The export confirmation's numbers: orders and rows of the "Sales Order"
+   * sheet for the list's status and filters, and for every SO the user can
+   * see (any status), without building the file.
+   */
+  async exportSummary(
+    query: { search?: string; status?: string; filters?: SalesOrderFilterDto[] },
+    scope: WarehouseScope,
+  ) {
+    const [filtered, all] = await Promise.all([
+      countSoDeliveryRows(this.prisma, { soWhere: this.listWhere(query, scope) }),
+      countSoDeliveryRows(this.prisma, { soWhere: this.listWhere({}, scope) }),
+    ]);
+    return { filtered, all };
   }
 
   async findAll(

@@ -7,6 +7,12 @@ import { subsidiarySingleFilter } from '../common/subsidiary-filter';
 import { parseDateRange } from '../common/date-range.util';
 import type { PoFilterField, QueryPurchaseOrderDto } from './dto/query-purchase-order.dto';
 import { scopeWhere } from '../common/warehouse-scope';
+import {
+  countRequestGrRows,
+  grItemSelect,
+  grOf,
+  type RequestGrExportRow,
+} from '../common/request-gr-export';
 
 export interface WarehouseScope {
   role: string;
@@ -216,6 +222,110 @@ export class PurchaseOrdersService {
       department_display: po.departmentDisplay,
       lines: po.lines.map((l) => this.serializeLine(l, mats, planned)),
     };
+  }
+
+  /**
+   * The Request export: every PO the list's status and filters match (not only one
+   * page), in the list's order, one row per line and Goods Receive line made
+   * from it — or one row with the GR columns empty when none was made yet. A
+   * Part Number / Material Name filter keeps only the matching lines, as the
+   * accordion does. Yielded in batches.
+   */
+  async *exportRows(query: QueryPurchaseOrderDto, scope: WarehouseScope): AsyncGenerator<RequestGrExportRow[]> {
+    const orderBy = buildOrderBy(query.sort_by, query.sort_order, SORTABLE, DEFAULT_ORDER);
+    const where = await this.where(query, scope);
+    const lineFilters = (query.filters ?? [])
+      .filter((f) => f.field === 'material_code' || f.field === 'material_name')
+      .map((f) => ({ field: f.field, values: (f.values ?? []).map((v) => v.trim().toLowerCase()).filter(Boolean) }))
+      .filter((f) => f.values.length);
+    const lineMatches = (l: { material_code: string | null; material_name: string | null; item_display: string | null }) =>
+      lineFilters.every((f) => {
+        const hay = (f.field === 'material_code' ? `${l.material_code ?? ''} ${l.item_display ?? ''}` : (l.material_name ?? '')).toLowerCase();
+        return f.values.some((v) => hay.includes(v));
+      });
+    const BATCH = 100;
+    for (let skip = 0; ; skip += BATCH) {
+      const docs = await this.prisma.purchaseOrder.findMany({
+        where,
+        // The id keeps paging stable when the sort column has ties.
+        orderBy: [orderBy, { id: 'asc' }],
+        skip,
+        take: BATCH,
+        include: {
+          warehouse: { select: { id: true, name: true } },
+          lines: {
+            orderBy: { lineNumber: 'asc' },
+            include: {
+              goodsReceiveItems: {
+                select: grItemSelect,
+                orderBy: [{ goodsReceive: { createdAt: 'asc' } }, { createdAt: 'asc' }],
+              },
+            },
+          },
+        },
+      });
+      const lines = docs.flatMap((d) => d.lines);
+      const [active, vendors, mats, planned] = await Promise.all([
+        this.activePos(docs.map((d) => d.id)),
+        this.vendorNames(docs.map((d) => d.vendorId)),
+        this.materials(lines.map((l) => l.materialId)),
+        openPlannedByPoLine(this.prisma, lines.map((l) => l.id)),
+      ]);
+      const rows: RequestGrExportRow[] = [];
+      for (const d of docs) {
+        const h = this.serializeHeader(d, active.has(d.id), vendors);
+        const head = {
+          doc_id: d.id,
+          status: h.status ?? null,
+          transaction_id: h.po_number,
+          erp_doc_id: h.oracle_id,
+          
+          ownership: h.ownership ?? null,
+          party: h.vendor_name,
+          warehouse: h.warehouse?.name ?? h.location_name ?? null,
+          memo: h.memo,
+          created_by: h.created_by,
+          created_at: h.created_at,
+          last_modified_by: h.last_modified_by,
+          last_modified: h.last_modified,
+        };
+        let no = 0;
+        for (const l of d.lines) {
+          const s = this.serializeLine(l, mats, planned);
+          if (!lineMatches(s)) continue;
+          const line = {
+            no: ++no,
+            line_number: s.line_number,
+            material_code: s.material_code,
+            material_name: s.material_name,
+            material_type: s.material_type,
+            material_category: s.material_category,
+            uom: s.uom,
+            request_qty: s.quantity,
+            receive_qty: s.receive_qty,
+            remain_qty: s.remain_qty,
+          };
+          if (!l.goodsReceiveItems.length) rows.push({ ...head, line, gr: null });
+          for (const it of l.goodsReceiveItems) rows.push({ ...head, line, gr: grOf(it) });
+        }
+        if (!no) rows.push({ ...head, line: null, gr: null });
+      }
+      if (rows.length) yield rows;
+      if (docs.length < BATCH) return;
+    }
+  }
+
+  /**
+   * The export confirmation's numbers: documents and rows for the list's
+   * status and filters and for every one the user can see, counted by walking
+   * exportRows() — exactly what the file would hold.
+   */
+  async exportSummary(query: QueryPurchaseOrderDto, scope: WarehouseScope) {
+    const [filtered, all] = await Promise.all([
+      countRequestGrRows(this.exportRows(query, scope)),
+      countRequestGrRows(this.exportRows({} as QueryPurchaseOrderDto, scope)),
+    ]);
+    return { filtered, all };
   }
 
   // Distinct PO statuses present (within scope) for the FE status filter.

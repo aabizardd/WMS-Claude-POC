@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import api from '../../lib/api';
 import { downloadFile } from '../../lib/download';
+import ExportConfirmModal, { type ExportScope, type ExportSummary } from '../../components/ExportConfirmModal';
 import Modal from '../../components/Modal';
 import type {
   Paginated,
@@ -220,19 +221,31 @@ export default function SalesOrderList() {
 
   const appliedKey = JSON.stringify(applied);
   const [exporting, setExporting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+
+  /** The confirmation's numbers, counted by the backend for both options. */
+  function loadExportSummary() {
+    return api
+      .get<ExportSummary>('/sales-orders/export/summary', {
+        params: { status: status || undefined, filters: applied.length ? appliedKey : undefined },
+      })
+      .then((r) => r.data);
+  }
 
   /**
-   * Every SO the filters match (any status, with or without a delivery plan),
-   * with its lines and delivery plans: requested, delivered, SD number, date.
+   * Filtered: every SO the status and filters match; all: every SO, any
+   * status. With or without a delivery plan, with its lines and delivery
+   * plans: requested, delivered, SD number, date. The list is left as it is.
    */
-  async function exportExcel() {
+  async function exportExcel(scope: ExportScope) {
     if (exporting) return;
+    setExportOpen(false);
     setExporting(true);
     toast.info('Preparing the export…');
     try {
       await downloadFile(
         '/sales-orders/export',
-        { status: status || undefined, filters: applied.length ? appliedKey : undefined },
+        scope === 'filtered' ? { status: status || undefined, filters: applied.length ? appliedKey : undefined } : {},
         'sales_order_delivery_export.xlsx',
       );
     } catch {
@@ -424,7 +437,13 @@ export default function SalesOrderList() {
         <ListHeader
           title="Sales Order"
           subtitle="Initiate a delivery request for customer orders"
-          menu={[{ label: exporting ? 'Exporting…' : 'Export', icon: <ExportIcon />, onClick: exportExcel }]}
+          menu={[
+            {
+              label: exporting ? 'Exporting…' : 'Export',
+              icon: <ExportIcon />,
+              onClick: () => !exporting && setExportOpen(true),
+            },
+          ]}
         />
 
         <ListFilterPanel
@@ -687,6 +706,21 @@ export default function SalesOrderList() {
           </div>
         </form>
       </Modal>
+
+      <ExportConfirmModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        documentLabel="Sales Orders"
+        filters={[
+          ...(status ? [{ label: 'Status', value: status }] : []),
+          ...applied.map((f) => ({
+            label: fieldLabel(f.field),
+            value: f.values.map((v) => valueLabel(f.field, v)).join(' or '),
+          })),
+        ]}
+        loadSummary={loadExportSummary}
+        onConfirm={exportExcel}
+      />
     </div>
   );
 }

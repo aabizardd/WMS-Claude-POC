@@ -361,6 +361,21 @@ export function soDeliveryExportFileName(from: 'so' | 'dp' | 'to-dp', now = new 
 
 const STYLE = { fill: 'FF5166AE', font: 'FFFFFFFF', freeze: true };
 
+/**
+ * What the SO workbook would hold, before it is written: orders and rows of
+ * its "Sales Order" sheet (one per line and SD, plus the Oracle gap rows),
+ * counted by walking the same rows the file writes.
+ */
+export async function countSoDeliveryRows(prisma: PrismaService, scope: SoDeliveryScope) {
+  const orders = new Set<string | null>();
+  let rows = 0;
+  for await (const batch of orderLineRows(soLines(prisma, scope), !scope.deliveryWhere)) {
+    rows += batch.length;
+    for (const r of batch) orders.add(r.transaction_id);
+  }
+  return { documents: orders.size, rows };
+}
+
 /** Streams the SO workbook (sheets "Sales Order" and "Delivery Plan") to `out`. */
 export function writeSoDeliveryXlsx(prisma: PrismaService, scope: SoDeliveryScope, out: Writable) {
   return writeXlsx(
