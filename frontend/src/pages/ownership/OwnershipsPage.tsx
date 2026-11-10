@@ -1,11 +1,11 @@
-import { useState } from 'react';
 import type { Ownership, OwnershipType } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import MasterList, { type MasterColumn } from '../../components/master/MasterList';
-import ErpSyncModal from '../../components/master/ErpSyncModal';
-import { Cell, fmtDateTime, icons } from '../../components/master/MasterKit';
+import { syncManyFromErp } from '../../components/master/erpSync';
+import { useToast } from '../../context/ToastContext';
+import { Cell, fmtDateTime } from '../../components/master/MasterKit';
 
-/** Sync endpoints of the two masters behind this list. */
+/** Sync endpoints of the two masters behind this list; one refresh syncs both. */
 const SYNC: Record<OwnershipType, { base: string; permission: string; noun: string }> = {
   Vendor: { base: '/vendors', permission: 'vendors:sync', noun: 'vendors' },
   Customer: { base: '/customers', permission: 'customers:sync', noun: 'customers' },
@@ -26,33 +26,21 @@ const COLUMNS: MasterColumn<Ownership>[] = [
 
 /**
  * Ownership Setting, as on WMS dev: vendors and customers in one list,
- * separated by Ownership Type. Both stay synced from Oracle (read-only).
+ * separated by Ownership Type. Both stay synced from Oracle (read-only); the
+ * refresh button pulls vendors, then customers, straight away.
  */
 export default function OwnershipsPage() {
   const { has } = useAuth();
-  const [syncType, setSyncType] = useState<OwnershipType | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
-  const syncTypes = (Object.keys(SYNC) as OwnershipType[]).filter((t) => has(SYNC[t].permission));
+  const toast = useToast();
+  // Only the masters this user may sync; with neither, refresh just reloads.
+  const targets = (Object.keys(SYNC) as OwnershipType[]).filter((t) => has(SYNC[t].permission)).map((t) => SYNC[t]);
 
   return (
-    <>
-      <MasterList<Ownership>
-        endpoint="/ownerships"
-        columns={COLUMNS}
-        reloadKey={reloadKey}
-        menuActions={syncTypes.map((t) => ({
-          label: `Sync ${t}s`,
-          icon: icons.cloudSync,
-          onClick: () => setSyncType(t),
-        }))}
-      />
-      <ErpSyncModal
-        open={syncType !== null}
-        onClose={() => setSyncType(null)}
-        base={syncType ? SYNC[syncType].base : '/vendors'}
-        noun={syncType ? SYNC[syncType].noun : ''}
-        onSynced={() => setReloadKey((k) => k + 1)}
-      />
-    </>
+    <MasterList<Ownership>
+      endpoint="/ownerships"
+      columns={COLUMNS}
+      onRefresh={targets.length ? () => syncManyFromErp(targets, toast) : undefined}
+      refreshTitle={targets.length ? 'Sync from ERP' : undefined}
+    />
   );
 }

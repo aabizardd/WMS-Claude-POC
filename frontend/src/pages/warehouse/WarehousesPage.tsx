@@ -1,9 +1,9 @@
-import { useState } from 'react';
 import type { Warehouse } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import MasterList, { type MasterColumn } from '../../components/master/MasterList';
-import ErpSyncModal from '../../components/master/ErpSyncModal';
-import { Cell, StatusPill, fmtDateTime, icons } from '../../components/master/MasterKit';
+import { syncFromErp } from '../../components/master/erpSync';
+import { useToast } from '../../context/ToastContext';
+import { Cell, StatusPill, fmtDateTime } from '../../components/master/MasterKit';
 
 // Synced from Oracle (read-only), so rows have no actions.
 const COLUMNS: MasterColumn<Warehouse>[] = [
@@ -20,28 +20,15 @@ const COLUMNS: MasterColumn<Warehouse>[] = [
 
 export default function WarehousesPage() {
   const { has } = useAuth();
-  const [syncOpen, setSyncOpen] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
+  const toast = useToast();
 
   return (
-    <>
-      <MasterList<Warehouse>
-        endpoint="/warehouses"
-        columns={COLUMNS}
-        reloadKey={reloadKey}
-        menuActions={
-          has('warehouses:sync')
-            ? [{ label: 'Sync from ERP', icon: icons.cloudSync, onClick: () => setSyncOpen(true) }]
-            : []
-        }
-      />
-      <ErpSyncModal
-        open={syncOpen}
-        onClose={() => setSyncOpen(false)}
-        base="/warehouses"
-        noun="warehouses"
-        onSynced={() => setReloadKey((k) => k + 1)}
-      />
-    </>
+    <MasterList<Warehouse>
+      endpoint="/warehouses"
+      columns={COLUMNS}
+      // Refresh pulls the latest from Oracle first (with the sync permission).
+      onRefresh={has('warehouses:sync') ? () => syncFromErp('/warehouses', 'warehouses', toast) : undefined}
+      refreshTitle={has('warehouses:sync') ? 'Sync from ERP' : undefined}
+    />
   );
 }

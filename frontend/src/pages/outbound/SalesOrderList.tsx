@@ -1,17 +1,15 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import axios from 'axios';
+import { syncFromErp } from '../../components/master/erpSync';
 import api from '../../lib/api';
 import { downloadFile } from '../../lib/download';
 import ExportConfirmModal, { type ExportScope, type ExportSummary } from '../../components/ExportConfirmModal';
-import Modal from '../../components/Modal';
 import type {
   Paginated,
   SalesOrderFilter,
   SalesOrderFilterField,
   SalesOrderItemRow,
   SalesOrderRow,
-  SalesOrderSyncResult,
 } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -212,12 +210,7 @@ export default function SalesOrderList() {
     toggle(col);
   };
 
-  const [syncOpen, setSyncOpen] = useState(false);
-  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
-  const [lastSyncLoading, setLastSyncLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [syncError, setSyncError] = useState('');
-  const [syncResult, setSyncResult] = useState<SalesOrderSyncResult | null>(null);
 
   const appliedKey = JSON.stringify(applied);
   const [exporting, setExporting] = useState(false);
@@ -287,37 +280,14 @@ export default function SalesOrderList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, appliedKey]);
 
-  async function openSync() {
-    setSyncError('');
-    setSyncResult(null);
-    setSyncOpen(true);
-    setLastSyncLoading(true);
-    try {
-      const r = await api.get<{ lastSyncAt: string | null }>('/sales-orders/erp-last-sync');
-      setLastSyncAt(r.data.lastSyncAt);
-    } catch {
-      setLastSyncAt(null);
-    } finally {
-      setLastSyncLoading(false);
-    }
-  }
-
-  async function handleSync(e: FormEvent) {
-    e.preventDefault();
-    setSyncError('');
-    setSyncResult(null);
+  /** Refresh with the sync permission: pull the latest from Oracle straight away, then show the list again. */
+  async function runSync() {
+    if (syncing) return;
     setSyncing(true);
     try {
-      const payload = lastSyncAt ? { lastModified: lastSyncAt } : {};
-      const r = await api.post<SalesOrderSyncResult>('/sales-orders/sync-erp', payload);
-      setSyncResult(r.data);
+      await syncFromErp('/sales-orders', 'sales orders', toast);
       setPage(1);
       await load();
-    } catch (err) {
-      if (axios.isAxiosError(err)) {
-        const msg = err.response?.data?.message;
-        setSyncError(Array.isArray(msg) ? msg.join(', ') : msg ?? 'Sync failed');
-      } else setSyncError('Sync failed');
     } finally {
       setSyncing(false);
     }
@@ -465,7 +435,7 @@ export default function SalesOrderList() {
               {/* Refresh pulls the latest orders from Oracle; without the sync
                   permission it just reloads what WMS already has. */}
               <RefreshButton
-                onClick={() => (canSync ? openSync() : setReloadKey((k) => k + 1))}
+                onClick={() => (canSync ? runSync() : setReloadKey((k) => k + 1))}
                 spinning={loading || syncing}
                 title={canSync ? 'Sync from ERP' : 'Refresh'}
               />
@@ -643,69 +613,6 @@ export default function SalesOrderList() {
         />
       </div>
 
-      <Modal
-        open={syncOpen}
-        title="Sync Sales Orders from ERP"
-        onClose={() => (syncing ? null : setSyncOpen(false))}
-      >
-        <form onSubmit={handleSync} className="space-y-4">
-          {syncError && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {syncError}
-            </div>
-          )}
-          <p className="text-sm text-slate-500">
-            Pull all sales orders from Oracle. Incremental by last modified;
-            existing orders are updated in place.
-          </p>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
-            {lastSyncLoading ? (
-              <span className="text-slate-400">Checking last sync time…</span>
-            ) : lastSyncAt ? (
-              <>
-                <div className="text-slate-500">Last sync (created_at)</div>
-                <div className="font-medium text-slate-800">
-                  {new Date(lastSyncAt).toLocaleString()}
-                </div>
-              </>
-            ) : (
-              <div className="font-medium text-slate-800">
-                No previous sync — a full sync will run.
-              </div>
-            )}
-          </div>
-          {syncResult && (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-              <div className="font-medium">
-                {syncResult.fullSync ? 'Full sync' : 'Incremental sync'} complete
-              </div>
-              <ul className="mt-1 space-y-0.5 text-emerald-700">
-                <li>Total records: {syncResult.totalRecords}</li>
-                <li>Upserted: {syncResult.upserted}</li>
-                <li>Failed: {syncResult.failed}</li>
-                <li>Duration: {(syncResult.durationMs / 1000).toFixed(1)}s</li>
-              </ul>
-            </div>
-          )}
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => setSyncOpen(false)}
-              disabled={syncing}
-            >
-              {syncResult ? 'Close' : 'Cancel'}
-            </button>
-            <button
-              type="submit"
-              className="btn-primary"
-              disabled={syncing || lastSyncLoading}
-            >
-              {syncing ? 'Syncing…' : 'Start sync'}
-            </button>
-          </div>
-        </form>
-      </Modal>
 
       <ExportConfirmModal
         open={exportOpen}

@@ -10,6 +10,8 @@ import { UpdateBinDto } from './dto/update-bin.dto';
 import { QueryBinDto } from './dto/query-bin.dto';
 import { buildOrderBy, type SortDir } from '../common/sort.util';
 import { inScope, scopeWhere } from '../common/warehouse-scope';
+import { type ExportColumn, wibDateTimeMinutes, wibParts, writeXlsx } from '../common/xlsx-export';
+import type { Writable } from 'stream';
 
 const binInclude = {
   warehouse: true,
@@ -55,17 +57,7 @@ export class BinsService {
       DEFAULT_ORDER,
     );
 
-    const where: Prisma.BinWhereInput = query.search
-      ? {
-          OR: [
-            { binLabel: { contains: query.search, mode: 'insensitive' } },
-            { binCode: { contains: query.search, mode: 'insensitive' } },
-          ],
-        }
-      : {};
-    // Non-admins see the bins of every warehouse they are assigned; admins
-    // follow the header selector ("All sites" = no limit).
-    Object.assign(where, scopeWhere(scope));
+    const where = this.where(query, scope);
 
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.bin.count({ where }),
@@ -89,6 +81,49 @@ export class BinsService {
       },
       rows: rows.map((r) => this.serialize(r)),
     };
+  }
+
+  private where(query: Pick<QueryBinDto, 'search'>, scope: WarehouseScope): Prisma.BinWhereInput {
+    const where: Prisma.BinWhereInput = query.search
+      ? {
+          OR: [
+            { binLabel: { contains: query.search, mode: 'insensitive' } },
+            { binCode: { contains: query.search, mode: 'insensitive' } },
+          ],
+        }
+      : {};
+    // Non-admins see the bins of every warehouse they are assigned; admins
+    // follow the header selector ("All sites" = no limit).
+    Object.assign(where, scopeWhere(scope));
+    return where;
+  }
+
+  /** The list's export: every bin the search matches (not only one page), in the list's order. */
+  async *exportRows(query: QueryBinDto, scope: WarehouseScope): AsyncGenerator<BinWithRelations[]> {
+    const where = this.where(query, scope);
+    const orderBy = buildOrderBy(query.sort_by, query.sort_order, SORTABLE, DEFAULT_ORDER);
+    const BATCH = 500;
+    for (let skip = 0; ; skip += BATCH) {
+      const rows = await this.prisma.bin.findMany({
+        where,
+        include: binInclude,
+        // The id keeps paging stable when the sort column has ties.
+        orderBy: [orderBy, { id: 'asc' }],
+        skip,
+        take: BATCH,
+      });
+      if (rows.length) yield rows;
+      if (rows.length < BATCH) return;
+    }
+  }
+
+  /** The export confirmation's numbers: bins for the current search and for all data. */
+  async exportSummary(query: QueryBinDto, scope: WarehouseScope) {
+    const [filtered, all] = await Promise.all([
+      this.prisma.bin.count({ where: this.where(query, scope) }),
+      this.prisma.bin.count({ where: this.where({}, scope) }),
+    ]);
+    return { filtered: { documents: filtered, rows: filtered }, all: { documents: all, rows: all } };
   }
 
   // Lightweight lookup for dropdowns (optionally limited to one warehouse).
@@ -260,4 +295,49 @@ export class BinsService {
     }
     return e;
   }
+}
+
+// ---------- export ----------
+
+const at = (d: Date | null) => (d ? wibDateTimeMinutes(d) : null);
+
+/** The Bin list's columns, in its order (one row per bin). */
+const EXPORT_COLUMNS: ExportColumn<BinWithRelations>[] = [
+  { header: 'Status', width: 10, value: (b) => (b.isActive ? 'Active' : 'Inactive') },
+  { header: 'Bin ID', width: 22, value: (b) => b.binCode },
+  { header: 'Warehouse Name', width: 26, value: (b) => b.warehouse.name },
+  { header: 'Aisle Name', width: 18, value: (b) => b.aisle.aisleName },
+  { header: 'Shelf Label', width: 18, value: (b) => b.shelf.shelfLabel },
+  { header: 'Bin Label', width: 22, value: (b) => b.binLabel },
+  { header: 'Bin Length', width: 11, value: (b) => b.binLength },
+  { header: 'Bin Width', width: 11, value: (b) => b.binWidth },
+  { header: 'Bin Height', width: 11, value: (b) => b.binHeight },
+  {
+    header: 'UoM',
+    width: 16,
+    value: (b) =>
+      b.dimensionUom?.uomCode
+        ? `${b.dimensionUom.uomCode}${b.dimensionUom.uomName ? ` - ${b.dimensionUom.uomName}` : ''}`
+        : null,
+  },
+  { header: 'Bin Volume', width: 12, value: (b) => b.binLength * b.binWidth * b.binHeight },
+  { header: 'Created By', width: 20, value: (b) => b.createdBy },
+  { header: 'Created At', width: 18, value: (b) => at(b.createdAt) },
+  { header: 'Last Modified By', width: 20, value: (b) => b.modifiedBy },
+  { header: 'Last Modified At', width: 18, value: (b) => at(b.modifiedAt) },
+];
+
+/** "bin_export_20261109_101502.xlsx" (WIB). */
+export function binExportFileName(now = new Date()) {
+  const t = wibParts(now);
+  return `bin_export_${t.y}${t.m}${t.d}_${t.hh}${t.mm}${t.ss}.xlsx`;
+}
+
+/** Streams the one-sheet workbook to `out`: white headers on indigo, frozen. */
+export function writeBinXlsx(rows: AsyncIterable<BinWithRelations[]>, out: Writable) {
+  return writeXlsx(out, [{ name: 'Bin', columns: EXPORT_COLUMNS, rows }], {
+    fill: 'FF5166AE',
+    font: 'FFFFFFFF',
+    freeze: true,
+  });
 }

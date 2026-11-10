@@ -1,9 +1,9 @@
-import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Material } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import MasterList, { type MasterColumn } from '../../components/master/MasterList';
-import ErpSyncModal from '../../components/master/ErpSyncModal';
+import { syncFromErp } from '../../components/master/erpSync';
+import { useToast } from '../../context/ToastContext';
 import { Cell, StatusPill, fmtDateTime, icons } from '../../components/master/MasterKit';
 
 const num = (n: number | null | undefined) => (n == null ? '-' : n);
@@ -14,7 +14,11 @@ const COLUMNS: MasterColumn<Material>[] = [
   { label: 'Status', width: 120, render: (m) => <StatusPill active={m.is_active} /> },
   { label: 'Material Code', sortKey: 'material_code', render: (m) => <Cell>{m.material_code}</Cell> },
   { label: 'Material Name', sortKey: 'material_name', render: (m) => <Cell>{m.material_name}</Cell> },
-  { label: 'Material Type', sortKey: 'material_type', render: (m) => <Cell>{m.material_type?.material_type_name}</Cell> },
+  {
+    label: 'Material Type',
+    sortKey: 'material_type',
+    render: (m) => <Cell>{m.material_type?.material_type_name}</Cell>,
+  },
   {
     label: 'Material Category Name',
     sortKey: 'material_category',
@@ -40,35 +44,22 @@ export default function MaterialsPage() {
   const { has } = useAuth();
   const navigate = useNavigate();
   const canUpdate = has('materials:update');
-  const [syncOpen, setSyncOpen] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
+  const toast = useToast();
 
   return (
-    <>
-      <MasterList<Material>
-        endpoint="/materials"
-        columns={COLUMNS}
-        reloadKey={reloadKey}
-        menuActions={
-          has('materials:sync')
-            ? [{ label: 'Sync from ERP', icon: icons.cloudSync, onClick: () => setSyncOpen(true) }]
-            : []
-        }
-        rowActions={(m) => [
-          {
-            label: canUpdate ? 'Edit' : 'View',
-            icon: canUpdate ? icons.pencil : icons.eye,
-            onClick: () => navigate(`/admin/materials/${m.id}/edit`),
-          },
-        ]}
-      />
-      <ErpSyncModal
-        open={syncOpen}
-        onClose={() => setSyncOpen(false)}
-        base="/materials"
-        noun="materials"
-        onSynced={() => setReloadKey((k) => k + 1)}
-      />
-    </>
+    <MasterList<Material>
+      endpoint="/materials"
+      columns={COLUMNS}
+      // Refresh pulls the latest from Oracle first (with the sync permission).
+      onRefresh={has('materials:sync') ? () => syncFromErp('/materials', 'materials', toast) : undefined}
+      refreshTitle={has('materials:sync') ? 'Sync from ERP' : undefined}
+      rowActions={(m) => [
+        {
+          label: canUpdate ? 'Edit' : 'View',
+          icon: canUpdate ? icons.pencil : icons.eye,
+          onClick: () => navigate(`/admin/materials/${m.id}/edit`),
+        },
+      ]}
+    />
   );
 }

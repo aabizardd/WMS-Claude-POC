@@ -1,16 +1,15 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { syncFromErp } from '../../../components/master/erpSync';
 import api from '../../../lib/api';
 import { downloadFile } from '../../../lib/download';
 import ExportConfirmModal, { type ExportScope, type ExportSummary } from '../../../components/ExportConfirmModal';
-import Modal from '../../../components/Modal';
 import type {
   Paginated,
   PurchaseOrderFilter,
   PurchaseOrderFilterField,
   PurchaseOrderLine,
   PurchaseOrderRow,
-  PurchaseOrderSyncResult,
 } from '../../../types';
 import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
@@ -35,7 +34,6 @@ import {
   expandableRowClass,
   stickyActionsCellClass,
 } from '../../../components/ListView';
-import { apiError } from '../transfer/transferInbound';
 import PoLinesTable from './PoLinesTable';
 
 /** WMS dev's status filter: the Oracle statuses a PO can be received in. */
@@ -190,12 +188,7 @@ export default function PoRequestListPage() {
     }
   }
 
-  const [syncOpen, setSyncOpen] = useState(false);
-  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
-  const [lastSyncLoading, setLastSyncLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [syncError, setSyncError] = useState('');
-  const [syncResult, setSyncResult] = useState<PurchaseOrderSyncResult | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -228,34 +221,14 @@ export default function PoRequestListPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, appliedKey]);
 
-  async function openSync() {
-    setSyncError('');
-    setSyncResult(null);
-    setSyncOpen(true);
-    setLastSyncLoading(true);
-    try {
-      const r = await api.get<{ lastSyncAt: string | null }>('/purchase-orders/erp-last-sync');
-      setLastSyncAt(r.data.lastSyncAt);
-    } catch {
-      setLastSyncAt(null);
-    } finally {
-      setLastSyncLoading(false);
-    }
-  }
-
-  async function handleSync(e: FormEvent) {
-    e.preventDefault();
-    setSyncError('');
-    setSyncResult(null);
+  /** Refresh with the sync permission: pull the latest from Oracle straight away, then show the list again. */
+  async function runSync() {
+    if (syncing) return;
     setSyncing(true);
     try {
-      const payload = lastSyncAt ? { lastModified: lastSyncAt } : {};
-      const r = await api.post<PurchaseOrderSyncResult>('/purchase-orders/sync-erp', payload);
-      setSyncResult(r.data);
+      await syncFromErp('/purchase-orders', 'purchase orders', toast);
       setPage(1);
       setReloadKey((k) => k + 1);
-    } catch (err) {
-      setSyncError(apiError(err, 'Sync failed'));
     } finally {
       setSyncing(false);
     }
@@ -363,7 +336,7 @@ export default function PoRequestListPage() {
               {/* Refresh pulls the latest orders from Oracle; without the sync
                   permission it just reloads what WMS already has. */}
               <RefreshButton
-                onClick={() => (canSync ? openSync() : setReloadKey((k) => k + 1))}
+                onClick={() => (canSync ? runSync() : setReloadKey((k) => k + 1))}
                 spinning={loading || syncing}
                 title={canSync ? 'Sync from ERP' : 'Refresh'}
               />
@@ -535,49 +508,6 @@ export default function PoRequestListPage() {
         />
       </div>
 
-      <Modal open={syncOpen} title="Sync Purchase Orders from ERP" onClose={() => (syncing ? null : setSyncOpen(false))}>
-        <form onSubmit={handleSync} className="space-y-4">
-          {syncError && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{syncError}</div>
-          )}
-          <p className="text-sm text-slate-500">
-            Pull purchase orders (all statuses) from Oracle. Incremental by last modified; existing orders are updated
-            in place.
-          </p>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
-            {lastSyncLoading ? (
-              <span className="text-slate-400">Checking last sync time…</span>
-            ) : lastSyncAt ? (
-              <>
-                <div className="text-slate-500">Last sync (created_at)</div>
-                <div className="font-medium text-slate-800">{new Date(lastSyncAt).toLocaleString()}</div>
-              </>
-            ) : (
-              <div className="font-medium text-slate-800">No previous sync — a full sync will run.</div>
-            )}
-          </div>
-          {syncResult && (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-              <div className="font-medium">{syncResult.fullSync ? 'Full sync' : 'Incremental sync'} complete</div>
-              <ul className="mt-1 space-y-0.5 text-emerald-700">
-                <li>Total records: {syncResult.totalRecords}</li>
-                <li>PO upserted: {syncResult.upserted}</li>
-                <li>Skipped (malformed): {syncResult.skipped}</li>
-                <li>Failed: {syncResult.failed}</li>
-                <li>Duration: {(syncResult.durationMs / 1000).toFixed(1)}s</li>
-              </ul>
-            </div>
-          )}
-          <div className="flex justify-end gap-2 pt-2">
-            <button type="button" className="btn-secondary" onClick={() => setSyncOpen(false)} disabled={syncing}>
-              {syncResult ? 'Close' : 'Cancel'}
-            </button>
-            <button type="submit" className="btn-primary" disabled={syncing || lastSyncLoading}>
-              {syncing ? 'Syncing…' : 'Start sync'}
-            </button>
-          </div>
-        </form>
-      </Modal>
     </div>
   );
 }

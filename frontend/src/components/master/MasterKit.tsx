@@ -242,10 +242,18 @@ export function RowMenu({ actions }: { actions: MenuAction[] }) {
   );
 }
 
-export function RefreshButton({ onClick }: { onClick: () => void }) {
+export function RefreshButton({ onClick, busy = false, title = 'Refresh' }: { onClick: () => void; busy?: boolean; title?: string }) {
   return (
-    <button type="button" className={ICON_BTN} onClick={onClick} title="Refresh" aria-label="Refresh">
-      <Lucide>{icons.refresh}</Lucide>
+    <button
+      type="button"
+      className={`${ICON_BTN} disabled:cursor-wait disabled:opacity-70`}
+      onClick={onClick}
+      disabled={busy}
+      title={title}
+      aria-label={title}
+      aria-busy={busy}
+    >
+      <Lucide className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`}>{icons.refresh}</Lucide>
     </button>
   );
 }

@@ -40,7 +40,6 @@ export interface RequestGrExportRow {
   gr: {
     gr_number: string;
     status: string;
-    bin: string | null;
     planned_qty: number;
     actual_qty: number;
     putaway_qty: number;
@@ -83,7 +82,6 @@ function columns(kind: RequestKind): ExportColumn<Row>[] {
     { header: 'Remain Quantity', width: 16, value: (r) => r.line?.remain_qty ?? null },
     { header: 'GR ID', width: 20, value: (r) => r.gr?.gr_number ?? null },
     { header: 'GR Status', width: 13, value: (r) => (r.gr ? words(r.gr.status) : null) },
-    { header: 'GR Bin', width: 22, value: (r) => r.gr?.bin ?? null },
     { header: 'GR Planned Qty', width: 15, value: (r) => r.gr?.planned_qty ?? null },
     { header: 'GR Actual Qty', width: 14, value: (r) => r.gr?.actual_qty ?? null },
     { header: 'GR Putaway Qty', width: 15, value: (r) => r.gr?.putaway_qty ?? null },
@@ -124,7 +122,6 @@ export const grItemSelect = {
   qty: true,
   qtyActual: true,
   qtyRemaining: true,
-  bin: { select: { binLabel: true } },
   goodsReceive: {
     select: { grNumber: true, status: true, createdAt: true, updatedAt: true, createdBy: { select: { name: true } } },
   },
@@ -134,14 +131,12 @@ export function grOf(it: {
   qty: number;
   qtyActual: number;
   qtyRemaining: number;
-  bin: { binLabel: string | null } | null;
   goodsReceive: { grNumber: string; status: string; createdAt: Date; updatedAt: Date; createdBy: { name: string } | null };
 }): NonNullable<Row['gr']> {
   const received = it.goodsReceive.status === 'Closed';
   return {
     gr_number: it.goodsReceive.grNumber,
     status: it.goodsReceive.status,
-    bin: it.bin?.binLabel ?? null,
     ...grLineQty(it, received),
     created_by: it.goodsReceive.createdBy?.name ?? null,
     created_at: it.goodsReceive.createdAt,

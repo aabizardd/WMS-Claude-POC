@@ -176,6 +176,8 @@ export interface InventoryExportRow {
   qty_freeze: number;
   qty_reserved: number;
   qty_in_transit: number;
+  qty_quantity_issue: number;
+  qty_quality_issue: number;
 }
 
 interface StockDelta {
@@ -344,6 +346,8 @@ export class InventoryService {
             qty_freeze: q.freeze_qty,
             qty_reserved: q.reserved_qty,
             qty_in_transit: q.in_transit_qty,
+            qty_quantity_issue: q.qty_issue,
+            qty_quality_issue: q.quality_issue,
           });
         }
       }

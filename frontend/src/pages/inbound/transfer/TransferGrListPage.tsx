@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../../lib/api';
 import { downloadFile } from '../../../lib/download';
+import ExportConfirmModal, { type ExportScope, type ExportSummary } from '../../../components/ExportConfirmModal';
 import type { Paginated, TransferGrFilter, TransferGrFilterField, TransferGrListLine, TransferGrRow } from '../../../types';
 import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
@@ -188,16 +189,34 @@ export default function TransferGrListPage({ source = TRANSFER_IN }: { source?: 
   };
   const appliedKey = JSON.stringify(applied);
   const [exporting, setExporting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
-  /** Every GR the filters match, one row per line (list + accordion columns), in the list's order. */
-  async function exportExcel() {
+  function loadExportSummary() {
+    return api
+      .get<ExportSummary>(`${source.api}/goods-receive/export/summary`, {
+        params: { status: status || undefined, filters: applied.length ? appliedKey : undefined },
+      })
+      .then((r) => r.data);
+  }
+
+  /**
+   * Filtered: every GR the status and filters match (not only this page); all:
+   * every GR, any status. One row per line (list + accordion columns), in the list's order.
+   */
+  async function exportExcel(scope: ExportScope) {
     if (exporting) return;
+    setExportOpen(false);
     setExporting(true);
     toast.info('Preparing the export…');
     try {
       await downloadFile(
         `${source.api}/goods-receive/export`,
-        { status: status || undefined, filters: applied.length ? appliedKey : undefined, ...params() },
+        {
+          ...(scope === 'filtered'
+            ? { status: status || undefined, filters: applied.length ? appliedKey : undefined }
+            : {}),
+          ...params(),
+        },
         `${source.code.toLowerCase()}_goods_receive_export.xlsx`,
       );
     } catch {
@@ -317,7 +336,7 @@ export default function TransferGrListPage({ source = TRANSFER_IN }: { source?: 
             {
               label: exporting ? 'Exporting…' : 'Export',
               icon: <ExportIcon />,
-              onClick: exportExcel,
+              onClick: () => setExportOpen(true),
             },
           ]}
         />
@@ -368,6 +387,20 @@ export default function TransferGrListPage({ source = TRANSFER_IN }: { source?: 
       </div>
 
       {/* Nothing here searches until Apply. */}
+      <ExportConfirmModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        documentLabel="GRs"
+        filters={[
+          ...(status ? [{ label: 'Status', value: STATUSES.find(([v]) => v === status)?.[1] ?? status }] : []),
+          ...applied.map((f) => ({
+            label: fieldLabel(f.field),
+            value: f.values.map((v) => (f.field === 'created_at' ? formatRangeValue(v) : v)).join(' or '),
+          })),
+        ]}
+        loadSummary={loadExportSummary}
+        onConfirm={exportExcel}
+      />
       <ExtraFiltersModal open={extraOpen} onClose={closeExtras} onReset={resetExtras} onApply={applyExtras}>
         {EXTRA_FIELDS.map((f) => (
           <FilterField key={f.value} label={f.label}>
