@@ -1,9 +1,9 @@
-import { useState } from 'react';
 import type { Subsidiary } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import MasterList, { type MasterColumn } from '../../components/master/MasterList';
-import ErpSyncModal from '../../components/master/ErpSyncModal';
-import { Cell, StatusPill, fmtDateTime, icons } from '../../components/master/MasterKit';
+import { syncFromErp } from '../../components/master/erpSync';
+import { useToast } from '../../context/ToastContext';
+import { Cell, StatusPill, fmtDateTime } from '../../components/master/MasterKit';
 
 // Synced from Oracle (read-only), so rows have no actions.
 const COLUMNS: MasterColumn<Subsidiary>[] = [
@@ -17,28 +17,15 @@ const COLUMNS: MasterColumn<Subsidiary>[] = [
 
 export default function SubsidiariesPage() {
   const { has } = useAuth();
-  const [syncOpen, setSyncOpen] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
+  const toast = useToast();
 
   return (
-    <>
-      <MasterList<Subsidiary>
-        endpoint="/subsidiaries"
-        columns={COLUMNS}
-        reloadKey={reloadKey}
-        menuActions={
-          has('subsidiaries:sync')
-            ? [{ label: 'Sync from ERP', icon: icons.cloudSync, onClick: () => setSyncOpen(true) }]
-            : []
-        }
-      />
-      <ErpSyncModal
-        open={syncOpen}
-        onClose={() => setSyncOpen(false)}
-        base="/subsidiaries"
-        noun="subsidiaries"
-        onSynced={() => setReloadKey((k) => k + 1)}
-      />
-    </>
+    <MasterList<Subsidiary>
+      endpoint="/subsidiaries"
+      columns={COLUMNS}
+      // Refresh pulls the latest from Oracle first (with the sync permission).
+      onRefresh={has('subsidiaries:sync') ? () => syncFromErp('/subsidiaries', 'subsidiaries', toast) : undefined}
+      refreshTitle={has('subsidiaries:sync') ? 'Sync from ERP' : undefined}
+    />
   );
 }

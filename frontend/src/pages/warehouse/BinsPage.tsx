@@ -72,6 +72,7 @@ export default function BinsPage() {
       reloadKey={reloadKey}
       addLabel={canCreate ? 'Add Bin Location' : undefined}
       onAdd={() => navigate('/admin/bins/new')}
+      exportConfig={{ documentLabel: 'Bins', fileName: 'bin_export.xlsx' }}
       rowActions={(b) => [
         {
           label: canUpdate ? 'Edit' : 'View',

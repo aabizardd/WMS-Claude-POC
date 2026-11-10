@@ -29,17 +29,11 @@ import {
   stickyActionsCellClass,
 } from '../../../components/ListView';
 import PibGrLinesTable from './PibGrLinesTable';
-import PibSyncModal from './PibSyncModal';
+import { syncFromErp } from '../../../components/master/erpSync';
+import type { ErpSyncResult } from '../../../types';
 
 const BASE = '/admin/inbound/pib';
 
-function SyncIcon() {
-  return (
-    <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24" aria-hidden>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h5M20 20v-5h-5M5 19a9 9 0 0014.13-3M19 5A9 9 0 004.87 8" />
-    </svg>
-  );
-}
 /** Server-side cap on values within one filter. */
 const MAX_VALUES = 10;
 /** Without a material filter an open row shows at most this many lines. */
@@ -139,7 +133,22 @@ export default function PibGrListPage() {
   const navigate = useNavigate();
   const { has } = useAuth();
   const toast = useToast();
-  const [syncOpen, setSyncOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const canSync = has('mrn:sync');
+
+  /** Refresh with the sync permission: pull new PIB from Oracle straight away (each gets an Open GR), then reload. */
+  async function runSync() {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      await syncFromErp<ErpSyncResult & { goodsReceiveCreated: number }>('/mrn', 'PIB', toast, (r) =>
+        r.goodsReceiveCreated ? `${r.goodsReceiveCreated.toLocaleString()} GR created` : null,
+      );
+      setReloadKey((k) => k + 1);
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   const [searchParams, setSearchParams] = useSearchParams();
   const [initial] = useState(() => ({ filters: readFilters(searchParams), status: searchParams.get('status') ?? '' }));
@@ -308,7 +317,6 @@ export default function PibGrListPage() {
           title="Goods Receive - PIB"
           subtitle="Validate and receive goods into the system for pib"
           menu={[
-            ...(has('mrn:sync') ? [{ label: 'Sync from ERP', icon: <SyncIcon />, onClick: () => setSyncOpen(true) }] : []),
             {
               label: exporting ? 'Exporting…' : 'Export',
               icon: <ExportIcon />,
@@ -333,7 +341,12 @@ export default function PibGrListPage() {
           toolbar={
             <>
               <ExpandAllButton anyOpen={anyOpen} onClick={toggleAll} disabled={rows.length === 0} />
-              <RefreshButton onClick={() => setReloadKey((k) => k + 1)} spinning={loading} title="Refresh" />
+              {/* Refresh pulls new PIB from Oracle; without the sync permission it only reloads. */}
+              <RefreshButton
+                onClick={() => (canSync ? runSync() : setReloadKey((k) => k + 1))}
+                spinning={loading || syncing}
+                title={canSync ? 'Sync from ERP' : 'Refresh'}
+              />
             </>
           }
         >
@@ -464,7 +477,7 @@ export default function PibGrListPage() {
               ) : (
                 <tr>
                   <td colSpan={COLS} className="px-6 py-10 text-center text-slate-400">
-                    {applied.length > 0 || status ? 'No Goods Receive matches the filters.' : 'No Goods Receive yet. Sync PIB from ERP from the ☰ menu.'}
+                    {applied.length > 0 || status ? 'No Goods Receive matches the filters.' : 'No Goods Receive yet. Sync PIB from ERP with the refresh button.'}
                   </td>
                 </tr>
               )}
@@ -486,7 +499,6 @@ export default function PibGrListPage() {
         />
       </div>
 
-      <PibSyncModal open={syncOpen} onClose={() => setSyncOpen(false)} onSynced={() => setReloadKey((k) => k + 1)} />
 
       <ExportConfirmModal
         open={exportOpen}

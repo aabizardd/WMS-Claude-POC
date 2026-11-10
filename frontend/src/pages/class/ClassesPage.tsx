@@ -1,9 +1,9 @@
-import { useState } from 'react';
 import type { ClassMaster } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import MasterList, { type MasterColumn } from '../../components/master/MasterList';
-import ErpSyncModal from '../../components/master/ErpSyncModal';
-import { Cell, StatusPill, fmtDateTime, icons } from '../../components/master/MasterKit';
+import { syncFromErp } from '../../components/master/erpSync';
+import { useToast } from '../../context/ToastContext';
+import { Cell, StatusPill, fmtDateTime } from '../../components/master/MasterKit';
 
 // Synced from Oracle (read-only), so rows have no actions.
 const COLUMNS: MasterColumn<ClassMaster>[] = [
@@ -18,28 +18,15 @@ const COLUMNS: MasterColumn<ClassMaster>[] = [
 
 export default function ClassesPage() {
   const { has } = useAuth();
-  const [syncOpen, setSyncOpen] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
+  const toast = useToast();
 
   return (
-    <>
-      <MasterList<ClassMaster>
-        endpoint="/classes"
-        columns={COLUMNS}
-        reloadKey={reloadKey}
-        menuActions={
-          has('classes:sync')
-            ? [{ label: 'Sync from ERP', icon: icons.cloudSync, onClick: () => setSyncOpen(true) }]
-            : []
-        }
-      />
-      <ErpSyncModal
-        open={syncOpen}
-        onClose={() => setSyncOpen(false)}
-        base="/classes"
-        noun="classes"
-        onSynced={() => setReloadKey((k) => k + 1)}
-      />
-    </>
+    <MasterList<ClassMaster>
+      endpoint="/classes"
+      columns={COLUMNS}
+      // Refresh pulls the latest from Oracle first (with the sync permission).
+      onRefresh={has('classes:sync') ? () => syncFromErp('/classes', 'classes', toast) : undefined}
+      refreshTitle={has('classes:sync') ? 'Sync from ERP' : undefined}
+    />
   );
 }

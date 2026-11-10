@@ -386,6 +386,21 @@ export class TransferInboundService {
     };
   }
 
+  /** The export confirmation's numbers, counted from the export rows themselves so they match the file. */
+  async exportSummary(source: InboundSource, q: QueryTransferInboundDto, scope: WarehouseScope) {
+    const count = async (query: QueryTransferInboundDto) => {
+      const grs = new Set<string>();
+      let rows = 0;
+      for await (const batch of this.exportRows(source, query, scope)) {
+        rows += batch.length;
+        for (const r of batch) grs.add(r.gr_number);
+      }
+      return { documents: grs.size, rows };
+    };
+    const [filtered, all] = await Promise.all([count(q), count({} as QueryTransferInboundDto)]);
+    return { filtered, all };
+  }
+
   /**
    * The Goods Receive list's export: one row per GR line — the list's GR
    * columns repeated on each of its accordion lines — for every GR the list's

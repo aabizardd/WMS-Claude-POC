@@ -22,7 +22,7 @@ describe('Inventory List export', () => {
       materialCode: 'M-1',
       material: { materialName: 'BOLT', primaryUom: { uomCode: 'PCS' } },
       warehouse: { name: 'Jakarta - IEL' },
-      binStocks: [bs('KIT A1-01', 'K1', { availQty: 5 }), bs('Rack B', 'RB', { availQty: 2, reservedQty: 1 }), bs('Rack C', 'RC')],
+      binStocks: [bs('KIT A1-01', 'K1', { availQty: 5 }), bs('Rack B', 'RB', { availQty: 2, reservedQty: 1 }), bs('Rack C', 'RC', { qtyIssue: 4, qualityIssue: 3 })],
     };
     const findMany = jest.fn().mockResolvedValue([inv]);
     const service = new InventoryService({ inventoryManagement: { findMany } } as never);
@@ -30,10 +30,15 @@ describe('Inventory List export', () => {
 
     const all = [];
     for await (const rows of service.exportRows({}, scope)) all.push(...rows);
-    expect(all.map((r) => [r.bin_label, r.qty_on_hand, r.qty_available, r.qty_freeze, r.qty_reserved])).toEqual([
-      ['KIT A1-01', 5, 0, 5, 0],
-      ['Rack B', 3, 2, 0, 1],
-      ['Rack C', 0, 0, 0, 0],
+    expect(all.map((r) => [r.bin_label, r.qty_available, r.qty_freeze, r.qty_reserved])).toEqual([
+      ['KIT A1-01', 0, 5, 0],
+      ['Rack B', 2, 0, 1],
+      ['Rack C', 0, 0, 0],
+    ]);
+    expect(all.map((r) => [r.qty_quantity_issue, r.qty_quality_issue])).toEqual([
+      [0, 0],
+      [0, 0],
+      [4, 3],
     ]);
 
     const kit = [];

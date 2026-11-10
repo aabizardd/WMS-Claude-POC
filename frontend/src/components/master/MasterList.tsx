@@ -1,5 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import api from '../../lib/api';
+import { downloadFile } from '../../lib/download';
+import { useToast } from '../../context/ToastContext';
+import ExportConfirmModal, { type ExportScope, type ExportSummary } from '../ExportConfirmModal';
+import { ExportIcon } from '../ToolbarMenu';
 import type { Paginated } from '../../types';
 import { useSort } from '../../hooks/useSort';
 import {
@@ -20,6 +24,14 @@ export interface MasterColumn<T> {
   render: (row: T) => ReactNode;
 }
 
+/** Turns on the ☰ menu's Export: `${endpoint}/export` and `/export/summary`, behind the confirmation. */
+export interface MasterExport {
+  /** What the confirmation counts, e.g. "Bins". */
+  documentLabel: string;
+  /** The download's name when the server sends none. */
+  fileName: string;
+}
+
 /**
  * A Master Data list laid out exactly like WMS dev's: search box with the
  * ☰ / refresh / add buttons, a "No"-first table whose Actions column sticks to
@@ -35,6 +47,9 @@ export default function MasterList<T extends { id: string | number }>({
   menuActions = [],
   reloadKey = 0,
   searchPlaceholder,
+  exportConfig,
+  onRefresh,
+  refreshTitle,
 }: {
   endpoint: string;
   columns: MasterColumn<T>[];
@@ -44,7 +59,15 @@ export default function MasterList<T extends { id: string | number }>({
   menuActions?: MenuAction[];
   reloadKey?: number;
   searchPlaceholder?: string;
+  exportConfig?: MasterExport;
+  /** Runs on the refresh button (e.g. a sync from Oracle) before the list is fetched again. */
+  onRefresh?: () => Promise<unknown>;
+  refreshTitle?: string;
 }) {
+  const [refreshing, setRefreshing] = useState(false);
+  const toast = useToast();
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [data, setData] = useState<Paginated<T> | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -82,6 +105,50 @@ export default function MasterList<T extends { id: string | number }>({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [endpoint, page, pageSize, search, sort.sortBy, sort.order, reloadKey, tick]);
 
+  function loadExportSummary() {
+    return api
+      .get<ExportSummary>(`${endpoint}/export/summary`, { params: { search: search || undefined } })
+      .then((r) => r.data);
+  }
+
+  /** Filtered: every row the search matches (not only this page); all: every row. In the list's order. */
+  async function exportExcel(scope: ExportScope) {
+    if (!exportConfig || exporting) return;
+    setExportOpen(false);
+    setExporting(true);
+    toast.info('Preparing the export…');
+    try {
+      await downloadFile(
+        `${endpoint}/export`,
+        { ...(scope === 'filtered' ? { search: search || undefined } : {}), ...params() },
+        exportConfig.fileName,
+      );
+    } catch {
+      toast.error('Export failed. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function refresh() {
+    if (onRefresh) {
+      setRefreshing(true);
+      try {
+        await onRefresh();
+      } finally {
+        setRefreshing(false);
+      }
+    }
+    setTick((t) => t + 1);
+  }
+
+  const toolbarActions: MenuAction[] = [
+    ...menuActions,
+    ...(exportConfig
+      ? [{ label: exporting ? 'Exporting…' : 'Export', icon: <ExportIcon />, onClick: () => setExportOpen(true) }]
+      : []),
+  ];
+
   const rows = data?.rows ?? [];
   const hasActions = !!rowActions;
   const colSpan = columns.length + 1 + (hasActions ? 1 : 0);
@@ -97,8 +164,8 @@ export default function MasterList<T extends { id: string | number }>({
           <SearchBox value={searchInput} onChange={setSearchInput} placeholder={searchPlaceholder} />
         </div>
         <div className="flex w-full items-end justify-end gap-2.5">
-          {menuActions.length > 0 && <ToolbarActions actions={menuActions} />}
-          <RefreshButton onClick={() => setTick((t) => t + 1)} />
+          {toolbarActions.length > 0 && <ToolbarActions actions={toolbarActions} />}
+          <RefreshButton onClick={refresh} busy={refreshing} title={refreshTitle} />
           {addLabel && onAdd && <AddButton label={addLabel} onClick={onAdd} />}
         </div>
       </div>
@@ -201,6 +268,16 @@ export default function MasterList<T extends { id: string | number }>({
           }}
         />
       </div>
+      {exportConfig && (
+        <ExportConfirmModal
+          open={exportOpen}
+          onClose={() => setExportOpen(false)}
+          documentLabel={exportConfig.documentLabel}
+          filters={search ? [{ label: 'Search', value: search }] : []}
+          loadSummary={loadExportSummary}
+          onConfirm={exportExcel}
+        />
+      )}
     </div>
   );
 }

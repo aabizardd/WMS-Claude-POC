@@ -32,6 +32,13 @@ abstract class InboundScreensController {
     await writeGrXlsx(this.source, this.service.exportRows(this.source, q, user), res);
   }
 
+  /** The export confirmation's numbers: GRs and rows for the current status and filters, and for all data. */
+  @Get('goods-receive/export/summary')
+  @RequirePermissions('goods-receive:read')
+  exportSummary(@Query() q: QueryTransferInboundDto, @CurrentUser() user: AuthUser) {
+    return this.service.exportSummary(this.source, q, user);
+  }
+
   @Get('goods-receive/:id')
   @RequirePermissions('goods-receive:read')
   goodsReceive(@Param('id') id: string, @CurrentUser() user: AuthUser) {

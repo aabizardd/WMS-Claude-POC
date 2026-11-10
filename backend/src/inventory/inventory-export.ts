@@ -21,6 +21,8 @@ const COLUMNS = [
   col('qty_freeze', 18),
   col('qty_reserved', 18),
   col('qty_in_transit', 18),
+  col('qty_quantity_issue', 20),
+  col('qty_quality_issue', 20),
 ];
 
 /** "inventory_details-2026-10-29_131633-WIB.xlsx", as WMS dev names it. */
