@@ -21,7 +21,7 @@ jobs:
           echo "${{ secrets.POC_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
 
       - name: Jalankan deploy di server
-        run: ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes -p 2222 panji@${{ secrets.POC_HOST }} deploy
+        run: ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes -p 2222 itiserv@${{ secrets.POC_HOST }} deploy
 
       - name: Hapus key dari runner
         if: always()
