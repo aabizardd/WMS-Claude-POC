@@ -97,6 +97,13 @@ export class InventoryAdjustmentsController {
     await writeIaXlsx(this.service.exportRows(query, user), res);
   }
 
+  /** The export confirmation's numbers: documents and rows, filtered and all. */
+  @Get('export/summary')
+  @RequirePermissions('inventory-adjustments:read')
+  exportSummary(@Query() query: QueryInventoryAdjustmentDto, @CurrentUser() user: AuthUser) {
+    return this.service.exportSummary(query, user);
+  }
+
   /** One page of the document's lines: searched, filtered, sorted and paged server-side. */
   @Get(':id/items')
   @RequirePermissions('inventory-adjustments:read')

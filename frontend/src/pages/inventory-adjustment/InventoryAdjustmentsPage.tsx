@@ -12,6 +12,7 @@ import DateRangeInput, { formatRangeValue } from '../../components/DateRangeInpu
 import TablePager from '../../components/TablePager';
 import RowActionMenu from '../../components/RowActionMenu';
 import { ExportIcon } from '../../components/ToolbarMenu';
+import ExportConfirmModal, { type ExportScope, type ExportSummary } from '../../components/ExportConfirmModal';
 import ColumnSettings, { useColumnVisibility } from '../../components/ColumnSettings';
 import {
   AccordionPanelRow,
@@ -159,16 +160,36 @@ export default function InventoryAdjustmentsPage() {
   };
   const appliedKey = JSON.stringify(applied);
   const [exporting, setExporting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
-  /** Every row the filters match, one per line (list + accordion columns), in the list's order. */
-  async function exportExcel() {
+  /** The confirmation's numbers, counted by the backend for both options. */
+  function loadExportSummary() {
+    return api
+      .get<ExportSummary>('/inventory-adjustments/export/summary', {
+        params: { status: status || undefined, filters: applied.length ? appliedKey : undefined },
+      })
+      .then((r) => r.data);
+  }
+
+  /**
+   * Filtered: every row the status and filters match (not only this page);
+   * all: every adjustment, any status. One row per line (list + accordion
+   * columns), in the list's order.
+   */
+  async function exportExcel(scope: ExportScope) {
     if (exporting) return;
+    setExportOpen(false);
     setExporting(true);
     toast.info('Preparing the export…');
     try {
       await downloadFile(
         '/inventory-adjustments/export',
-        { status: status || undefined, filters: applied.length ? appliedKey : undefined, ...params() },
+        {
+          ...(scope === 'filtered'
+            ? { status: status || undefined, filters: applied.length ? appliedKey : undefined }
+            : {}),
+          ...params(),
+        },
         'inventory_adjustment_export.xlsx',
       );
     } catch {
@@ -311,7 +332,7 @@ export default function InventoryAdjustmentsPage() {
         <ListHeader
           title="Inventory Adjustment"
           subtitle="Manage stock adjustments, resolve discrepancies, and track approval status"
-          menu={[{ label: exporting ? 'Exporting…' : 'Export', icon: <ExportIcon />, onClick: exportExcel }]}
+          menu={[{ label: exporting ? 'Exporting…' : 'Export', icon: <ExportIcon />, onClick: () => setExportOpen(true) }]}
           actions={
             canCreate && (
               <Link to={`${BASE}/new`} className="btn-primary">
@@ -368,6 +389,21 @@ export default function InventoryAdjustmentsPage() {
       </div>
 
       {/* Nothing here searches until Apply. */}
+      <ExportConfirmModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        documentLabel="Adjustments"
+        filters={[
+          ...(status ? [{ label: 'Status', value: IA_STATUSES.find(([v]) => v === status)?.[1] ?? status }] : []),
+          ...applied.map((f) => ({
+            label: fieldLabel(f.field),
+            value: f.values.map((v) => (f.field === 'created_at' ? formatRangeValue(v) : v)).join(' or '),
+          })),
+        ]}
+        loadSummary={loadExportSummary}
+        onConfirm={exportExcel}
+      />
+
       <ExtraFiltersModal open={extraOpen} onClose={closeExtras} onReset={resetExtras} onApply={applyExtras}>
         {EXTRA_FIELDS.map((f) => (
           <FilterField key={f.value} label={f.label}>
