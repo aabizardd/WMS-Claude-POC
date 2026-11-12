@@ -1907,6 +1907,25 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
     }
   }
 
+  /**
+   * The export confirmation's numbers: documents (adjustments) and rows for
+   * the list's status and filters and for every one the user can see,
+   * counted by walking exportRows() — exactly what the file would hold.
+   */
+  async exportSummary(query: IaListQuery, scope: WarehouseScope) {
+    const count = async (q: IaListQuery) => {
+      const docs = new Set<string>();
+      let rows = 0;
+      for await (const batch of this.exportRows(q, scope)) {
+        rows += batch.length;
+        for (const r of batch) docs.add(r.adjustment_number);
+      }
+      return { documents: docs.size, rows };
+    };
+    const [filtered, all] = await Promise.all([count(query), count({})]);
+    return { filtered, all };
+  }
+
   /** Create-form default: the signed-in user's own department. */
   async defaults(scope: WarehouseScope) {
     const user = await this.prisma.user.findUnique({

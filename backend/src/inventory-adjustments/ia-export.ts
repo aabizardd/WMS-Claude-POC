@@ -20,7 +20,6 @@ const passedMode = (r: Row) => r.qty_mode === 'passed_non_passed';
 const COLUMNS: ExportColumn<Row>[] = [
   { header: 'Status', width: 18, value: (r) => STATUS_LABELS[r.status] ?? r.status },
   { header: 'Adjustment ID', width: 20, value: (r) => r.adjustment_number },
-  { header: 'Transaction ID', width: 20, value: (r) => r.transaction_id },
   { header: 'Warehouse', width: 24, value: (r) => r.warehouse },
   { header: 'Type', width: 20, value: (r) => r.adjustment_type_label },
   { header: 'Bins', width: 8, value: (r) => r.bin_count },
