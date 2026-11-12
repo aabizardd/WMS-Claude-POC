@@ -21,6 +21,7 @@ import { isFrozenBinLabel, usableBinStockWhere } from '../common/frozen-bins';
 import { parseDateRange } from '../common/date-range.util';
 import { subsidiarySingleFilter } from '../common/subsidiary-filter';
 import {
+  CREATABLE_IA_TYPES,
   IA_TYPES,
   buildOracleMemo,
   ruleFor,
@@ -255,17 +256,25 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
     materialIds: string[],
     binIds: string[],
     excludeId?: string,
+    /**
+     * 'available': reductions of the free-signed types. 'quality': the Quality
+     * Issue Quality Adjustments are already deciding (Passed + Non-Passed).
+     */
+    bucket: 'available' | 'quality' = 'available',
   ) {
+    const quality = bucket === 'quality';
     const rows = await this.prisma.inventoryAdjustmentItem.findMany({
       where: {
         materialId: { in: materialIds },
         binId: { in: binIds },
-        qtyAdjustment: { lt: 0 },
+        ...(quality ? {} : { qtyAdjustment: { lt: 0 } }),
         adjustment: {
           status: { in: PENDING_STATUSES },
-          // Only the free-signed types draw on Available; the discrepancy types
-          // clear Quantity/Quality Issue instead.
-          adjustmentType: { in: IA_TYPES.filter((t) => ruleFor(t).qtyMode === 'free_signed') },
+          // Only the free-signed types draw on Available; Quality Adjustment
+          // draws on Quality Issue; Discrepancy Quantity clears its bucket.
+          adjustmentType: quality
+            ? 'QualityAdjustment'
+            : { in: IA_TYPES.filter((t) => ruleFor(t).qtyMode === 'free_signed') },
           ...(excludeId ? { id: { not: excludeId } } : {}),
         },
       },
@@ -273,6 +282,8 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
         materialId: true,
         binId: true,
         qtyAdjustment: true,
+        qtyPassed: true,
+        qtyNonPassed: true,
         adjustment: {
           select: {
             id: true,
@@ -291,7 +302,7 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
     for (const r of rows) {
       const key = `${r.materialId}|${r.binId}`;
       const entry = byKey.get(key) ?? { qty: 0, docs: [] };
-      const qty = -r.qtyAdjustment;
+      const qty = quality ? r.qtyPassed + r.qtyNonPassed : -r.qtyAdjustment;
       entry.qty += qty;
       entry.docs.push({
         id: r.adjustment.id,
@@ -305,10 +316,11 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
     return byKey;
   }
 
+  /** A type a new document may use (the create form and its lookups). */
   private parseType(value: string | undefined): InventoryAdjustmentType {
-    if (!value || !IA_TYPES.includes(value as InventoryAdjustmentType)) {
+    if (!value || !CREATABLE_IA_TYPES.includes(value as InventoryAdjustmentType)) {
       throw new BadRequestException(
-        `IA Type is required and must be one of: ${IA_TYPES.join(', ')}`,
+        `IA Type is required and must be one of: ${CREATABLE_IA_TYPES.join(', ')}`,
       );
     }
     return value as InventoryAdjustmentType;
@@ -456,6 +468,8 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
     const holds = await this.pendingHolds(
       [materialId],
       stocks.map((s) => s.binId!),
+      undefined,
+      rule.qtyMode === 'passed_non_passed' ? 'quality' : 'available',
     );
 
     return stocks.map((bs) => {
@@ -634,7 +648,12 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
     const stockByKey = new Map(
       stocks.map((st) => [`${st.inventory.materialId}|${st.binId}`, st]),
     );
-    const holds = await this.pendingHolds(materialIds, binIds);
+    const holds = await this.pendingHolds(
+      materialIds,
+      binIds,
+      undefined,
+      rule.qtyMode === 'passed_non_passed' ? 'quality' : 'available',
+    );
 
     for (const line of items) {
       const key = `${line.material_id}|${line.bin_id}`;
@@ -703,10 +722,15 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
             `${label}: enter Qty Passed and/or Qty Non-Passed (total must be greater than 0)`,
           );
         }
-        // FR-IA-08 rule 3 — against Quality Issue, not against available.
-        if (total > stock.qualityIssue + EPS) {
+        // FR-IA-08 rule 3 — against Quality Issue, not against available, net
+        // of what other pending Quality Adjustments are already deciding.
+        const held = holds.get(key)?.qty ?? 0;
+        const usable = stock.qualityIssue - held;
+        if (total > usable + EPS) {
           throw new BadRequestException(
-            `${label}: Qty Passed + Qty Non-Passed (${total}) exceeds Quality Issue (${stock.qualityIssue})`,
+            held > EPS
+              ? `${label}: Qty Passed + Qty Non-Passed (${total}) exceeds the Quality Issue left to decide (${Math.max(0, usable)} of ${stock.qualityIssue}; ${held} held by pending documents)`
+              : `${label}: Qty Passed + Qty Non-Passed (${total}) exceeds Quality Issue (${stock.qualityIssue})`,
           );
         }
         this.assertDecimals(label, allowsDecimal, qtyPassed, qtyNonPassed);
@@ -781,7 +805,7 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
     const kind = ruleFor(type).discrepancyList;
     if (!kind) {
       throw new BadRequestException(
-        'Discrepancy references can only be attached to Discrepancy Quantity or Discrepancy Quality documents',
+        'Discrepancy references can only be attached to Discrepancy Quantity or Quality Adjustment documents',
       );
     }
 
@@ -1078,16 +1102,17 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
   }
 
   /**
-   * FR-IA-08 rule 7 / FR-IA-13 rule 3: a Quality Adjustment whose lines are all
-   * Non-Passed never reaches Oracle — its stock effect is applied straight away.
+   * A Quality Adjustment reaches Oracle only for its Qty Non-Passed (the
+   * write-off; Oracle still holds the Quality Issue stock), so one that is all
+   * Passed has its stock effect applied straight after internal approval.
    * Every other approved document is posted to Oracle.
    */
   private needsOracle(a: {
     adjustmentType: InventoryAdjustmentType;
-    items: { qtyPassed: number }[];
+    items: { qtyNonPassed: number }[];
   }): boolean {
     if (ruleFor(a.adjustmentType).oracleHit === 'always') return true;
-    return a.items.some((it) => it.qtyPassed > EPS);
+    return a.items.some((it) => it.qtyNonPassed > EPS);
   }
 
   private async advanceAfterApproval(id: string, scope: WarehouseScope) {
@@ -1098,7 +1123,7 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
 
     if (!this.needsOracle(a)) {
       // FR-IA-08 rule 8: applied directly after internal approval.
-      await this.applyStockAndComplete(id, scope.userId, 'Not sent to Oracle (no Qty Passed)');
+      await this.applyStockAndComplete(id, scope.userId, 'Not sent to Oracle (no Qty Non-Passed)');
       return this.findOne(id, scope);
     }
 
@@ -1279,14 +1304,34 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
       };
     }
 
+    const outcome = await this.settleOracle(id, display, scope.userId);
+    const message =
+      outcome === 'approved'
+        ? 'Approved by Oracle'
+        : outcome === 'rejected'
+          ? 'Rejected by Oracle'
+          : 'Still awaiting the Oracle decision';
+    return {
+      ...(await this.findOne(id, scope)),
+      oracle_check: { found: true, status: display, message },
+    };
+  }
+
+  /**
+   * Settle a WaitingOracleApproval document from Oracle's approval label:
+   * approved applies the stock and completes it, a rejection marks it
+   * Rejected by Oracle, anything else only records the label.
+   */
+  private async settleOracle(
+    id: string,
+    display: string,
+    actorId: number,
+  ): Promise<'approved' | 'rejected' | 'pending'> {
     const normalized = display.trim().toLowerCase();
 
     if (normalized === 'approved') {
-      await this.applyStockAndComplete(id, scope.userId, `Oracle: ${display}`);
-      return {
-        ...(await this.findOne(id, scope)),
-        oracle_check: { found: true, status: display, message: 'Approved by Oracle' },
-      };
+      await this.applyStockAndComplete(id, actorId, `Oracle: ${display}`);
+      return 'approved';
     }
 
     if (normalized.includes('reject')) {
@@ -1295,32 +1340,64 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
           where: { id },
           data: {
             status: 'RejectedByOracle',
-            oracleApprovalStatus: display!,
+            oracleApprovalStatus: display,
             oracleRejectReason: display,
           },
         });
         await this.event(tx, id, 'oracle_rejected', {
           from: 'WaitingOracleApproval',
           to: 'RejectedByOracle',
-          actorId: scope.userId,
+          actorId,
           message: `Oracle: ${display}`,
         });
       });
-      return {
-        ...(await this.findOne(id, scope)),
-        oracle_check: { found: true, status: display, message: 'Rejected by Oracle' },
-      };
+      return 'rejected';
     }
 
-    // Still pending — record the label, leave the status alone.
     await this.prisma.inventoryAdjustment.update({
       where: { id },
       data: { oracleApprovalStatus: display },
     });
-    return {
-      ...(await this.findOne(id, scope)),
-      oracle_check: { found: true, status: display, message: 'Still awaiting the Oracle decision' },
-    };
+    return 'pending';
+  }
+
+  /**
+   * The list's refresh: asks Oracle (get-status, at most 200 ids a call)
+   * about every document the user can see that waits for the Oracle
+   * decision, and settles each one as checkOracle() does.
+   */
+  async checkOracleAll(scope: WarehouseScope) {
+    const BATCH = 200;
+    const waiting = await this.prisma.inventoryAdjustment.findMany({
+      where: { ...this.scopeWhere(scope), status: 'WaitingOracleApproval', oracleId: { not: '-' } },
+      select: { id: true, oracleId: true, adjustmentNumber: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const result = { checked: waiting.length, approved: 0, rejected: 0, pending: 0, not_found: 0, failed: 0 };
+
+    for (let i = 0; i < waiting.length; i += BATCH) {
+      const chunk = waiting.slice(i, i + BATCH);
+      let statuses: Map<string, string>;
+      try {
+        statuses = await this.fetchOracleStatuses(chunk);
+      } catch (e) {
+        throw new ServiceUnavailableException(`Could not read the Oracle status: ${(e as Error).message}`);
+      }
+      for (const d of chunk) {
+        const display = statuses.get(d.oracleId);
+        if (display == null) {
+          result.not_found++;
+          continue;
+        }
+        try {
+          result[await this.settleOracle(d.id, display, scope.userId)]++;
+        } catch (e) {
+          result.failed++;
+          this.logger.warn(`Adjustment ${d.adjustmentNumber} could not be settled from Oracle: ${(e as Error).message}`);
+        }
+      }
+    }
+    return result;
   }
 
   /**
@@ -1329,53 +1406,62 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
    *   POST /inventory/adjustments/get-status  { "id": [66444] }
    * Returns null when the id is not known to Oracle.
    */
-  private async fetchOracleStatus(
-    adjustmentId: string,
-    oracleId: string,
-  ): Promise<string | null> {
-    const numeric = Number(oracleId);
+  private async fetchOracleStatus(adjustmentId: string, oracleId: string): Promise<string | null> {
+    return (await this.fetchOracleStatuses([{ id: adjustmentId, oracleId }])).get(oracleId) ?? null;
+  }
+
+  /**
+   * One get-status call for several documents (at most 200, no duplicates):
+   * their approval labels by Oracle id; an id Oracle does not know is absent.
+   * Each document gets its own integration log entry.
+   */
+  private async fetchOracleStatuses(docs: { id: string; oracleId: string }[]): Promise<Map<string, string>> {
     const endpoint = '/inventory/adjustments/get-status';
-    const request = { id: [Number.isFinite(numeric) ? numeric : oracleId] };
+    const ids = [...new Set(docs.map((d) => d.oracleId))];
+    const request = { id: ids.map((v) => (Number.isFinite(Number(v)) ? Number(v) : v)) };
     const startedAt = Date.now();
 
     let res: OracleAdjustmentStatusResponse;
     try {
       res = await this.erp.post<OracleAdjustmentStatusResponse>(endpoint, request);
     } catch (e) {
-      await this.logIntegration({
-        adjustmentId,
-        operation: 'status_check',
-        endpoint,
-        request,
-        ok: false,
-        error: (e as Error).message,
-        durationMs: Date.now() - startedAt,
-      });
+      for (const d of docs) {
+        await this.logIntegration({
+          adjustmentId: d.id,
+          operation: 'status_check',
+          endpoint,
+          request,
+          ok: false,
+          error: (e as Error).message,
+          durationMs: Date.now() - startedAt,
+        });
+      }
       throw e;
     }
 
-    const hit = (res?.data ?? []).find(
-      (r) => r?.id != null && String(r.id) === String(oracleId),
-    );
-
-    await this.logIntegration({
-      adjustmentId,
-      operation: 'status_check',
-      endpoint,
-      request,
-      response: res,
-      ok: true,
-      error: hit ? null : 'Document not present in the response',
-      durationMs: Date.now() - startedAt,
-    });
-
-    if (!hit) return null;
-
-    return (
-      hit.custbody_me_approval_status_display?.trim() ||
-      hit.custbody_me_approval_status?.trim() ||
-      ''
-    );
+    const out = new Map<string, string>();
+    for (const r of res?.data ?? []) {
+      if (r?.id == null) continue;
+      out.set(
+        String(r.id),
+        r.custbody_me_approval_status_display?.trim() || r.custbody_me_approval_status?.trim() || '',
+      );
+    }
+    const durationMs = Date.now() - startedAt;
+    for (const d of docs) {
+      const hit = (res?.data ?? []).find((r) => r?.id != null && String(r.id) === String(d.oracleId));
+      await this.logIntegration({
+        adjustmentId: d.id,
+        operation: 'status_check',
+        endpoint,
+        request,
+        response: { success: res?.success, total_records: res?.total_records, data: hit ? [hit] : [] },
+        ok: true,
+        error: hit ? null : 'Document not present in the response',
+        durationMs,
+      });
+    }
+    return out;
   }
 
   // Build the Oracle Inventory Adjustment payload and POST it. Every attempt is
@@ -1391,7 +1477,7 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
     adjustmentType: InventoryAdjustmentType;
     items: {
       qtyAdjustment: number;
-      qtyPassed: number;
+      qtyNonPassed: number;
       material: { erpDocId: string | null } | null;
       warehouse: { oracleId: string | null } | null;
     }[];
@@ -1435,8 +1521,8 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
           'A line warehouse has no Oracle location id — cannot post to Oracle',
         );
       }
-      // Quality Adjustment only moves Qty Passed on the Oracle side.
-      const q = rule.qtyMode === 'passed_non_passed' ? it.qtyPassed : it.qtyAdjustment;
+      // Quality Adjustment only writes Qty Non-Passed off on the Oracle side.
+      const q = rule.qtyMode === 'passed_non_passed' ? -it.qtyNonPassed : it.qtyAdjustment;
       const key = `${item}|${lineLocation}`;
       const row = qtyByLine.get(key) ?? { item, location: lineLocation, quantity: 0 };
       row.quantity += q;
@@ -2026,7 +2112,7 @@ export class InventoryAdjustmentsService implements OnApplicationBootstrap {
 
   /** The behaviour matrix, so the UI does not have to duplicate the rules. */
   types() {
-    return IA_TYPES.map((t) => {
+    return CREATABLE_IA_TYPES.map((t) => {
       const r = ruleFor(t);
       return {
         value: t,

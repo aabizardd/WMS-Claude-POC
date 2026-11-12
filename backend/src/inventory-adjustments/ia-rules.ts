@@ -28,6 +28,8 @@ export interface IaRule {
   discrepancyList: false | 'quantity' | 'quality';
   /** FR-IA-13: 'always' | 'never' | 'conditional' (Quality Adjustment). */
   oracleHit: 'always' | 'conditional';
+  /** False for a type kept only for its existing documents: no new ones. */
+  creatable: boolean;
 }
 
 export const IA_RULES: Record<InventoryAdjustmentType, IaRule> = {
@@ -37,20 +39,30 @@ export const IA_RULES: Record<InventoryAdjustmentType, IaRule> = {
     filterBucket: 'qty_issue',
     discrepancyList: 'quantity',
     oracleHit: 'always',
+    creatable: true,
   },
+  // Retired (product owner, Nov 2026): Oracle keeps Quality Issue stock on hand
+  // until the QC decision, so nothing is taken out of Oracle up front. Kept for
+  // its existing documents; no new ones can be created.
   DiscrepancyQuality: {
     oracleLabel: 'Discrepancy Quality',
     qtyMode: 'auto_negative',
     filterBucket: 'quality_issue',
     discrepancyList: 'quality',
     oracleHit: 'always',
+    creatable: false,
   },
+  // The QC decision on Quality Issue stock, in one document: Qty Passed goes
+  // back to Available in WMS only (Oracle already holds it); Qty Non-Passed is
+  // written off and is the only part posted to Oracle (as a negative qty), so
+  // a document without Non-Passed never reaches Oracle.
   QualityAdjustment: {
     oracleLabel: 'Quality Adjustment',
     qtyMode: 'passed_non_passed',
     filterBucket: 'quality_issue',
-    discrepancyList: false,
+    discrepancyList: 'quality',
     oracleHit: 'conditional',
+    creatable: true,
   },
   Assembly: {
     oracleLabel: 'Assembly',
@@ -58,6 +70,7 @@ export const IA_RULES: Record<InventoryAdjustmentType, IaRule> = {
     filterBucket: 'none',
     discrepancyList: false,
     oracleHit: 'always',
+    creatable: true,
   },
   Disassembly: {
     oracleLabel: 'Disassembly',
@@ -65,6 +78,7 @@ export const IA_RULES: Record<InventoryAdjustmentType, IaRule> = {
     filterBucket: 'none',
     discrepancyList: false,
     oracleHit: 'always',
+    creatable: true,
   },
   CycleCount: {
     oracleLabel: 'Cycle Count',
@@ -72,6 +86,7 @@ export const IA_RULES: Record<InventoryAdjustmentType, IaRule> = {
     filterBucket: 'none',
     discrepancyList: false,
     oracleHit: 'always',
+    creatable: true,
   },
   StockOpname: {
     oracleLabel: 'Stock Opname',
@@ -79,10 +94,14 @@ export const IA_RULES: Record<InventoryAdjustmentType, IaRule> = {
     filterBucket: 'none',
     discrepancyList: false,
     oracleHit: 'always',
+    creatable: true,
   },
 };
 
 export const IA_TYPES = Object.keys(IA_RULES) as InventoryAdjustmentType[];
+
+/** The types a new document may use. */
+export const CREATABLE_IA_TYPES = IA_TYPES.filter((t) => IA_RULES[t].creatable);
 
 export function ruleFor(type: InventoryAdjustmentType): IaRule {
   return IA_RULES[type];
@@ -123,7 +142,10 @@ export function buildOracleMemo(
  * draws that bucket down.
  *
  * Open question #2 was answered "write-off": qtyNonPassed reduces Quality Issue
- * and goes nowhere else, so Stock on Hand drops by that amount.
+ * and goes nowhere else, so Stock on Hand drops by that amount — the same
+ * amount the document writes off in Oracle. qtyPassed only moves Quality Issue
+ * back to Available; Oracle already counts it, so WMS on-hand (Available +
+ * Quality Issue) and Oracle stay equal throughout.
  */
 export interface BinDelta {
   availQty: number;

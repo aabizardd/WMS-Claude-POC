@@ -23,9 +23,9 @@ describe('InventoryAdjustmentsService — Oracle payload', () => {
     adjustmentType: 'CycleCount' as const,
     discrepancies: [],
     items: [
-      { qtyAdjustment: -1, qtyPassed: 0, material: { erpDocId: '500' }, warehouse: { oracleId: '1' } },
-      { qtyAdjustment: -2, qtyPassed: 0, material: { erpDocId: '500' }, warehouse: { oracleId: '1' } },
-      { qtyAdjustment: 5, qtyPassed: 0, material: { erpDocId: '500' }, warehouse: { oracleId: '15' } },
+      { qtyAdjustment: -1, qtyNonPassed: 0, material: { erpDocId: '500' }, warehouse: { oracleId: '1' } },
+      { qtyAdjustment: -2, qtyNonPassed: 0, material: { erpDocId: '500' }, warehouse: { oracleId: '1' } },
+      { qtyAdjustment: 5, qtyNonPassed: 0, material: { erpDocId: '500' }, warehouse: { oracleId: '15' } },
     ],
   };
 
@@ -53,6 +53,46 @@ describe('InventoryAdjustmentsService — Oracle payload', () => {
     expect((await (withNumber.service as unknown as Post).postToOracle(doc)).documentNumber).toBe('IA-IEL-000123');
     const without = setup();
     expect((await (without.service as unknown as Post).postToOracle(doc)).documentNumber).toBeNull();
+  });
+});
+
+describe('InventoryAdjustmentsService — Quality Adjustment (Oracle keeps Quality Issue on hand)', () => {
+  type Svc = {
+    postToOracle: (a: unknown) => Promise<unknown>;
+    needsOracle: (a: unknown) => boolean;
+  };
+  const line = (qtyPassed: number, qtyNonPassed: number) => ({
+    qtyAdjustment: 0,
+    qtyPassed,
+    qtyNonPassed,
+    material: { erpDocId: '500' },
+    warehouse: { oracleId: '1' },
+  });
+
+  it('posts only Qty Non-Passed, as a write-off', async () => {
+    const postRaw = jest.fn().mockResolvedValue({ ok: true, status: 200, body: { status: 'success', inventory_adjustment_id: 1 } });
+    const prisma = { inventoryAdjustmentIntegrationLog: { create: jest.fn().mockResolvedValue({}) } };
+    const service = new InventoryAdjustmentsService(prisma as never, { postRaw } as never, {} as never) as unknown as Svc;
+    await service.postToOracle({
+      id: 'q1',
+      adjustmentNumber: 'ADJ-20261112-001',
+      warehouse: { oracleId: '1' },
+      class: { oracleId: '9' },
+      department: { oracleId: '40' },
+      createdBy: null,
+      memo: null,
+      adjustmentType: 'QualityAdjustment',
+      discrepancies: [],
+      items: [line(3, 2)],
+    });
+    expect(postRaw.mock.calls[0][1].lines).toEqual([{ item: 500, location: 1, quantity: -2, department: 40 }]);
+  });
+
+  it('reaches Oracle only when some line has Qty Non-Passed', () => {
+    const service = new InventoryAdjustmentsService({} as never, {} as never, {} as never) as unknown as Svc;
+    expect(service.needsOracle({ adjustmentType: 'QualityAdjustment', items: [line(3, 0)] })).toBe(false);
+    expect(service.needsOracle({ adjustmentType: 'QualityAdjustment', items: [line(3, 0), line(0, 1)] })).toBe(true);
+    expect(service.needsOracle({ adjustmentType: 'CycleCount', items: [line(0, 0)] })).toBe(true);
   });
 });
 

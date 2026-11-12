@@ -150,6 +150,13 @@ export class InventoryAdjustmentsController {
     return this.service.sendToOracle(id, user);
   }
 
+  /** The list's refresh: read the Oracle decision of every document waiting for it. */
+  @Post('check-oracle')
+  @RequirePermissions('inventory-adjustments:read')
+  checkOracleAll(@CurrentUser() user: AuthUser) {
+    return this.service.checkOracleAll(user);
+  }
+
   /** FR-IA-13: read the Oracle decision and settle the document. */
   @Put(':id/check-oracle')
   @RequirePermissions('inventory-adjustments:read')
