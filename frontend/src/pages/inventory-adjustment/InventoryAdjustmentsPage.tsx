@@ -127,6 +127,16 @@ const COLUMNS = [
  * Inventory Adjustment list, laid out like the other tracking lists: one row
  * per document and warehouse, each opening on that warehouse's lines.
  */
+/** Response of POST /inventory-adjustments/check-oracle. */
+interface OracleCheckAllResult {
+  checked: number;
+  approved: number;
+  rejected: number;
+  pending: number;
+  not_found: number;
+  failed: number;
+}
+
 export default function InventoryAdjustmentsPage() {
   const navigate = useNavigate();
   const { has } = useAuth();
@@ -161,6 +171,37 @@ export default function InventoryAdjustmentsPage() {
   const appliedKey = JSON.stringify(applied);
   const [exporting, setExporting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [checkingOracle, setCheckingOracle] = useState(false);
+
+  /**
+   * Refresh: asks Oracle (get-status) about every adjustment waiting for its
+   * decision — approved ones complete, rejected ones turn Rejected by Oracle —
+   * then reloads the list.
+   */
+  async function refreshFromOracle() {
+    if (checkingOracle) return;
+    setCheckingOracle(true);
+    try {
+      const r = (await api.post<OracleCheckAllResult>('/inventory-adjustments/check-oracle', {})).data;
+      if (r.checked) {
+        const parts = [
+          r.approved && `${r.approved} approved`,
+          r.rejected && `${r.rejected} rejected`,
+          r.pending + r.not_found && `${r.pending + r.not_found} still waiting`,
+          r.failed && `${r.failed} failed`,
+        ].filter(Boolean);
+        const msg = `Oracle status checked for ${r.checked} adjustment${r.checked === 1 ? '' : 's'}: ${parts.join(', ')}.`;
+        if (r.failed) toast.error(msg);
+        else toast.success(msg);
+      }
+    } catch (err) {
+      const m = (err as { response?: { data?: { message?: string | string[] } } }).response?.data?.message;
+      toast.error(`Oracle status check failed: ${Array.isArray(m) ? m.join(', ') : (m ?? 'please try again')}.`);
+    } finally {
+      setCheckingOracle(false);
+      setReloadKey((k) => k + 1);
+    }
+  }
 
   /** The confirmation's numbers, counted by the backend for both options. */
   function loadExportSummary() {
@@ -359,7 +400,11 @@ export default function InventoryAdjustmentsPage() {
             <>
               <ExpandAllButton anyOpen={anyOpen} onClick={toggleAll} disabled={rows.length === 0} />
               <ColumnSettings columns={COLUMNS} visible={visible} onApply={setVisible} />
-              <RefreshButton onClick={() => setReloadKey((k) => k + 1)} spinning={loading} title="Refresh" />
+              <RefreshButton
+                onClick={refreshFromOracle}
+                spinning={loading || checkingOracle}
+                title="Refresh (check Oracle status)"
+              />
             </>
           }
         >

@@ -54,7 +54,7 @@ function ruleNote(rule: IaTypeInfo): ReactNode {
   if (rule.qty_mode === "auto_negative")
     return `Only bins with ${rule.filter_bucket === "qty_issue" ? "Quantity Issue" : "Quality Issue"} are available. The adjustment takes the whole issue qty and cannot be edited.`;
   if (rule.qty_mode === "passed_non_passed")
-    return "Only bins with Quality Issue are available. Enter Qty Passed (back to available, sent to Oracle) and/or Qty Non-Passed.";
+    return "Only bins with Quality Issue are available. Enter Qty Passed (back to Available, WMS only) and/or Qty Non-Passed (written off; sent to Oracle for approval).";
   return "All bins are available. Enter a positive qty to add stock or a negative qty to reduce it.";
 }
 
@@ -294,6 +294,9 @@ export default function InventoryAdjustmentCreatePage() {
   // ----- validation & totals -----
   const usable = (b: AdjBinOption) =>
     Math.max(0, b.qty_available - (b.pending_qty ?? 0));
+  // Quality Issue other pending Quality Adjustments are not already deciding.
+  const qualityLeft = (b: AdjBinOption) =>
+    Math.max(0, b.quality_issue - (b.pending_qty ?? 0));
 
   function lineError(g: Group, b: AdjBinOption, l: Line): string | null {
     const decimals = (...vals: number[]) =>
@@ -304,8 +307,10 @@ export default function InventoryAdjustmentCreatePage() {
       if (l.qty_passed < 0 || l.qty_non_passed < 0)
         return "Qty Passed and Non-Passed must be positive";
       if (!(total > 0)) return "Enter Qty Passed and/or Qty Non-Passed";
-      if (total > b.quality_issue + EPS)
-        return `Exceeds Quality Issue (${fmt(b.quality_issue)})`;
+      if (total > qualityLeft(b) + EPS)
+        return (b.pending_qty ?? 0) > EPS
+          ? `Exceeds the Quality Issue left to decide (${fmt(qualityLeft(b))} of ${fmt(b.quality_issue)})`
+          : `Exceeds Quality Issue (${fmt(b.quality_issue)})`;
       if (decimals(l.qty_passed, l.qty_non_passed))
         return "This unit of measure does not allow decimals";
       return null;
@@ -330,6 +335,10 @@ export default function InventoryAdjustmentCreatePage() {
     qtyMode === "passed_non_passed"
       ? l.qty_passed + l.qty_non_passed
       : l.qty_adjustment;
+  // A Quality Adjustment reaches Oracle only for its Qty Non-Passed.
+  const goesToOracle =
+    rule?.oracle_hit === "always" ||
+    (qtyMode === "passed_non_passed" && picked.some((p) => p.l.qty_non_passed > EPS));
   const filledBins = picked.filter((p) => Math.abs(lineQty(p.l)) > EPS).length;
   const totalAdjustment = picked.reduce((s, p) => s + lineQty(p.l), 0);
   const warehouses = [
@@ -802,6 +811,19 @@ export default function InventoryAdjustmentCreatePage() {
                                         {fmt(b.qty_available)}
                                       </span>
                                     )
+                                  ) : qtyMode === "passed_non_passed" &&
+                                    b.pending_qty > 0 ? (
+                                    <span
+                                      title={`${fmt(b.quality_issue)} recorded, ${fmt(b.pending_qty)} held by other documents`}
+                                    >
+                                      <span className="font-semibold text-neutral-900">
+                                        {fmt(qualityLeft(b))}
+                                      </span>
+                                      <span className="text-xs text-neutral-500">
+                                        {" "}
+                                        of {fmt(b.quality_issue)}
+                                      </span>
+                                    </span>
                                   ) : (
                                     <span className="font-semibold text-neutral-900">
                                       {fmt(
@@ -893,7 +915,7 @@ export default function InventoryAdjustmentCreatePage() {
         </div>
       )}
 
-      {/* FR-IA-10: discrepancy references, Discrepancy types only. */}
+      {/* FR-IA-10: discrepancy references (Discrepancy Quantity, Quality Adjustment). */}
       {rule?.discrepancy_list && groups.length > 0 && (
         <div className={CARD}>
           <SectionHead
@@ -1021,7 +1043,7 @@ export default function InventoryAdjustmentCreatePage() {
             <p className="mt-2 text-sm leading-relaxed text-neutral-600">
               The adjustment goes to a manager for approval and cannot be edited
               afterwards. Stock changes only once it is approved
-              {rule?.oracle_hit === "always" ? " and Oracle approves it" : ""}.
+              {goesToOracle ? " and Oracle approves it" : ""}.
             </p>
             <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 rounded-lg bg-neutral-50 p-4 text-sm ring-1 ring-neutral-200">
               <dt className="text-neutral-500">Type</dt>
