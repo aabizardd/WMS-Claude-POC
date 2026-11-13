@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
+  IsBoolean,
   IsNumber,
   IsOptional,
   IsString,
@@ -65,4 +66,10 @@ export class CreateTransferOrderDto {
   @ValidateNested({ each: true })
   @Type(() => CreateTransferOrderItemDto)
   items!: CreateTransferOrderItemDto[];
+
+  // true: saved as a Draft (WMS only, still editable). Otherwise submitted:
+  // sent to Oracle for approval.
+  @IsOptional()
+  @IsBoolean()
+  draft?: boolean;
 }

@@ -582,9 +582,12 @@ export default function SalesDeliveryListPage() {
       )}
 
       <div className="mx-5 overflow-hidden rounded-lg border border-slate-200">
-        <div className="overflow-x-auto">
+        {/* Scrolls both ways inside the card, so the column header can stay on
+            top while reading down (a page-level sticky header cannot coexist
+            with the horizontal scroll). */}
+        <div className="max-h-[calc(100dvh-9rem)] overflow-auto">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="bg-slate-50 text-left text-sm text-slate-600">
+            <thead className="sticky top-0 z-20 bg-slate-50 text-left text-sm text-slate-600 shadow-[0_1px_0_0_#e2e8f0]">
               <tr className="[&>th]:font-medium [&_button]:normal-case [&_button]:tracking-normal">
                 <th className="w-10 px-2 py-3" aria-label="Expand" />
                 <th className="px-4 py-3 font-medium">No</th>

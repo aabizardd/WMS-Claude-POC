@@ -2,10 +2,12 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
   Post,
+  Put,
   Query,
   Res,
   UploadedFile,
@@ -85,11 +87,44 @@ export class TransferOrdersController {
     return this.creator.resolveItems(dto);
   }
 
-  /** Save a Transfer Order as Syncing; it is sent to Oracle in the background. */
+  /**
+   * Save a Transfer Order: a Draft (`draft: true`, WMS only, still editable),
+   * or submitted (Syncing; it is sent to Oracle in the background).
+   */
   @Post()
   @RequirePermissions('transfer-orders:create')
   create(@Body() dto: CreateTransferOrderDto, @CurrentUser() user: AuthUser) {
     return this.creator.create(dto, user);
+  }
+
+  /** Edit a Draft (header and lines replaced); `draft: false` also submits it. */
+  @Put(':id')
+  @RequirePermissions('transfer-orders:create')
+  updateDraft(@Param('id') id: string, @Body() dto: CreateTransferOrderDto, @CurrentUser() user: AuthUser) {
+    return this.creator.updateDraft(id, dto, user);
+  }
+
+  /** Submit a Draft as saved: checked again, then sent to Oracle for approval. */
+  @Post(':id/submit')
+  @HttpCode(200)
+  @RequirePermissions('transfer-orders:create')
+  submitDraft(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.creator.submitDraft(id, user);
+  }
+
+  /** Delete a Draft (never sent to Oracle). */
+  @Delete(':id')
+  @RequirePermissions('transfer-orders:create')
+  deleteDraft(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.creator.deleteDraft(id, user);
+  }
+
+  /** A Draft (purpose=edit) or a Rejected TO (purpose=clone) as Create TO form data. */
+  @Get(':id/form-data')
+  @RequirePermissions('transfer-orders:create')
+  formData(@Param('id') id: string, @Query('purpose') purpose: string, @CurrentUser() user: AuthUser) {
+    if (purpose !== 'edit' && purpose !== 'clone') throw new BadRequestException('purpose must be edit or clone');
+    return this.creator.formData(id, purpose, user);
   }
 
   /** Send a Failed (WMS-created) Transfer Order to Oracle again. */

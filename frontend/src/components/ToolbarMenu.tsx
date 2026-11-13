@@ -4,6 +4,8 @@ export interface ToolbarMenuItem {
   label: string;
   icon?: ReactNode;
   onClick: () => void;
+  /** Destructive (Delete): red, set apart by a line above it. */
+  danger?: boolean;
 }
 
 /** The ☰ button on a page toolbar with a short menu (Print, Export, …). */
@@ -42,7 +44,11 @@ export default function ToolbarMenu({ items }: { items: ToolbarMenuItem[] }) {
             <button
               key={it.label}
               type="button"
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700"
+              className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm ${
+                it.danger
+                  ? 'mt-1 border-t border-slate-100 text-red-600 hover:bg-red-50 dark:border-slate-700 dark:hover:bg-red-950/30'
+                  : 'text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700'
+              }`}
               onClick={() => {
                 setOpen(false);
                 it.onClick();
@@ -67,5 +73,17 @@ export const ExportIcon = () => (
 export const PrintIcon = () => (
   <svg className="h-4 w-4 text-slate-500" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" d="M6 9V3h12v6M6 18H4a1 1 0 01-1-1v-6a2 2 0 012-2h14a2 2 0 012 2v6a1 1 0 01-1 1h-2M7 14h10v7H7z" />
+  </svg>
+);
+
+export const EditIcon = () => (
+  <svg className="h-4 w-4 text-slate-500" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z" />
+  </svg>
+);
+
+export const TrashIcon = () => (
+  <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 002 2h8a2 2 0 002-2l1-12M9 7V4h6v3" />
   </svg>
 );

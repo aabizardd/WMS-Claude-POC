@@ -36,6 +36,10 @@ const TO_FIXED = {
 const SYNCING = 'Syncing';
 const FAILED = 'Failed';
 const SYNCED = 'Synced';
+/** Saved in WMS only, still editable; Submit sends it to Oracle. */
+export const DRAFT = 'Draft';
+/** Oracle's status for a TO its approver turned down: it can be cloned. */
+const REJECTED = 'Rejected';
 /** Oracle's first status for a new TO. */
 const PENDING_APPROVAL = 'Pending Approval';
 
@@ -102,6 +106,9 @@ export function readCreatedTo(body: OracleCreateToResponse | null) {
  * not (then Retry). One sender per TO at a time (a lock on the row), and a
  * retry after an unanswered attempt looks for it in Oracle before sending.
  */
+/** Billing warehouses (any case) are never offered as a TO's sending warehouse. */
+export const isBillingWarehouse = (name: string) => /billing/i.test(name);
+
 @Injectable()
 export class TransferOrderCreateService implements OnApplicationBootstrap {
   private readonly logger = new Logger(TransferOrderCreateService.name);
@@ -155,7 +162,12 @@ export class TransferOrderCreateService implements OnApplicationBootstrap {
         select: { id: true, name: true, oracleId: true },
       }),
       this.prisma.warehouse.findMany({
-        where: { isInactive: false, subsidiaryId: subsidiarySingleFilter() },
+        where: {
+          isInactive: false,
+          subsidiaryId: subsidiarySingleFilter(),
+          // Billing warehouses hold no physical stock to send.
+          NOT: { name: { contains: 'billing', mode: 'insensitive' } },
+        },
         orderBy: { name: 'asc' },
         select: { id: true, name: true, oracleId: true },
       }),
@@ -303,7 +315,12 @@ export class TransferOrderCreateService implements OnApplicationBootstrap {
     return { warehouse: wh.name, rows };
   }
 
-  async create(dto: CreateTransferOrderDto, user: AuthUser) {
+  /**
+   * Check a Create / Edit TO form against today's master data and stock, and
+   * build the Oracle request and the TO's lines from it. Run on every save
+   * (Draft or not) and again on Submit: stock may have moved meanwhile.
+   */
+  private async prepare(dto: CreateTransferOrderDto, user: AuthUser) {
     if (dto.from_warehouse_id === dto.to_warehouse_id) {
       throw new BadRequestException('The sending and receiving warehouse must be different');
     }
@@ -316,6 +333,9 @@ export class TransferOrderCreateService implements OnApplicationBootstrap {
       this.receivingWarehouses(user),
     ]);
     if (!from || from.isInactive) throw new BadRequestException('Sending warehouse not found');
+    if (isBillingWarehouse(from.name)) {
+      throw new BadRequestException(`"${from.name}" is a billing warehouse and cannot send a Transfer Order`);
+    }
     if (!to || to.isInactive) throw new BadRequestException('Receiving warehouse not found');
     if (!receivable.options.some((w) => w.id === to.id)) {
       throw new BadRequestException(`"${to.name}" is not one of your warehouses`);
@@ -395,45 +415,242 @@ export class TransferOrderCreateService implements OnApplicationBootstrap {
       note_approval: dto.note_approval?.trim() ?? '',
     };
 
-    // Saved first, as Syncing; Oracle is called in the background.
-    const now = new Date();
+    const lines = dto.items.map((row, i) => {
+      const material = materialById.get(row.material_id)!;
+      return {
+        lineNumber: i + 1,
+        itemOracleId: material.erpDocId,
+        itemName: material.materialCode,
+        description: row.description?.trim() || null,
+        quantity: row.quantity,
+        materialId: row.material_id,
+      };
+    });
+    return { from, to, klass, department, me, payload, lines };
+  }
+
+  /** The TO header a Create / Edit form saves (any status). */
+  private headerData(p: Awaited<ReturnType<TransferOrderCreateService['prepare']>>, dto: CreateTransferOrderDto) {
+    return {
+      memo: p.payload.memo || null,
+      noteApproval: dto.note_approval?.trim() || null,
+      classId: p.klass.id,
+      departmentId: p.department.id,
+      fromLocationOracleId: p.from.oracleId,
+      fromLocationName: p.from.name,
+      warehouseId: p.from.id,
+      toLocationOracleId: p.to.oracleId,
+      toLocationName: p.to.name,
+      toWarehouseId: p.to.id,
+    };
+  }
+
+  /** Submitted: Syncing, sent to Oracle in the background. */
+  private sendingData(payload: CreateToPayload) {
+    return {
+      statusName: SYNCING,
+      syncStatus: SYNCING,
+      syncStartedAt: new Date(),
+      syncError: null,
+      createPayload: payload as unknown as Prisma.InputJsonValue,
+    };
+  }
+
+  /**
+   * Save a new TO: as a Draft (stays in WMS, still editable) or submitted
+   * (Syncing; Oracle is called in the background).
+   */
+  async create(dto: CreateTransferOrderDto, user: AuthUser) {
+    const p = await this.prepare(dto, user);
+    const draft = dto.draft === true;
     const created = await this.prisma.transferOrder.create({
       data: {
         source: 'WMS',
-        statusName: SYNCING,
-        syncStatus: SYNCING,
-        syncStartedAt: now,
-        createPayload: payload as unknown as Prisma.InputJsonValue,
+        ...(draft ? { statusName: DRAFT } : this.sendingData(p.payload)),
         createdById: user.userId,
-        createdBy: me?.name ?? user.username,
-        memo: payload.memo || null,
-        fromLocationOracleId: from.oracleId,
-        fromLocationName: from.name,
-        warehouseId: from.id,
-        toLocationOracleId: to.oracleId,
-        toLocationName: to.name,
-        toWarehouseId: to.id,
-        items: {
-          create: dto.items.map((row, i) => {
-            const material = materialById.get(row.material_id)!;
-            return {
-              lineNumber: i + 1,
-              itemOracleId: material.erpDocId,
-              itemName: material.materialCode,
-              description: row.description?.trim() || null,
-              quantity: row.quantity,
-              materialId: row.material_id,
-            };
-          }),
-        },
+        createdBy: p.me?.name ?? user.username,
+        ...this.headerData(p, dto),
+        items: { create: p.lines },
       },
     });
     await assignOutboundId(this.prisma, 'TO', created.id, created.createdAt);
     this.logger.log(
-      `Transfer Order ${created.id} saved (Syncing) by ${user.username}: ${from.name} → ${to.name}, ${items.length} line(s)`,
+      `Transfer Order ${created.id} saved (${draft ? DRAFT : SYNCING}) by ${user.username}: ${p.from.name} → ${p.to.name}, ${p.lines.length} line(s)`,
     );
-    this.dispatchLater(created.id);
-    return { id: created.id, status_name: SYNCING };
+    if (!draft) this.dispatchLater(created.id);
+    return { id: created.id, status_name: draft ? DRAFT : SYNCING };
+  }
+
+  /** Who may edit, submit or delete a Draft: its creator, or a user of its sending warehouse. */
+  private draftAccess(user: AuthUser): Prisma.TransferOrderWhereInput {
+    if (!user.warehouseIds) return {};
+    return { OR: [{ createdById: user.userId }, { warehouseId: { in: user.warehouseIds } }] };
+  }
+
+  private async findDraft(id: string, user: AuthUser) {
+    const to = await this.prisma.transferOrder.findFirst({
+      where: { id, source: 'WMS', ...this.draftAccess(user) },
+      include: { items: { orderBy: { lineNumber: 'asc' } } },
+    });
+    if (!to) throw new NotFoundException(`Transfer order ${id} not found`);
+    if (to.statusName !== DRAFT) {
+      throw new ConflictException(`This Transfer Order is ${to.statusName ?? 'not a draft'} — only a Draft can be changed`);
+    }
+    return to;
+  }
+
+  /**
+   * Edit a Draft: its header and lines are replaced by the form's. With
+   * `draft: false` it is submitted right after (Syncing).
+   */
+  async updateDraft(id: string, dto: CreateTransferOrderDto, user: AuthUser) {
+    await this.findDraft(id, user);
+    const p = await this.prepare(dto, user);
+    const submit = dto.draft === false;
+    await this.prisma.$transaction(async (tx) => {
+      // Still a Draft (a submit from another tab wins).
+      const { count } = await tx.transferOrder.updateMany({
+        where: { id, statusName: DRAFT },
+        data: { ...this.headerData(p, dto), ...(submit ? this.sendingData(p.payload) : {}) },
+      });
+      if (!count) throw new ConflictException('This Transfer Order is no longer a Draft');
+      await tx.transferOrderItem.deleteMany({ where: { transferOrderId: id } });
+      await tx.transferOrderItem.createMany({ data: p.lines.map((l) => ({ ...l, transferOrderId: id })) });
+    });
+    this.logger.log(`Transfer Order ${id} draft ${submit ? 'saved and submitted' : 'updated'} by ${user.username}`);
+    if (submit) this.dispatchLater(id);
+    return { id, status_name: submit ? SYNCING : DRAFT };
+  }
+
+  /** The form a stored TO fills in (its header and lines as saved). */
+  private formOf(to: Prisma.TransferOrderGetPayload<{ include: { items: true } }>): CreateTransferOrderDto {
+    return {
+      memo: to.memo ?? '',
+      note_approval: to.noteApproval ?? '',
+      class_id: to.classId ?? '',
+      department_id: to.departmentId ?? '',
+      from_warehouse_id: to.warehouseId ?? '',
+      to_warehouse_id: to.toWarehouseId ?? '',
+      items: to.items
+        .filter((l) => l.materialId)
+        .map((l) => ({ material_id: l.materialId!, quantity: l.quantity, description: l.description ?? undefined })),
+    };
+  }
+
+  /** Submit a Draft as it is saved: checked again, then sent to Oracle. */
+  async submitDraft(id: string, user: AuthUser) {
+    const to = await this.findDraft(id, user);
+    const dto = this.formOf(to);
+    if (!dto.class_id || !dto.department_id) throw new BadRequestException('Fill in the Class and Department first (Edit)');
+    if (!dto.items.length) throw new BadRequestException('Add at least one item first (Edit)');
+    const p = await this.prepare(dto, user);
+    const { count } = await this.prisma.transferOrder.updateMany({
+      where: { id, statusName: DRAFT },
+      data: this.sendingData(p.payload),
+    });
+    if (!count) throw new ConflictException('This Transfer Order is no longer a Draft');
+    this.logger.log(`Transfer Order ${id} draft submitted by ${user.username}`);
+    this.dispatchLater(id);
+    return { id, status_name: SYNCING };
+  }
+
+  /** Delete a Draft (it never reached Oracle). */
+  async deleteDraft(id: string, user: AuthUser) {
+    const to = await this.findDraft(id, user);
+    const { count } = await this.prisma.transferOrder.deleteMany({ where: { id, statusName: DRAFT } });
+    if (!count) throw new ConflictException('This Transfer Order is no longer a Draft');
+    this.logger.log(`Transfer Order draft ${to.outboundId ?? id} deleted by ${user.username}`);
+    return { id, deleted: true };
+  }
+
+  /**
+   * A saved TO as Create TO form data: a Draft to edit, or a Rejected TO to
+   * clone (header, lines, qty and descriptions as they were). Each line comes
+   * with today's available qty in the sending warehouse; a line whose
+   * material is unknown to WMS is left out and listed in `skipped`.
+   */
+  async formData(id: string, purpose: 'edit' | 'clone', user: AuthUser) {
+    let to: Prisma.TransferOrderGetPayload<{ include: { items: true } }>;
+    if (purpose === 'edit') {
+      to = await this.findDraft(id, user);
+    } else {
+      const found = await this.prisma.transferOrder.findFirst({
+        where: { id, ...this.visibleTo(user) },
+        include: { items: { orderBy: { lineNumber: 'asc' } } },
+      });
+      if (!found) throw new NotFoundException(`Transfer order ${id} not found`);
+      if (found.statusName !== REJECTED) {
+        throw new ConflictException(`Only a Rejected Transfer Order can be cloned (this one is ${found.statusName ?? '—'})`);
+      }
+      to = found;
+    }
+
+    const materialIds = [...new Set(to.items.map((l) => l.materialId).filter((m): m is string => !!m))];
+    const [mats, stock] = await Promise.all([
+      this.prisma.material.findMany({
+        where: { id: { in: materialIds } },
+        select: {
+          id: true,
+          materialCode: true,
+          materialName: true,
+          erpDocId: true,
+          primaryUom: { select: { uomCode: true, allowsDecimal: true } },
+        },
+      }),
+      to.warehouseId
+        ? this.prisma.inventoryManagement.findMany({
+            where: { warehouseId: to.warehouseId, materialId: { in: materialIds } },
+            select: { materialId: true, binStocks: { where: this.transferableStock(), select: { availQty: true } } },
+          })
+        : Promise.resolve([]),
+    ]);
+    const matById = new Map(mats.map((m) => [m.id, m]));
+    const availById = new Map<string, number>();
+    for (const inv of stock) {
+      if (!inv.materialId) continue;
+      availById.set(inv.materialId, (availById.get(inv.materialId) ?? 0) + inv.binStocks.reduce((s, b) => s + b.availQty, 0));
+    }
+
+    const skipped: string[] = [];
+    const items = to.items.flatMap((l) => {
+      const m = l.materialId ? matById.get(l.materialId) : undefined;
+      if (!m) {
+        skipped.push(l.itemName ?? `Line ${l.lineNumber}`);
+        return [];
+      }
+      return [
+        {
+          item: {
+            material_id: m.id,
+            material_code: m.materialCode,
+            material_name: m.materialName,
+            erp_item_id: m.erpDocId,
+            uom_code: m.primaryUom?.uomCode ?? null,
+            allows_decimal: m.primaryUom?.allowsDecimal ?? true,
+            qty_available: availById.get(m.id) ?? 0,
+          },
+          quantity: l.quantity,
+          description: l.description ?? '',
+        },
+      ];
+    });
+
+    return {
+      id: to.id,
+      purpose,
+      status_name: to.statusName,
+      outbound_id: to.outboundId,
+      tran_id: to.tranId,
+      from_warehouse_id: to.warehouseId,
+      to_warehouse_id: to.toWarehouseId,
+      // Oracle's TO carries no class / department: the form's defaults then.
+      class_id: to.classId,
+      department_id: to.departmentId,
+      memo: to.memo ?? '',
+      note_approval: to.noteApproval ?? '',
+      items,
+      skipped,
+    };
   }
 
   /** Send a Failed TO to Oracle again (in the background, like Create). */

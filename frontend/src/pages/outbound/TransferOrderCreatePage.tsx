@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import api from '../../lib/api';
 import type {
+  CreateToFormData,
   CreateToFormOptions,
   CreateToOption,
   CreateToResult,
@@ -84,13 +85,21 @@ function roomFor(line: Line, total: number) {
 }
 
 /**
- * Create Transfer Order, opened from TO Out or TO In. The request goes
- * straight to Oracle: pick the sending warehouse, then the materials it has
- * available, with a qty and description each. The receiving warehouse is one
- * of the user's own.
+ * Create Transfer Order, opened from TO Out or TO In: pick the sending
+ * warehouse, then the materials it has available, with a qty and description
+ * each. The receiving warehouse is one of the user's own. Save Draft keeps it
+ * in WMS (still editable); Submit sends it to Oracle for approval.
+ *
+ * The same form edits a Draft (route `:id/edit`) and clones a Rejected TO
+ * (`?clone=<id>`: a new TO with the same content).
  */
 export default function TransferOrderCreatePage({ backPath }: { backPath: string }) {
   const navigate = useNavigate();
+  const { id: editId } = useParams();
+  const [searchParams] = useSearchParams();
+  const cloneId = editId ? null : searchParams.get('clone');
+  const sourceId = editId ?? cloneId;
+  const [source, setSource] = useState<CreateToFormData | null>(null);
   const toast = useToast();
   const confirm = useConfirm();
 
@@ -103,7 +112,7 @@ export default function TransferOrderCreatePage({ backPath }: { backPath: string
   const [memo, setMemo] = useState('');
   const [noteApproval, setNoteApproval] = useState('');
   const [lines, setLines] = useState<Line[]>([]);
-  const [saving, setSaving] = useState(false);
+  const [saving, setSaving] = useState<'draft' | 'submit' | 'delete' | null>(null);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [triedSubmit, setTriedSubmit] = useState(false);
 
@@ -117,16 +126,61 @@ export default function TransferOrderCreatePage({ backPath }: { backPath: string
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    api
-      .get<CreateToFormOptions>('/transfer-orders/create/form-options')
-      .then((r) => {
-        setOptions(r.data);
-        setClassId(r.data.default_class_id ?? '');
-        setDepartmentId(r.data.default_department_id ?? '');
-        setToId(r.data.default_to_warehouse_id ?? '');
-      })
-      .catch((err) => setOptionsError(errMessage(err, 'Failed to load the form.')));
-  }, []);
+    let cancelled = false;
+    (async () => {
+      try {
+        const [opts, data] = await Promise.all([
+          api.get<CreateToFormOptions>('/transfer-orders/create/form-options').then((r) => r.data),
+          sourceId
+            ? api
+                .get<CreateToFormData>(`/transfer-orders/${sourceId}/form-data`, {
+                  params: { purpose: editId ? 'edit' : 'clone' },
+                })
+                .then((r) => r.data)
+            : Promise.resolve(null),
+        ]);
+        if (cancelled) return;
+        setOptions(opts);
+        const has = (list: CreateToOption[], v: string | null | undefined) => !!v && list.some((o) => o.id === v);
+        const pick = (list: CreateToOption[], v: string | null | undefined, fallback: string | null) =>
+          has(list, v) ? v! : (fallback ?? '');
+        if (!data) {
+          setClassId(opts.default_class_id ?? '');
+          setDepartmentId(opts.default_department_id ?? '');
+          setToId(opts.default_to_warehouse_id ?? '');
+          return;
+        }
+        setSource(data);
+        setClassId(pick(opts.classes, data.class_id, opts.default_class_id));
+        setDepartmentId(pick(opts.departments, data.department_id, opts.default_department_id));
+        setToId(pick(opts.to_warehouses, data.to_warehouse_id, opts.default_to_warehouse_id));
+        setMemo(data.memo);
+        setNoteApproval(data.note_approval);
+        // The lines belong to the sending warehouse: kept only when it can still send.
+        const fromOk = has(opts.from_warehouses, data.from_warehouse_id);
+        if (fromOk) {
+          setFromId(data.from_warehouse_id!);
+          setLines(
+            data.items.map((r) => newLine(r.item, { quantity: String(r.quantity), description: r.description })),
+          );
+        } else {
+          toast.error('The original sending warehouse can no longer send a Transfer Order — pick one and add the items again.');
+        }
+        if (data.skipped.length) {
+          toast.error(`Left out (material unknown to WMS): ${data.skipped.join(', ')}`);
+        }
+        if (!has(opts.to_warehouses, data.to_warehouse_id)) {
+          toast.error('The original receiving warehouse is not one you can pick — check the Receiving Warehouse.');
+        }
+      } catch (err) {
+        if (!cancelled) setOptionsError(errMessage(err, 'Failed to load the form.'));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceId, editId]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -285,7 +339,8 @@ export default function TransferOrderCreatePage({ backPath }: { backPath: string
     !departmentId && 'Department',
   ].filter(Boolean) as string[];
 
-  async function submit() {
+  /** Save Draft (stays in WMS, still editable) or Submit (sent to Oracle for approval). */
+  async function save(mode: 'draft' | 'submit') {
     setTriedSubmit(true);
     if (missing.length) {
       toast.error(`Fill in: ${missing.join(', ')}`);
@@ -301,16 +356,25 @@ export default function TransferOrderCreatePage({ backPath }: { backPath: string
     }
     const fromName = options?.from_warehouses.find((w) => w.id === fromId)?.name ?? '-';
     const toName = options?.to_warehouses.find((w) => w.id === toId)?.name ?? '-';
-    const ok = await confirm({
-      title: 'Create this Transfer Order?',
-      description: `${selected.length} row(s) from ${fromName} to ${toName}. It is saved in WMS and sent to Oracle in the background; its status shows Syncing until Oracle answers.`,
-      confirmText: 'Create TO',
-    });
+    const what = `${selected.length} row(s) from ${fromName} to ${toName}.`;
+    const ok = await confirm(
+      mode === 'draft'
+        ? {
+            title: 'Save as Draft?',
+            description: `${what} It stays in WMS as a Draft: you can still edit it, then Submit it to Oracle for approval.`,
+            confirmText: 'Save Draft',
+          }
+        : {
+            title: 'Submit this Transfer Order?',
+            description: `${what} It is sent to Oracle for approval and can no longer be edited; its status shows Syncing until Oracle answers.`,
+            confirmText: 'Submit',
+          },
+    );
     if (!ok) return;
 
-    setSaving(true);
+    setSaving(mode);
     try {
-      const r = await api.post<CreateToResult>('/transfer-orders', {
+      const body = {
         memo: memo.trim(),
         note_approval: noteApproval.trim() || undefined,
         class_id: classId,
@@ -322,14 +386,42 @@ export default function TransferOrderCreatePage({ backPath }: { backPath: string
           quantity: Number(l.quantity),
           description: l.description.trim() || undefined,
         })),
-      });
-      toast.success('Transfer Order saved. It is being sent to Oracle (Syncing).');
+        draft: mode === 'draft',
+      };
+      const r = editId
+        ? await api.put<CreateToResult>(`/transfer-orders/${editId}`, body)
+        : await api.post<CreateToResult>('/transfer-orders', body);
+      toast.success(
+        mode === 'draft'
+          ? 'Transfer Order saved as Draft.'
+          : 'Transfer Order submitted. It is being sent to Oracle (Syncing).',
+      );
       // Its detail follows the sync; the lists may filter it out.
       navigate(`/admin/outbound/transfer-stock/list/${r.data.id}`);
     } catch (err) {
-      toast.error(errMessage(err, 'Create Transfer Order failed'));
+      toast.error(errMessage(err, mode === 'draft' ? 'Save Draft failed' : 'Submit Transfer Order failed'));
     } finally {
-      setSaving(false);
+      setSaving(null);
+    }
+  }
+
+  /** Edit form only: delete the Draft (it never reached Oracle). */
+  async function deleteDraft() {
+    const ok = await confirm({
+      title: 'Delete this Draft?',
+      description: 'The Draft and its items are removed. It was never sent to Oracle. This cannot be undone.',
+      type: 'danger',
+      confirmText: 'Delete',
+    });
+    if (!ok) return;
+    setSaving('delete');
+    try {
+      await api.delete(`/transfer-orders/${editId}`);
+      toast.success('Draft deleted.');
+      navigate(backPath);
+    } catch (err) {
+      toast.error(errMessage(err, 'Delete failed'));
+      setSaving(null);
     }
   }
 
@@ -356,12 +448,25 @@ export default function TransferOrderCreatePage({ backPath }: { backPath: string
           >
             <Lucide>{icons.chevronLeft}</Lucide>
           </button>
-          <h1 className="text-xl font-semibold text-neutral-900 dark:text-white">Create Transfer Order</h1>
+          <h1 className="text-xl font-semibold text-neutral-900 dark:text-white">
+            {editId ? 'Edit Transfer Order' : cloneId ? 'Clone Transfer Order' : 'Create Transfer Order'}
+          </h1>
+          {editId && source?.outbound_id && (
+            <span className="rounded-full border border-slate-400 bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+              {source.outbound_id} · Draft
+            </span>
+          )}
         </div>
 
         <div className="rounded-r-lg border-l-4 border-[#5166AE] bg-[#F2F4FD] px-4 py-3 text-sm text-[#41528c]">
-          Pick the sending warehouse to see the materials it has available. On submit the Transfer Order is
-          saved and sent to Oracle in the background.
+          {cloneId && source && (
+            <p className="mb-1 font-medium">
+              Copied from the Rejected {source.tran_id ?? source.outbound_id ?? 'Transfer Order'}. Check it, then save it
+              as a new Transfer Order.
+            </p>
+          )}
+          Pick the sending warehouse to see the materials it has available. <b>Save Draft</b> keeps it in WMS (still
+          editable); <b>Submit</b> sends it to Oracle for approval.
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -698,12 +803,31 @@ export default function TransferOrderCreatePage({ backPath }: { backPath: string
         onClose={() => setQuickAddOpen(false)}
       />
 
-      <div className="flex justify-end gap-2">
-        <button type="button" className="btn-secondary" onClick={() => navigate(backPath)} disabled={saving}>
+      <div className="flex flex-wrap justify-end gap-2">
+        {editId && (
+          <button
+            type="button"
+            onClick={deleteDraft}
+            disabled={!!saving}
+            className="mr-auto inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-60 dark:border-red-900/50 dark:bg-transparent"
+          >
+            <Lucide>{icons.trash}</Lucide>
+            {saving === 'delete' ? 'Deleting…' : 'Delete Draft'}
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => navigate(backPath)}
+          disabled={!!saving}
+        >
           Cancel
         </button>
-        <button type="button" className="btn-primary" onClick={submit} disabled={saving}>
-          {saving ? 'Creating…' : 'Create TO'}
+        <button type="button" className="btn-secondary" onClick={() => save('draft')} disabled={!!saving}>
+          {saving === 'draft' ? 'Saving…' : 'Save Draft'}
+        </button>
+        <button type="button" className="btn-primary" onClick={() => save('submit')} disabled={!!saving}>
+          {saving === 'submit' ? 'Submitting…' : 'Submit'}
         </button>
       </div>
     </div>

@@ -20,7 +20,7 @@ import RowActionMenu from '../../components/RowActionMenu';
 import TablePager from '../../components/TablePager';
 import { ExportIcon } from '../../components/ToolbarMenu';
 import ExportConfirmModal, { type ExportScope, type ExportSummary } from '../../components/ExportConfirmModal';
-import { TO_STATUSES, TO_SYNC_STATUSES, soStatusBadgeClass } from '../../lib/salesOrderStatus';
+import { TO_DRAFT, TO_STATUSES, TO_SYNC_STATUSES, soStatusBadgeClass } from '../../lib/salesOrderStatus';
 import TransferOrderLinesTable from './TransferOrderLinesTable';
 import TransferInLinesTable from '../inbound/TransferInLinesTable';
 import {
@@ -41,7 +41,7 @@ import {
 const DEFAULT_STATUS = 'Pending Fulfillment';
 
 /** Inbound (TO In) leaves out TOs that have not been fulfilled yet. */
-const NOT_INBOUND_STATUSES = ['Pending Approval', 'Pending Fulfillment', ...TO_SYNC_STATUSES];
+const NOT_INBOUND_STATUSES = [TO_DRAFT, 'Pending Approval', 'Pending Fulfillment', ...TO_SYNC_STATUSES];
 const INBOUND_STATUSES = TO_STATUSES.filter((s) => !NOT_INBOUND_STATUSES.includes(s));
 /** TO In opens on what is waiting to be received. */
 const DEFAULT_INBOUND_STATUS = 'Pending Receipt';
@@ -541,9 +541,10 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
                     : all;
                   // A Part Number filter shows every match; otherwise only the first few.
                   const lines = partFilters.length ? matching : matching.slice(0, LINE_PREVIEW);
+                  // A Draft opens straight on its edit form.
                   const detailPath = isIn
                     ? `/admin/inbound/transfer/to/${t.id}`
-                    : `/admin/outbound/transfer-stock/list/${t.id}`;
+                    : `/admin/outbound/transfer-stock/list/${t.id}${canCreate && t.status_name === TO_DRAFT ? '/edit' : ''}`;
                   return [
                     <tr key={t.id} className={expandableRowClass(open, loading)} onClick={() => toggleRow(t.id)}>
                       <RowExpandCell open={open} onToggle={() => toggleRow(t.id)} noun="lines" />
@@ -580,6 +581,10 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
                               icon: <DetailIcon />,
                               onClick: () => navigate(detailPath),
                             },
+                            // TO Out: a Rejected TO is cloned into a new one.
+                            ...(!isIn && canCreate && t.status_name === 'Rejected'
+                              ? [{ label: 'Clone', icon: <CloneIcon />, onClick: () => navigate(`/admin/outbound/transfer-stock/list/create?clone=${t.id}`) }]
+                              : []),
                           ]}
                         />
                       </td>
@@ -649,5 +654,14 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
       </div>
 
     </div>
+  );
+}
+
+function CloneIcon() {
+  return (
+    <svg className="h-4 w-4 text-slate-500" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+    </svg>
   );
 }

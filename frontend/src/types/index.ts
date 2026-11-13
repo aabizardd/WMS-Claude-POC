@@ -607,10 +607,28 @@ export interface CreateToStockItem {
   qty_available: number;
 }
 
-/** The TO is saved in WMS as Syncing; Oracle is called in the background. */
+/** The TO is saved in WMS as a Draft, or as Syncing (Oracle is called in the background). */
 export interface CreateToResult {
   id: string;
   status_name: string;
+}
+
+/** A Draft (to edit) or a Rejected TO (to clone) as Create TO form data. */
+export interface CreateToFormData {
+  id: string;
+  purpose: 'edit' | 'clone';
+  status_name: string | null;
+  outbound_id: string | null;
+  tran_id: string | null;
+  from_warehouse_id: string | null;
+  to_warehouse_id: string | null;
+  class_id: string | null;
+  department_id: string | null;
+  memo: string;
+  note_approval: string;
+  items: { item: CreateToStockItem; quantity: number; description: string }[];
+  /** Lines left out: their material is unknown to WMS. */
+  skipped: string[];
 }
 
 /** How far a TO created in WMS got on its way to Oracle. */
@@ -705,6 +723,8 @@ export interface TransferOrderDetail extends TransferOrderSyncFields {
   outbound_id?: string | null;
   /** False when the user's warehouse is only the destination (view only). */
   can_pick?: boolean;
+  /** A Draft this user may edit, submit or delete. */
+  can_edit_draft?: boolean;
   id: string;
   /** Null on a TO created in WMS until Oracle has it. */
   oracle_id: string | null;
