@@ -14,7 +14,7 @@ import type { WarehouseScope } from './goods-receive.service';
 import { inScope } from '../common/warehouse-scope';
 
 // TOs not fulfilled yet have nothing to receive.
-const NOT_RECEIVABLE_TO_STATUSES = ['Pending Approval', 'Pending Fulfillment'];
+const NOT_RECEIVABLE_TO_STATUSES = ['Draft', 'Pending Approval', 'Pending Fulfillment'];
 
 interface ItemReceiptResponse {
   success: boolean;

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import api from '../../lib/api';
 import GeneratePickingModal, {
@@ -32,7 +32,9 @@ export default function TransferOrderDetailPage() {
   const toast = useToast();
   const canGenerate = has('picking:create');
   const canRetrySync = has('transfer-orders:create');
+  const canCreate = canRetrySync;
   const [retrying, setRetrying] = useState(false);
+  const navigate = useNavigate();
 
   const [to, setTo] = useState<TransferOrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -103,6 +105,13 @@ export default function TransferOrderDetailPage() {
       setRetrying(false);
     }
   }
+
+  // A Draft this user may edit opens on its edit form (Save Draft / Submit / Delete there).
+  useEffect(() => {
+    if (to && to.id === id && canCreate && to.status_name === 'Draft' && to.can_edit_draft) {
+      navigate(`/admin/outbound/transfer-stock/list/${to.id}/edit`, { replace: true });
+    }
+  }, [to, id, canCreate, navigate]);
 
   const items = useMemo(() => to?.items ?? [], [to]);
   const filtered = useMemo(() => {
@@ -212,6 +221,7 @@ export default function TransferOrderDetailPage() {
   // A user of the destination warehouse sees the TO but does not pick it.
   const showGenerate = canGenerate && to.can_pick !== false && TO_PICKABLE_STATUSES.includes(to.status_name ?? '');
   const notYet = () => toast.info('This is not available yet.');
+  const canClone = canCreate && to.status_name === 'Rejected';
 
   return (
     <div className="card p-5">
@@ -247,6 +257,11 @@ export default function TransferOrderDetailPage() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h5M20 20v-5h-5M5 19a9 9 0 0014.13-3M19 5A9 9 0 004.87 8" />
             </svg>
           </button>
+          {canClone && (
+            <Link to={`/admin/outbound/transfer-stock/list/create?clone=${to.id}`} className="btn-primary">
+              Clone
+            </Link>
+          )}
           {showGenerate && (
             <button className="btn-primary" onClick={openGenerate}>
               Generate Picking List
@@ -264,6 +279,17 @@ export default function TransferOrderDetailPage() {
         </div>
       )}
 
+      {to.status_name === 'Draft' && (
+        <div className="mb-4 rounded-lg border border-slate-300 bg-slate-50 px-4 py-2.5 text-sm text-slate-700">
+          <b>Draft</b> — saved in WMS only, not sent to Oracle yet.{' '}
+Its creator or the sending warehouse can edit and submit it.
+        </div>
+      )}
+      {to.status_name === 'Rejected' && canCreate && (
+        <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm text-rose-800">
+          Rejected in Oracle. Use <b>Clone</b> to create a new Transfer Order with the same content.
+        </div>
+      )}
       {to.source === 'WMS' && to.sync_status && to.sync_status !== 'Synced' && (
         <SyncBanner
           status={to.sync_status}

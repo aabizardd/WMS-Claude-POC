@@ -863,6 +863,11 @@ model TransferOrder {
   // The Oracle request body (trandate is set on each attempt).
   createPayload Json?     @map("create_payload")
   createdById   Int?      @map("created_by_id")
+  // Create TO form fields kept for a Draft (edited, then submitted) and for
+  // Clone: Oracle's TO carries neither class, department nor the approval note.
+  classId       String?   @map("class_id")
+  departmentId  String?   @map("department_id")
+  noteApproval  String?   @map("note_approval")
 
   items    TransferOrderItem[]
   pickings Picking[]

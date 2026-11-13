@@ -17,9 +17,12 @@ export const SO_STATUSES = [
  * Failed when Oracle did not take it.
  */
 export const TO_SYNC_STATUSES = ['Syncing', 'Failed'];
+/** A TO saved in WMS only (still editable); Submit sends it to Oracle. */
+export const TO_DRAFT = 'Draft';
 
 /** Oracle's transfer-order statuses, in the order the status filter lists them. */
 export const TO_STATUSES = [
+  TO_DRAFT,
   ...TO_SYNC_STATUSES,
   'Open',
   'Pending Approval',
@@ -56,6 +59,7 @@ const STATUS_BADGE: Record<string, string> = {
   'Rejected by Supervisor': 'border-rose-300 bg-rose-50 text-rose-700',
   'On Progress': 'border-orange-300 bg-orange-50 text-orange-700',
   // A TO created in WMS, on its way to Oracle.
+  Draft: 'border-slate-400 bg-slate-100 text-slate-700',
   Syncing: 'border-sky-300 bg-sky-50 text-sky-700',
   Failed: 'border-rose-300 bg-rose-50 text-rose-700',
 };

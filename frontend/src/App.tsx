@@ -848,6 +848,14 @@ export default function App() {
             }
           />
           <Route
+            path="outbound/transfer-stock/list/:id/edit"
+            element={
+              <RequirePermission permission="transfer-orders:create">
+                <TransferOrderCreatePage backPath="/admin/outbound/transfer-stock/list" />
+              </RequirePermission>
+            }
+          />
+          <Route
             path="outbound/transfer-stock/list/:id"
             element={
               <RequirePermission permission="transfer-orders:read">

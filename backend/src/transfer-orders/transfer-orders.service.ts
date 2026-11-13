@@ -31,7 +31,7 @@ const DEFAULT_ORDER: ToOrder = { lastModified: 'desc' };
 
 /** TOs not fulfilled yet have nothing to receive: left out of the inbound view. */
 // Also the WMS-only states of a TO created in WMS and not yet in Oracle.
-const NOT_INBOUND_STATUSES = ['Pending Approval', 'Pending Fulfillment', 'Syncing', 'Failed'];
+const NOT_INBOUND_STATUSES = ['Draft', 'Pending Approval', 'Pending Fulfillment', 'Syncing', 'Failed'];
 
 /** A line's resolved WMS material (lines carry only its id). */
 type MatInfo = {
@@ -708,7 +708,7 @@ export class TransferOrdersService {
     return { lastSyncAt: latest?.createdAt ?? null };
   }
 
-  async findOne(id: string, scope: WarehouseScope) {
+  async findOne(id: string, scope: WarehouseScope & { userId?: number }) {
     const to = await this.prisma.transferOrder.findFirst({
       where: { id, ...this.scopeWhere(scope) },
       include: detailInclude,
@@ -722,6 +722,12 @@ export class TransferOrdersService {
       ...this.serializeDetail(to, matById, available),
       // Only the origin warehouse picks; the destination just follows it.
       can_pick: inScope(scope, to.warehouseId),
+      // A Draft is edited, submitted or deleted by its creator or the sending warehouse.
+      can_edit_draft:
+        to.statusName === 'Draft' && (to.createdById === scope.userId || inScope(scope, to.warehouseId)),
+      class_id: to.classId,
+      department_id: to.departmentId,
+      note_approval: to.noteApproval,
     };
   }
 
