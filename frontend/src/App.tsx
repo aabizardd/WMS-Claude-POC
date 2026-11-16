@@ -51,6 +51,7 @@ import TransferPutawayListPage from './pages/inbound/transfer/TransferPutawayLis
 import TransferPutawayDetailPage from './pages/inbound/transfer/TransferPutawayDetailPage';
 import TransferHistoryPage from './pages/inbound/transfer/TransferHistoryPage';
 import TransferOrderCreatePage from './pages/outbound/TransferOrderCreatePage';
+import CreateToAnalysisPage from './pages/outbound/CreateToAnalysisPage';
 import InventoryLandingPage from './pages/inventory/InventoryLandingPage';
 import InventoryPage from './pages/inventory/InventoryPage';
 import InventoryQtySourcePage from './pages/inventory/InventoryQtySourcePage';
@@ -844,6 +845,14 @@ export default function App() {
             element={
               <RequirePermission permission="transfer-orders:create">
                 <TransferOrderCreatePage backPath="/admin/outbound/transfer-stock/list" />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="outbound/transfer-stock/create-to-analysis"
+            element={
+              <RequirePermission permission="transfer-orders:create">
+                <CreateToAnalysisPage />
               </RequirePermission>
             }
           />
