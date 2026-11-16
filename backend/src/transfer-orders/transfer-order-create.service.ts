@@ -106,7 +106,7 @@ export function readCreatedTo(body: OracleCreateToResponse | null) {
  * not (then Retry). One sender per TO at a time (a lock on the row), and a
  * retry after an unanswered attempt looks for it in Oracle before sending.
  */
-/** Billing warehouses (any case) are never offered as a TO's sending warehouse. */
+/** Billing warehouses (any case) are never offered as a TO's sending or receiving warehouse. */
 export const isBillingWarehouse = (name: string) => /billing/i.test(name);
 
 @Injectable()
@@ -132,12 +132,18 @@ export class TransferOrderCreateService implements OnApplicationBootstrap {
       })
     )
       .map((o) => o.warehouse)
+      // Billing warehouses hold no physical stock: never a TO's destination either.
+      .filter((w) => !isBillingWarehouse(w.name))
       .sort((a, b) => a.name.localeCompare(b.name));
     const options =
       own.length && user.role !== 'admin'
         ? own
         : await this.prisma.warehouse.findMany({
-            where: { isInactive: false, subsidiaryId: subsidiarySingleFilter() },
+            where: {
+              isInactive: false,
+              subsidiaryId: subsidiarySingleFilter(),
+              NOT: { name: { contains: 'billing', mode: 'insensitive' } },
+            },
             orderBy: { name: 'asc' },
             select: { id: true, name: true, oracleId: true },
           });
@@ -337,6 +343,9 @@ export class TransferOrderCreateService implements OnApplicationBootstrap {
       throw new BadRequestException(`"${from.name}" is a billing warehouse and cannot send a Transfer Order`);
     }
     if (!to || to.isInactive) throw new BadRequestException('Receiving warehouse not found');
+    if (isBillingWarehouse(to.name)) {
+      throw new BadRequestException(`"${to.name}" is a billing warehouse and cannot receive a Transfer Order`);
+    }
     if (!receivable.options.some((w) => w.id === to.id)) {
       throw new BadRequestException(`"${to.name}" is not one of your warehouses`);
     }
