@@ -247,6 +247,7 @@ export default function SalesOrderDetailPage() {
           <Info label="Ownership" value={so.ownership ?? so.subsidiary_name} />
           <Info label="Warehouse Name" value={so.warehouse?.name ?? so.location_name} />
           <Info label="Customer Name" value={so.customer_name} />
+          <Info label="PO Number" value={so.po_number} />
           <Info label="ERP Doc ID" value={so.oracle_id} />
         </dl>
       </div>
@@ -359,6 +360,7 @@ export default function SalesOrderDetailPage() {
           { label: 'Warehouse Name', value: so.warehouse?.name ?? so.location_name },
           { label: 'Ownership', value: so.ownership ?? so.subsidiary_name },
           { label: 'Customer', value: so.customer_name },
+          { label: 'PO Number', value: so.po_number },
         ]}
         loadError={genError}
         preselectedIds={preselected}

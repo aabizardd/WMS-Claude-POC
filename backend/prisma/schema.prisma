@@ -1484,6 +1484,9 @@ model SalesOrder {
   customerId   String? @map("customer_id")
   customerName String? @map("customer_name")
 
+  // Oracle's "otherrefnum": the customer's PO number, shown as "PO Number".
+  poNumber String? @map("po_number")
+
   memo String?
 
   // location -> WMS warehouse (by Oracle id) for scoping.

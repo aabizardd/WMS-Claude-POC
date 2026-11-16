@@ -24,6 +24,7 @@ export const SALES_ORDER_FILTER_FIELDS = [
   'tran_id',
   'oracle_id',
   'customer_name',
+  'po_number',
   // Matched on the warehouse id: the field is a dropdown, and several sites
   // share a name apart from their capitalisation.
   'warehouse_id',

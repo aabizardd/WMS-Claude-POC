@@ -40,6 +40,8 @@ import {
   DeliveryHeaderCells,
   DeliveryRowCells,
   deliveryColumnOptions,
+  visibleDeliveryColumns,
+  deliveryColumnsToSave,
 } from './deliveryColumns';
 import DeliveryItemsTable from './DeliveryItemsTable';
 
@@ -78,6 +80,7 @@ const SO_FILTERS: FilterSet = {
   ],
   extra: [
     { value: 'tran_id', label: 'Transaction ID', kind: 'text' },
+    { value: 'po_number', label: 'PO Number', kind: 'text' },
     { value: 'material_name', label: 'Material Name', kind: 'text', item: true },
     { value: 'customer_name', label: 'Customer Name', kind: 'text' },
     { value: 'oracle_id', label: 'ERP Doc ID', kind: 'text' },
@@ -183,7 +186,9 @@ export default function DeliveryList({
   // Every delivery's lines are open by default; this holds the ones closed by hand.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
-  const { visible, setVisible } = useColumnVisibility('wms.deliveryPlan.columns.v2', DELIVERY_COLUMN_KEYS);
+  const { visible: saved, setVisible } = useColumnVisibility('wms.deliveryPlan.columns.v2', DELIVERY_COLUMN_KEYS);
+  // PO Number belongs to Sales Orders: the TO list never shows it.
+  const visible = visibleDeliveryColumns(saved, isTransfer);
   // Expand + No + the chosen columns + Actions.
   const colCount = visible.length + 3;
 
@@ -375,7 +380,11 @@ export default function DeliveryList({
           toolbar={
             <>
               <ExpandAllButton anyOpen={anyOpen} onClick={toggleAll} disabled={rows.length === 0} />
-              <ColumnSettings columns={deliveryColumnOptions(isTransfer)} visible={visible} onApply={setVisible} />
+              <ColumnSettings
+                columns={deliveryColumnOptions(isTransfer)}
+                visible={visible}
+                onApply={(next) => setVisible(deliveryColumnsToSave(next, saved, isTransfer))}
+              />
               <RefreshButton onClick={() => setReloadKey((k) => k + 1)} spinning={loading} />
             </>
           }

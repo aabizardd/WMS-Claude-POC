@@ -71,6 +71,7 @@ const packingSelect = {
           id: true,
           oracleId: true,
           tranId: true,
+          poNumber: true,
           customerName: true,
           subsidiaryName: true,
         },
@@ -137,6 +138,7 @@ const DELIVERY_SORTABLE: Record<string, (d: SortDir) => DeliveryOrder> = {
   sdo_id: (d) => ({ sdoId: d }),
   packing_id: (d) => ({ packing: { packingCode: d } }),
   so_number: (d) => ({ packing: { picking: { salesOrder: { tranId: d } } } }),
+  po_number: (d) => ({ packing: { picking: { salesOrder: { poNumber: d } } } }),
   customer: (d) => ({
     packing: { picking: { salesOrder: { customerName: d } } },
   }),
@@ -175,6 +177,8 @@ const DELIVERY_FILTERS: Record<string, (v: string) => Prisma.DeliveryWhereInput>
   tran_id: (v) => ({
     OR: [viaSalesOrder({ tranId: ci(v) }), viaTransferOrder({ tranId: ci(v) })],
   }),
+  // The SO's customer PO number (Oracle otherrefnum).
+  po_number: (v) => viaSalesOrder({ poNumber: ci(v) }),
   // Value is the customer's Oracle id (the master's oracleId).
   customer_id: (v) => viaSalesOrder({ customerId: v }),
   oracle_id: (v) => ({
@@ -333,6 +337,7 @@ export class DeliveryService {
         },
         { warehouse: { name: ci(query.search) } },
         viaSalesOrder({ customerName: ci(query.search) }),
+        viaSalesOrder({ poNumber: ci(query.search) }),
         viaTransferOrder({ toLocationName: ci(query.search) }),
       ];
     }
@@ -831,6 +836,7 @@ export class DeliveryService {
       so_number: so?.tranId ?? null,
       to_number: to?.tranId ?? null,
       source_number: so?.tranId ?? to?.tranId ?? null,
+      po_number: so?.poNumber ?? null,
       customer: so?.customerName ?? to?.toLocationName ?? null,
       location: d.warehouse?.name ?? null,
       status: d.status,
@@ -929,6 +935,7 @@ export class DeliveryService {
       to_oracle_id: to?.oracleId ?? null,
       to_number: to?.tranId ?? null,
       source_number: so?.tranId ?? to?.tranId ?? null,
+      po_number: so?.poNumber ?? null,
       customer: so?.customerName ?? to?.toLocationName ?? null,
       location: d.warehouse?.name ?? null,
       status: d.status,

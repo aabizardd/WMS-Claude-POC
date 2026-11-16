@@ -32,6 +32,7 @@ const SALES_ORDER_SORTABLE: Record<string, (d: SortDir) => SalesOrderOrder> = {
   oracle_id: (d) => ({ oracleId: d }),
   ownership: (d) => ({ subsidiaryName: d }),
   customer_name: (d) => ({ customerName: d }),
+  po_number: (d) => ({ poNumber: d }),
   created_by: (d) => ({ createdBy: d }),
   location: (d) => ({ warehouse: { name: d } }),
   status_name: (d) => ({ statusName: d }),
@@ -49,6 +50,7 @@ const HEADER_FILTERS: Record<
   tran_id: (v) => ({ tranId: { contains: v, mode: 'insensitive' } }),
   oracle_id: (v) => ({ oracleId: { contains: v, mode: 'insensitive' } }),
   customer_name: (v) => ({ customerName: { contains: v, mode: 'insensitive' } }),
+  po_number: (v) => ({ poNumber: { contains: v, mode: 'insensitive' } }),
   // Exact: the value comes from the warehouse dropdown, which sends ids.
   warehouse_id: (v) => ({ warehouseId: v }),
   // Free text on the warehouse name (the tracking page's filter field).
@@ -128,6 +130,7 @@ export class SalesOrdersService {
       where.OR = [
         { tranId: { contains: query.search, mode: 'insensitive' } },
         { customerName: { contains: query.search, mode: 'insensitive' } },
+        { poNumber: { contains: query.search, mode: 'insensitive' } },
         { oracleId: { contains: query.search, mode: 'insensitive' } },
         { locationName: { contains: query.search, mode: 'insensitive' } },
         { warehouse: { name: { contains: query.search, mode: 'insensitive' } } },
@@ -474,6 +477,7 @@ export class SalesOrdersService {
       status_name: s.statusName,
       delivery_status: s.deliveryStatus,
       customer_name: s.customerName,
+      po_number: s.poNumber,
       location_name: s.locationName,
       warehouse: s.warehouse,
       total_amount: s.totalAmount,
@@ -501,6 +505,7 @@ export class SalesOrdersService {
       delivery_status: s.deliveryStatus,
       customer_id: s.customerId,
       customer_name: s.customerName,
+      po_number: s.poNumber,
       memo: s.memo,
       location_name: s.locationName,
       warehouse: s.warehouse,

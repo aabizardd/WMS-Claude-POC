@@ -25,6 +25,8 @@ interface OracleSalesOrder {
   customer_id?: string | number | null;
   customer_name?: string | null;
   memo?: string | null;
+  /** The customer's PO number ("PO Number" in WMS). */
+  otherrefnum?: string | null;
   location?: string | number | null;
   location_name?: string | null;
   subsidiary?: string | number | null;
@@ -187,13 +189,15 @@ export class SalesOrderSyncService {
     // skipping items when the header is unchanged leaves details stale.
     const existing = await this.prisma.salesOrder.findUnique({
       where: { oracleId },
-      select: { id: true, lastModified: true, outboundId: true, createdAt: true },
+      select: { id: true, lastModified: true, outboundId: true, createdAt: true, poNumber: true },
     });
     const headerChanged = !(
       existing &&
       newLm &&
       existing.lastModified &&
-      existing.lastModified.getTime() === newLm.getTime()
+      existing.lastModified.getTime() === newLm.getTime() &&
+      // Rows synced before PO Number existed pick it up on the next pass.
+      existing.poNumber === (so.otherrefnum?.trim() || null)
     );
 
     // Resolve header location -> WMS warehouse (by Oracle id) for scoping.
@@ -213,6 +217,7 @@ export class SalesOrderSyncService {
       statusName: so.status_name ?? null,
       customerId: so.customer_id != null ? String(so.customer_id) : null,
       customerName: so.customer_name ?? null,
+      poNumber: so.otherrefnum?.trim() || null,
       memo: so.memo ?? null,
       locationOracleId: so.location != null ? String(so.location) : null,
       locationName: so.location_name ?? null,

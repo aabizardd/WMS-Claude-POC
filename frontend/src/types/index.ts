@@ -1241,6 +1241,8 @@ export interface SalesOrderRow {
   status_name: string | null;
   delivery_status: string;
   customer_name: string | null;
+  /** Oracle's otherrefnum: the customer's PO number. */
+  po_number?: string | null;
   location_name: string | null;
   warehouse: { id: string; name: string } | null;
   total_amount: number;
@@ -1290,6 +1292,8 @@ export interface SalesOrderDetail {
   delivery_status: string;
   customer_id: string | null;
   customer_name: string | null;
+  /** Oracle's otherrefnum: the customer's PO number. */
+  po_number?: string | null;
   memo: string | null;
   location_name: string | null;
   warehouse: { id: string; name: string } | null;
@@ -1496,6 +1500,8 @@ export interface DeliveryRow {
   so_number: string | null;
   to_number: string | null;
   source_number: string | null;
+  /** The SO's customer PO number (Oracle otherrefnum); null for TO. */
+  po_number?: string | null;
   customer: string | null;
   location: string | null;
   status: string;
@@ -1527,6 +1533,8 @@ export type DeliveryFilterField =
   | 'created_by_name'
   | 'sdo_id'
   | 'tran_id'
+  /** Sales Order deliveries: the SO's PO number. */
+  | 'po_number'
   | 'customer_id'
   | 'oracle_id'
   | 'packing_code'
@@ -1589,6 +1597,8 @@ export interface DeliveryDetail {
   to_oracle_id: string | null;
   to_number: string | null;
   source_number?: string | null;
+  /** The SO's customer PO number (Oracle otherrefnum); null for TO. */
+  po_number?: string | null;
   customer: string | null;
   location: string | null;
   status: string;
@@ -1810,6 +1820,8 @@ export type SalesOrderFilterField =
   | 'tran_id'
   | 'oracle_id'
   | 'customer_name'
+  /** Oracle's otherrefnum. */
+  | 'po_number'
   /** Matched on the warehouse id — the field is a dropdown, not free text. */
   /** Free text on the warehouse name. */
   | 'warehouse_name'
