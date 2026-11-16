@@ -405,12 +405,22 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
           ]}
           actions={
             canCreate && (
-              <Link
-                to={isIn ? '/admin/inbound/transfer/to/create' : '/admin/outbound/transfer-stock/list/create'}
-                className="btn-primary"
-              >
-                + Create TO
-              </Link>
+              <div className="flex flex-wrap items-center gap-2">
+                {/* End-to-end analysis of Create TO, for SA and developers. */}
+                <Link
+                  to="/admin/outbound/transfer-stock/create-to-analysis"
+                  className="btn-secondary"
+                  title="End-to-end analysis of Create TO (Draft, Submit, Oracle, Clone)"
+                >
+                  Analisa Create TO
+                </Link>
+                <Link
+                  to={isIn ? '/admin/inbound/transfer/to/create' : '/admin/outbound/transfer-stock/list/create'}
+                  className="btn-primary"
+                >
+                  + Create TO
+                </Link>
+              </div>
             )
           }
         />
