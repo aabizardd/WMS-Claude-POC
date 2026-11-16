@@ -221,6 +221,7 @@ export default function DeliveryDetailPage() {
               )
             }
           />
+          {!isTransfer && <Info label="PO Number" value={dl.po_number} />}
           <Info label="SD Number" value={dl.sdo_id} />
           <Info label="Delivery ID" value={dl.delivery_id} />
           <Info

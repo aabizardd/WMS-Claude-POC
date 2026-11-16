@@ -25,6 +25,7 @@ export const DELIVERY_FILTER_KEYS = [
   'created_by_name',
   'sdo_id',
   'tran_id',
+  'po_number',
   'customer_id',
   'oracle_id',
   'packing_code',

@@ -12,6 +12,7 @@ import SortableTh from '../../components/SortableTh';
 export type DeliveryColumnKey =
   | 'status'
   | 'transaction_id'
+  | 'po_number'
   | 'delivery_id'
   | 'sd_number'
   | 'packing_id'
@@ -29,6 +30,8 @@ interface DeliveryColumn {
   /** Server sort key; absent where the server cannot order by it. */
   sortCol?: string;
   cell: (d: DeliveryRow, basePath: string) => ReactNode;
+  /** Only on Sales Order deliveries. */
+  soOnly?: true;
 }
 
 /** "2026-10-21 13:44", as on the other outbound lists. */
@@ -60,6 +63,13 @@ export const DELIVERY_COLUMNS: DeliveryColumn[] = [
     label: () => 'Transaction ID',
     sortCol: 'so_number',
     cell: (d) => d.source_number ?? '-',
+  },
+  {
+    key: 'po_number',
+    label: () => 'PO Number',
+    sortCol: 'po_number',
+    cell: (d) => d.po_number || '-',
+    soOnly: true,
   },
   { key: 'delivery_id', label: () => 'Delivery ID', sortCol: 'delivery_code', cell: (d) => d.delivery_id },
   { key: 'sd_number', label: () => 'SD Number', sortCol: 'sdo_id', cell: (d) => d.sdo_id ?? '-' },
@@ -107,7 +117,25 @@ export const DELIVERY_COLUMNS: DeliveryColumn[] = [
 export const DELIVERY_COLUMN_KEYS = DELIVERY_COLUMNS.map((c) => c.key);
 
 export function deliveryColumnOptions(isTransfer: boolean) {
-  return DELIVERY_COLUMNS.map((c) => ({ key: c.key, label: c.label(isTransfer) }));
+  return DELIVERY_COLUMNS.filter((c) => !(isTransfer && c.soOnly)).map((c) => ({
+    key: c.key,
+    label: c.label(isTransfer),
+  }));
+}
+
+const SO_ONLY = new Set<string>(DELIVERY_COLUMNS.filter((c) => c.soOnly).map((c) => c.key));
+
+/** The saved visible columns, less those that do not apply to this source. */
+export function visibleDeliveryColumns(visible: string[], isTransfer: boolean) {
+  return isTransfer ? visible.filter((k) => !SO_ONLY.has(k)) : visible;
+}
+
+/**
+ * Columns to save from the column settings. SO and TO share one setting, so
+ * the TO list keeps the SO-only columns as they were.
+ */
+export function deliveryColumnsToSave(next: string[], saved: string[], isTransfer: boolean) {
+  return isTransfer ? [...next, ...saved.filter((k) => SO_ONLY.has(k))] : next;
 }
 
 export function DeliveryHeaderCells({

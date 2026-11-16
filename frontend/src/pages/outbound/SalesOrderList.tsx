@@ -75,6 +75,7 @@ const EXTRA_FIELDS: FieldDef[] = [
   { value: 'tran_id', label: 'Transaction ID', kind: 'text' },
   { value: 'oracle_id', label: 'ERP Doc ID', kind: 'text' },
   { value: 'customer_name', label: 'Customer', kind: 'text' },
+  { value: 'po_number', label: 'PO Number', kind: 'text' },
   { value: 'delivery_status', label: 'Delivery Status', kind: 'delivery_status' },
   { value: 'memo', label: 'Memo', kind: 'text' },
   { value: 'material_name', label: 'Material Name', kind: 'text', item: true },
@@ -159,8 +160,8 @@ function formatDateTime(value: string | null | undefined): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-/** expand, No, 11 data columns, Actions. */
-const COLS = 14;
+/** expand, No, 12 data columns, Actions. */
+const COLS = 15;
 
 /** Line quantities summed over every order matching the filters (Available Qty excluded). */
 interface Totals {
@@ -502,6 +503,7 @@ export default function SalesOrderList() {
                 <SortableTh label="Ownership" col="ownership" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="Warehouse Name" col="location" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="Customer Name" col="customer_name" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                <SortableTh label="PO Number" col="po_number" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="Created By" col="created_by" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="Created At" col="created_at" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <th className="whitespace-nowrap px-4 py-3 font-medium">Last Modified By</th>
@@ -547,6 +549,7 @@ export default function SalesOrderList() {
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.ownership ?? '-'}</td>
                       <td className="px-4 py-3 text-slate-700">{t.warehouse?.name ?? t.location_name ?? '-'}</td>
                       <td className="px-4 py-3 text-slate-700">{t.customer_name ?? '-'}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.po_number || '-'}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.created_by ?? '-'}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDateTime(t.created_at)}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.last_modified_by ?? '-'}</td>
