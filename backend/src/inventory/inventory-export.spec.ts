@@ -20,7 +20,7 @@ describe('Inventory List export', () => {
     });
     const inv = {
       materialCode: 'M-1',
-      material: { materialName: 'BOLT', primaryUom: { uomCode: 'PCS' } },
+      material: { materialName: 'BOLT', erpDocId: '12345', primaryUom: { uomCode: 'PCS' } },
       warehouse: { name: 'Jakarta - IEL' },
       binStocks: [bs('KIT A1-01', 'K1', { availQty: 5 }), bs('Rack B', 'RB', { availQty: 2, reservedQty: 1 }), bs('Rack C', 'RC', { qtyIssue: 4, qualityIssue: 3 })],
     };
@@ -35,6 +35,7 @@ describe('Inventory List export', () => {
       ['Rack B', 2, 0, 1],
       ['Rack C', 0, 0, 0],
     ]);
+    expect(all.every((r) => r.material_code === 'M-1' && r.erp_doc_id === '12345')).toBe(true);
     expect(all.map((r) => [r.qty_quantity_issue, r.qty_quality_issue])).toEqual([
       [0, 0],
       [0, 0],

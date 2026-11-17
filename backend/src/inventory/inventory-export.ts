@@ -13,6 +13,7 @@ const col = (key: keyof InventoryExportRow, width: number): ExportColumn<Invento
 });
 const COLUMNS = [
   col('material_code', 22),
+  col('erp_doc_id', 14),
   col('material_name', 34),
   col('warehouse_name', 32),
   col('bin_label', 22),

@@ -168,6 +168,8 @@ interface InventoryListQuery {
 /** One row of the Inventory List export: a material's stock in one bin. */
 export interface InventoryExportRow {
   material_code: string;
+  /** The material's Oracle item id ("ERP Doc ID" on the list and detail). */
+  erp_doc_id: string | null;
   material_name: string | null;
   warehouse_name: string | null;
   bin_label: string | null;
@@ -338,6 +340,7 @@ export class InventoryService {
           const frozen = isFrozenBinLabel(bs.bin?.binLabel);
           rows.push({
             material_code: m.materialCode,
+            erp_doc_id: m.material?.erpDocId ?? null,
             material_name: m.material?.materialName ?? null,
             warehouse_name: m.warehouse?.name ?? null,
             bin_label: label || null,
