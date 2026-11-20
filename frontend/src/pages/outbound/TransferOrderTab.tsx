@@ -145,6 +145,8 @@ const locationName = (v: string | null | undefined) => (v ? v.replace(/^[^:]+:\s
 
 /** expand, No, 11 data columns, Actions. */
 const COLS = 14;
+/** TO Out only: Class, Department, Memo, Note Approval (the Create TO fields). */
+const CREATE_FIELD_COLS = 4;
 
 /** Line quantities summed over every order matching the filters (Available Qty excluded). */
 interface Totals {
@@ -165,7 +167,7 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
   const defaultStatus = isIn ? DEFAULT_INBOUND_STATUS : DEFAULT_STATUS;
   const statusOptions = isIn ? INBOUND_STATUSES : TO_STATUSES;
   // WMS dev's inbound list has no Doc Type column.
-  const cols = isIn ? COLS - 1 : COLS;
+  const cols = isIn ? COLS - 1 : COLS + CREATE_FIELD_COLS;
   const { has } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
@@ -526,6 +528,14 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
                 <SortableTh label="Ownership" col="ownership" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="Origin Warehouse" col="from_location" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="Destination Warehouse" col="to_location" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                {!isIn && (
+                  <>
+                    <th className="whitespace-nowrap px-4 py-3 font-medium">Class</th>
+                    <th className="whitespace-nowrap px-4 py-3 font-medium">Department</th>
+                    <SortableTh label="Memo" col="memo" sort={sort} onSort={onSort} pad="px-4" className={th} />
+                    <th className="whitespace-nowrap px-4 py-3 font-medium">Note Approval</th>
+                  </>
+                )}
                 <SortableTh label="Created By" col="created_by" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <SortableTh label="Created At" col="created_at" sort={sort} onSort={onSort} pad="px-4" className={th} />
                 <th className="whitespace-nowrap px-4 py-3 font-medium">Last Modified By</th>
@@ -579,6 +589,19 @@ export default function TransferOrderTab({ direction = 'out' }: { direction?: 'o
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.ownership ?? '-'}</td>
                       <td className="px-4 py-3 text-slate-700">{t.warehouse?.name ?? locationName(t.from_location_name)}</td>
                       <td className="px-4 py-3 text-slate-700">{locationName(t.to_location_name)}</td>
+                      {!isIn && (
+                        <>
+                          <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.class_name ?? '-'}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.department_name ?? '-'}</td>
+                          {/* Long text: one line here, the full text on hover and in the detail. */}
+                          <td className="max-w-[220px] truncate px-4 py-3 text-slate-700" title={t.memo ?? undefined}>
+                            {t.memo || '-'}
+                          </td>
+                          <td className="max-w-[220px] truncate px-4 py-3 text-slate-700" title={t.note_approval ?? undefined}>
+                            {t.note_approval || '-'}
+                          </td>
+                        </>
+                      )}
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.created_by ?? '-'}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDateTime(t.created_at)}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{t.last_modified_by ?? '-'}</td>

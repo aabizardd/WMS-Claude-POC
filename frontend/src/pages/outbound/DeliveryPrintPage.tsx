@@ -106,11 +106,14 @@ export default function DeliveryPrintPage({ basePath }: { basePath: string }) {
         <thead>
           <tr>
             <PrintTh en="ERP Doc ID" zh="ERP单据号" />
+            {!isTransfer && <PrintTh en="PO Number" zh="采购订单号" />}
           </tr>
         </thead>
         <tbody>
           <tr>
             <PrintTd>{d.erp_doc_id}</PrintTd>
+            {/* The customer's PO reference from the Sales Order (Oracle otherrefnum). */}
+            {!isTransfer && <PrintTd>{d.po_number}</PrintTd>}
           </tr>
         </tbody>
       </table>

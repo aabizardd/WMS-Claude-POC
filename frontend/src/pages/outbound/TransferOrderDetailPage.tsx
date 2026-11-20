@@ -328,6 +328,13 @@ Its creator or the sending warehouse can edit and submit it.
           <Info label="Origin Warehouse" value={to.warehouse?.name ?? locationName(to.from_location_name)} />
           <Info label="Destination Warehouse" value={locationName(to.to_location_name)} />
           <Info label="ERP Doc ID" value={to.oracle_id ?? '-'} />
+          <Info label="Class" value={to.class_name} />
+          <Info label="Department" value={to.department_name} />
+          <Info label="Memo" value={<span className="whitespace-pre-wrap break-words">{to.memo || '-'}</span>} />
+          <Info
+            label="Note Approval"
+            value={<span className="whitespace-pre-wrap break-words">{to.note_approval || '-'}</span>}
+          />
         </dl>
       </div>
 
@@ -369,6 +376,7 @@ Its creator or the sending warehouse can edit and submit it.
                 <th>Material Code</th>
                 <th>Material Name</th>
                 <th>UOM</th>
+                <th>Description</th>
                 <th className="text-right">Available Qty</th>
                 <th className="text-right">Request Qty</th>
                 <th className="text-right">Given Qty</th>
@@ -396,6 +404,7 @@ Its creator or the sending warehouse can edit and submit it.
                   </td>
                   <td className="px-4 py-3 text-slate-700">{l.material_name ?? l.description ?? '-'}</td>
                   <td className="px-4 py-3 text-slate-700">{l.uom ?? '-'}</td>
+                  <td className="max-w-[260px] px-4 py-3 text-slate-700">{l.description || '-'}</td>
                   <td className="px-4 py-3 text-right text-slate-800">{fmt(l.available_qty)}</td>
                   <td className="px-4 py-3 text-right text-slate-800">{fmt(l.quantity)}</td>
                   <td className="px-4 py-3 text-right text-slate-800">{fmt(l.given_qty)}</td>
@@ -405,7 +414,7 @@ Its creator or the sending warehouse can edit and submit it.
               ))}
               {paged.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="px-4 py-8 text-center text-slate-400">
+                  <td colSpan={11} className="px-4 py-8 text-center text-slate-400">
                     {search ? 'No material matches the search.' : 'This order has no lines.'}
                   </td>
                 </tr>

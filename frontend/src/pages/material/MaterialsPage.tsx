@@ -1,10 +1,12 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Material } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import MasterList, { type MasterColumn } from '../../components/master/MasterList';
 import { syncFromErp } from '../../components/master/erpSync';
 import { useToast } from '../../context/ToastContext';
-import { Cell, StatusPill, fmtDateTime, icons } from '../../components/master/MasterKit';
+import { Cell, Lucide, StatusPill, fmtDateTime, icons } from '../../components/master/MasterKit';
+import MaterialDimensionImportModal from './MaterialDimensionImportModal';
 
 const num = (n: number | null | undefined) => (n == null ? '-' : n);
 
@@ -45,21 +47,45 @@ export default function MaterialsPage() {
   const navigate = useNavigate();
   const canUpdate = has('materials:update');
   const toast = useToast();
+  const [importOpen, setImportOpen] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   return (
-    <MasterList<Material>
-      endpoint="/materials"
-      columns={COLUMNS}
-      // Refresh pulls the latest from Oracle first (with the sync permission).
-      onRefresh={has('materials:sync') ? () => syncFromErp('/materials', 'materials', toast) : undefined}
-      refreshTitle={has('materials:sync') ? 'Sync from ERP' : undefined}
-      rowActions={(m) => [
-        {
-          label: canUpdate ? 'Edit' : 'View',
-          icon: canUpdate ? icons.pencil : icons.eye,
-          onClick: () => navigate(`/admin/materials/${m.id}/edit`),
-        },
-      ]}
-    />
+    <>
+      <MasterList<Material>
+        endpoint="/materials"
+        columns={COLUMNS}
+        reloadKey={reloadKey}
+        // ☰ → Import Dimensions: fill or edit dimensions from an Excel file.
+        menuActions={
+          canUpdate ? [{ label: 'Import Dimensions', icon: <UploadIcon />, onClick: () => setImportOpen(true) }] : []
+        }
+        // Refresh pulls the latest from Oracle first (with the sync permission).
+        onRefresh={has('materials:sync') ? () => syncFromErp('/materials', 'materials', toast) : undefined}
+        refreshTitle={has('materials:sync') ? 'Sync from ERP' : undefined}
+        rowActions={(m) => [
+          {
+            label: canUpdate ? 'Edit' : 'View',
+            icon: canUpdate ? icons.pencil : icons.eye,
+            onClick: () => navigate(`/admin/materials/${m.id}/edit`),
+          },
+        ]}
+      />
+      <MaterialDimensionImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onApplied={() => setReloadKey((k) => k + 1)}
+      />
+    </>
+  );
+}
+
+function UploadIcon() {
+  return (
+    <Lucide>
+      <path d="M12 3v12" />
+      <path d="m17 8-5-5-5 5" />
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    </Lucide>
   );
 }
