@@ -656,6 +656,10 @@ export interface TransferOrderRow extends TransferOrderSyncFields {
   /** Subsidiary of the origin warehouse, shown as Ownership. */
   ownership?: string | null;
   memo?: string | null;
+  /** Create TO form fields; null on a TO pulled in from Oracle. */
+  note_approval?: string | null;
+  class_name?: string | null;
+  department_name?: string | null;
   created_by?: string | null;
   last_modified_by?: string | null;
   last_modified: string | null;
@@ -739,6 +743,10 @@ export interface TransferOrderDetail extends TransferOrderSyncFields {
   created_by?: string | null;
   last_modified_by?: string | null;
   memo: string | null;
+  /** Create TO form fields; null on a TO pulled in from Oracle. */
+  note_approval?: string | null;
+  class_name?: string | null;
+  department_name?: string | null;
   date_created: string | null;
   last_modified: string | null;
   created_at: string;

@@ -21,6 +21,7 @@ export default function TransferOrderLinesTable({
           <th>Material Code</th>
           <th>Material Name</th>
           <th>UOM</th>
+          <th>Description</th>
           <th className="text-right">Available Qty</th>
           <th className="text-right">Request Qty</th>
           <th className="text-right">Given Qty</th>
@@ -37,6 +38,7 @@ export default function TransferOrderLinesTable({
             </td>
             <td className="px-4 py-2.5 text-slate-700">{l.material_name ?? l.description ?? '-'}</td>
             <td className="px-4 py-2.5 text-slate-700">{l.uom ?? '-'}</td>
+            <td className="max-w-[260px] px-4 py-2.5 text-slate-700">{l.description || '-'}</td>
             <td className="px-4 py-2.5 text-right text-slate-800">{fmt(l.available_qty)}</td>
             <td className="px-4 py-2.5 text-right text-slate-800">{fmt(l.quantity)}</td>
             <td className="px-4 py-2.5 text-right text-slate-800">{fmt(l.given_qty)}</td>
@@ -46,7 +48,7 @@ export default function TransferOrderLinesTable({
         ))}
         {lines.length === 0 && (
           <tr>
-            <td colSpan={9} className="px-4 py-8 text-center text-slate-400">
+            <td colSpan={10} className="px-4 py-8 text-center text-slate-400">
               {emptyText}
             </td>
           </tr>

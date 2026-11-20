@@ -22,12 +22,14 @@ const SORTABLE: Record<string, (d: SortDir) => ToOrder> = {
   oracle_id: (d) => ({ oracleId: d }),
   ownership: (d) => ({ warehouse: { subsidiaryName: d } }),
   created_by: (d) => ({ createdBy: d }),
+  memo: (d) => ({ memo: { sort: d, nulls: 'last' } }),
   from_location: (d) => ({ fromLocationName: d }),
   to_location: (d) => ({ toLocationName: d }),
   last_modified: (d) => ({ lastModified: d }),
   created_at: (d) => ({ createdAt: d }),
 };
-const DEFAULT_ORDER: ToOrder = { lastModified: 'desc' };
+// Newest first, by when the TO reached WMS (the list's Created At).
+const DEFAULT_ORDER: ToOrder = { createdAt: 'desc' };
 
 /** TOs not fulfilled yet have nothing to receive: left out of the inbound view. */
 // Also the WMS-only states of a TO created in WMS and not yet in Oracle.
@@ -463,6 +465,7 @@ export class TransferOrdersService {
         ? await this.inboundQtyByLine(withLines.flatMap((r) => r.items.map((l) => l.id)))
         : null;
     const totals = await this.lineTotals(where);
+    const names = await this.classDepartmentNames(rows);
 
     return {
       ...paginationMeta(total, page, limit, query),
@@ -480,6 +483,10 @@ export class TransferOrdersService {
         warehouse: r.warehouse ? { id: r.warehouse.id, name: r.warehouse.name } : null,
         ownership: r.warehouse?.subsidiaryName ?? null,
         memo: r.memo,
+        // Create TO form fields; Oracle's TO carries none of them, so a synced TO has none.
+        note_approval: r.noteApproval,
+        class_name: r.classId ? (names.classes.get(r.classId) ?? null) : null,
+        department_name: r.departmentId ? (names.departments.get(r.departmentId) ?? null) : null,
         source: r.source,
         sync_status: r.syncStatus,
         sync_error: r.syncError,
@@ -499,6 +506,27 @@ export class TransferOrdersService {
             }
           : {}),
       })),
+    };
+  }
+
+  /** Class / Department names for the rows' Create TO ids (stored without a relation). */
+  private async classDepartmentNames(rows: { classId: string | null; departmentId: string | null }[]) {
+    const ids = (pick: (r: (typeof rows)[number]) => string | null) => [
+      ...new Set(rows.map(pick).filter((x): x is string => !!x)),
+    ];
+    const classIds = ids((r) => r.classId);
+    const departmentIds = ids((r) => r.departmentId);
+    const [classes, departments] = await Promise.all([
+      classIds.length
+        ? this.prisma.class.findMany({ where: { id: { in: classIds } }, select: { id: true, name: true } })
+        : [],
+      departmentIds.length
+        ? this.prisma.department.findMany({ where: { id: { in: departmentIds } }, select: { id: true, name: true } })
+        : [],
+    ]);
+    return {
+      classes: new Map(classes.map((c) => [c.id, c.name])),
+      departments: new Map(departments.map((d) => [d.id, d.name])),
     };
   }
 
@@ -715,8 +743,11 @@ export class TransferOrdersService {
     });
     if (!to) throw new NotFoundException(`Transfer order ${id} not found`);
 
-    const matById = await this.materialsById(to.items);
-    const available = await this.availableStock([to]);
+    const [matById, available, names] = await Promise.all([
+      this.materialsById(to.items),
+      this.availableStock([to]),
+      this.classDepartmentNames([to]),
+    ]);
 
     return {
       ...this.serializeDetail(to, matById, available),
@@ -727,6 +758,8 @@ export class TransferOrdersService {
         to.statusName === 'Draft' && (to.createdById === scope.userId || inScope(scope, to.warehouseId)),
       class_id: to.classId,
       department_id: to.departmentId,
+      class_name: to.classId ? (names.classes.get(to.classId) ?? null) : null,
+      department_name: to.departmentId ? (names.departments.get(to.departmentId) ?? null) : null,
       note_approval: to.noteApproval,
     };
   }
