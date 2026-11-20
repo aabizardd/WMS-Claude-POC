@@ -29,6 +29,7 @@ export const INVENTORY_FILTER_FIELDS = [
   // Free text on the warehouse name.
   'warehouse_name',
   'bin',
+  'erp_doc_id',
 ] as const;
 
 export type InventoryFilterField = (typeof INVENTORY_FILTER_FIELDS)[number];

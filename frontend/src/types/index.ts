@@ -1805,7 +1805,9 @@ export type InventoryFilterField =
   | 'warehouse_id'
   /** Free text on the warehouse name. */
   | 'warehouse_name'
-  | 'bin';
+  | 'bin'
+  /** The material's Oracle item id. */
+  | 'erp_doc_id';
 
 export interface InventoryFilter {
   field: InventoryFilterField;

@@ -70,6 +70,7 @@ const PRIMARY_FIELDS: { value: InventoryFilterField; label: string }[] = [
 
 const EXTRA_FIELDS: { value: InventoryFilterField; label: string }[] = [
   { value: "material_name", label: "Material Name" },
+  { value: "erp_doc_id", label: "ERP Doc ID" },
   { value: "material_type", label: "Type" },
   { value: "material_category", label: "Category" },
   { value: "primary_uom", label: "UoM" },
@@ -145,8 +146,8 @@ const qtyTh = (label: string) => (
   <th className="whitespace-nowrap px-4 py-3 text-right font-medium">{label}</th>
 );
 
-/** Columns before the first quantity: expand, No, and seven descriptive ones (WH Name included). */
-const LEAD_COLS = 9;
+/** Columns before the first quantity: expand, No, and eight descriptive ones (WH Name, ERP Doc ID included). */
+const LEAD_COLS = 10;
 /** Every column: lead + 7 quantities + Actions. */
 const COLS = LEAD_COLS + 7 + 1;
 
@@ -428,6 +429,7 @@ export default function InventoryPage() {
                 <SortableTh label="Material Name" col="material_name" sort={sort} onSort={onSort} pad="px-4" className="whitespace-nowrap" />
                 <SortableTh label="Material Code" col="material_code" sort={sort} onSort={onSort} pad="px-4" className="whitespace-nowrap" />
                 <SortableTh label="WH Name" col="warehouse_name" sort={sort} onSort={onSort} pad="px-4" className="whitespace-nowrap" />
+                <SortableTh label="ERP Doc ID" col="erp_doc_id" sort={sort} onSort={onSort} pad="px-4" className="whitespace-nowrap" />
                 <SortableTh label="Material Type" col="material_type" sort={sort} onSort={onSort} pad="px-4" className="whitespace-nowrap" />
                 <SortableTh label="Material Category" col="material_category" sort={sort} onSort={onSort} pad="px-4" className="whitespace-nowrap" />
                 <SortableTh label="Primary UoM" col="primary_uom" sort={sort} onSort={onSort} pad="px-4" className="whitespace-nowrap" />
@@ -487,6 +489,7 @@ export default function InventoryPage() {
                       <td className="whitespace-nowrap px-4 py-3 text-slate-800">{r.material_name ?? "-"}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{r.material_code}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.warehouse_name ?? "-"}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.erp_doc_id ?? "-"}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.material_type ?? "-"}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.material_category ?? "-"}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.primary_uom ?? "-"}</td>

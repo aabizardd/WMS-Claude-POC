@@ -30,6 +30,7 @@ const INVENTORY_SORTABLE: Record<string, (d: SortDir) => InvOrder> = {
   }),
   primary_uom: (d) => ({ material: { primaryUom: { uomCode: d } } }),
   warehouse_name: (d) => ({ warehouse: { name: d } }),
+  erp_doc_id: (d) => ({ material: { erpDocId: d } }),
 };
 
 // How each filterable column maps to a Prisma predicate. Every filter is a
@@ -62,6 +63,8 @@ const INVENTORY_FILTERS: Record<
   warehouse_id: (v) => ({ warehouseId: v }),
   // Free text on the warehouse name (the list's filter field).
   warehouse_name: (v) => ({ warehouse: { name: { contains: v, mode: 'insensitive' } } }),
+  // The material's Oracle item id ("ERP Doc ID").
+  erp_doc_id: (v) => ({ material: { erpDocId: { contains: v, mode: 'insensitive' } } }),
   bin: (v) => ({
     binStocks: {
       some: { bin: { binLabel: { contains: v, mode: 'insensitive' } } },
