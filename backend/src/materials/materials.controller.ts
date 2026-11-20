@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -7,7 +8,16 @@ import {
   Post,
   Put,
   Query,
+  Res,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
+import { xlsxHeaders, wibParts } from '../common/xlsx-export';
+import { MaterialDimensionImportService } from './material-dimension-import.service';
+import { DIMENSION_IMPORT_MAX_BYTES } from './material-dimension-import';
+import { ApplyDimensionImportDto } from './dto/apply-dimension-import.dto';
 import { MaterialsService } from './materials.service';
 import { ErpSyncService } from './erp-sync.service';
 import { UpdateMaterialDto } from './dto/update-material.dto';
@@ -21,6 +31,7 @@ export class MaterialsController {
   constructor(
     private readonly service: MaterialsService,
     private readonly erpSync: ErpSyncService,
+    private readonly dimensionImport: MaterialDimensionImportService,
   ) {}
 
   // Pull items from the Oracle/ERP bridge and upsert them.
@@ -51,6 +62,37 @@ export class MaterialsController {
   @RequirePermissions('materials:read')
   lastSync() {
     return this.service.getLastSyncAt();
+  }
+
+  /**
+   * Import Dimensions: the template — the materials matching the list's search
+   * (all when empty) with their current dimensions, to edit and upload back.
+   */
+  @Get('dimension-import/template')
+  @RequirePermissions('materials:update')
+  async dimensionTemplate(@Query('search') search: string | undefined, @Res() res: Response) {
+    const t = wibParts(new Date());
+    res.set(xlsxHeaders(`material_dimensions_${t.y}${t.m}${t.d}_${t.hh}${t.mm}${t.ss}.xlsx`));
+    await this.dimensionImport.template(search, res);
+  }
+
+  /** Import Dimensions: check an uploaded workbook (not stored, nothing written). */
+  @Post('dimension-import/preview')
+  @HttpCode(200)
+  @RequirePermissions('materials:update')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: DIMENSION_IMPORT_MAX_BYTES } }))
+  dimensionPreview(@UploadedFile() file: { buffer: Buffer; originalname: string } | undefined) {
+    if (!file?.buffer?.length) throw new BadRequestException('Choose an .xlsx file to import');
+    if (!/\.xlsx$/i.test(file.originalname)) throw new BadRequestException('Only .xlsx files can be imported');
+    return this.dimensionImport.preview(file.buffer);
+  }
+
+  /** Import Dimensions: save the preview's checked changes. */
+  @Post('dimension-import/apply')
+  @HttpCode(200)
+  @RequirePermissions('materials:update')
+  dimensionApply(@Body() dto: ApplyDimensionImportDto, @CurrentUser('username') username: string) {
+    return this.dimensionImport.apply(dto, username);
   }
 
   @Get(':id')
